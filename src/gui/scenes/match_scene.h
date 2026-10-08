@@ -11,6 +11,7 @@
 #include <imgui.h>
 
 #include <cstdint>
+#include <functional>
 #include <future>
 #include <memory>
 #include <optional>
@@ -55,7 +56,23 @@ enum class MatchViewMode : std::uint8_t
 class MatchScene : public GUIScene
 {
  public:
+  /**
+   * A match played outside the career (the match sandbox): nothing is
+   * recorded, and full time hands the engine to `on_finish` instead.
+   */
+  struct Sandbox
+  {
+    /** Engine seed; the fixture's seed when empty. */
+    std::optional<std::uint32_t> seed;
+    /** Tactical familiarity of both sides; the trained one when empty. */
+    std::optional<float> familiarity;
+    /** Called once with the finished engine, in place of the result. */
+    std::function<void(const MatchEngine&)> on_finish;
+  };
+
   MatchScene(class GUIView* guiView_ptr, uint16_t home_id, uint16_t away_id);
+  MatchScene(class GUIView* guiView_ptr, uint16_t home_id, uint16_t away_id,
+             Sandbox sandbox);
 
   void onEnter() override;
   void handleEvent(const SDL_Event& event) override;
@@ -89,6 +106,8 @@ class MatchScene : public GUIScene
 
   uint16_t home_team_id;
   uint16_t away_team_id;
+  /** Set for a sandbox match (see Sandbox). */
+  std::optional<Sandbox> sandbox;
 
   std::string home_name;
   std::string away_name;

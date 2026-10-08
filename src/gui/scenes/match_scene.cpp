@@ -387,6 +387,15 @@ MatchScene::MatchScene(GUIView* guiView_ptr, uint16_t home_id, uint16_t away_id)
 {
 }
 
+MatchScene::MatchScene(GUIView* guiView_ptr, uint16_t home_id, uint16_t away_id,
+                       Sandbox sandbox_options)
+    : GUIScene(guiView_ptr),
+      home_team_id(home_id),
+      away_team_id(away_id),
+      sandbox(std::move(sandbox_options))
+{
+}
+
 SceneID MatchScene::getID() const { return SceneID::MATCH; }
 
 void MatchScene::onEnter()
@@ -546,7 +555,11 @@ void MatchScene::startMatch()
   // Deterministic per save and fixture (FM_MATCH_SEED overrides it), so a
   // reloaded save replays the same match until a manual change is made.
   std::uint32_t seed = 0;
-  if (const auto configured = configuredMatchSeed())
+  if (sandbox && sandbox->seed)
+  {
+    seed = *sandbox->seed;
+  }
+  else if (const auto configured = configuredMatchSeed())
   {
     seed = *configured;
   }
@@ -579,10 +592,14 @@ void MatchScene::startMatch()
              game->getMedical(),
              *managed_is_home ? home_team.getLineup() : away_team.getLineup()))
       engine->setMedicalFlags(player, flags);
-  engine->setTacticalFamiliarity(
-      true, controller.getTacticalFamiliarity(home_team_id));
-  engine->setTacticalFamiliarity(
-      false, controller.getTacticalFamiliarity(away_team_id));
+  const auto familiarity = [&](TeamID team)
+  {
+    return sandbox && sandbox->familiarity
+               ? *sandbox->familiarity
+               : controller.getTacticalFamiliarity(team);
+  };
+  engine->setTacticalFamiliarity(true, familiarity(home_team_id));
+  engine->setTacticalFamiliarity(false, familiarity(away_team_id));
   assistant_substitutions = controller.isDelegated(Duty::Substitutions);
   applySubstitutionPolicy();
   // In-match tactics start from the managed club's plan.
@@ -711,6 +728,13 @@ void MatchScene::dialogClosed()
 
 bool MatchScene::finishMatch()
 {
+  if (sandbox)
+  {
+    if (!engine) return false;
+    if (sandbox->on_finish) sandbox->on_finish(*engine);
+    guiView->popScene();
+    return true;
+  }
   GameController& controller = guiView->getController();
   if (!engine ||
       !controller.setMatchResult(controller.getCurrentDate(), home_team_id,
@@ -1511,6 +1535,12 @@ void MatchScene::renderControls()
     }
     // Watch, Simulate (quick result) or Play.
     renderPlayButtons();
+    // A sandbox match can be left at any time: nothing is recorded.
+    if (sandbox && !play.isActive())
+    {
+      UI::sameLineIfFits(UI::buttonWidth(LOC("MATCH_SANDBOX_LEAVE")));
+      if (ImGui::Button(LOC("MATCH_SANDBOX_LEAVE"))) guiView->popScene();
+    }
   }
   if (managed_is_home)
   {

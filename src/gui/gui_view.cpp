@@ -166,12 +166,16 @@ bool GUIView::initialize()
   return true;
 }
 
-void GUIView::run()
+void GUIView::run() { run({}); }
+
+void GUIView::run(const SceneFactory& firstScene)
 {
   if (!initialize())
   {
     return;
   }
+  // Replaces the main menu queued by initialize() before it is entered.
+  if (firstScene) changeScene(firstScene(this));
 
   running = true;
   Uint64 lastTime = SDL_GetTicksNS();

@@ -605,3 +605,15 @@ target_compile_options(fm_lab_lib PRIVATE ${FM_WARNING_FLAGS})
 add_executable(fm_lab tools/lab_main.cpp)
 target_link_libraries(fm_lab PRIVATE fm_lab_lib)
 target_compile_options(fm_lab PRIVATE ${FM_WARNING_FLAGS})
+
+# -----------------------------
+# Match sandbox: two clubs, both sides' tactics and a live match, without a
+# career (match_sandbox). A developer tool: not installed or packaged.
+# -----------------------------
+add_executable(match_sandbox
+    tools/match_sandbox_main.cpp
+    tools/match_sandbox_scene.h
+    tools/match_sandbox_scene.cpp
+)
+target_link_libraries(match_sandbox PRIVATE fm_ui fm_lab_lib)
+target_compile_options(match_sandbox PRIVATE ${FM_WARNING_FLAGS})
