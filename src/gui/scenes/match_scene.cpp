@@ -552,54 +552,56 @@ void MatchScene::startMatch()
   const Team& home_team = home_opt->get();
   const Team& away_team = away_opt->get();
 
-  // Deterministic per save and fixture (FM_MATCH_SEED overrides it), so a
-  // reloaded save replays the same match until a manual change is made.
-  std::uint32_t seed = 0;
-  if (sandbox && sandbox->seed)
+  if (sandbox && sandbox->make_engine)
   {
-    seed = *sandbox->seed;
-  }
-  else if (const auto configured = configuredMatchSeed())
-  {
-    seed = *configured;
+    // The sandbox builds the whole match itself (see Sandbox::make_engine).
+    engine = sandbox->make_engine();
+    if (!engine) return;
   }
   else
   {
-    const Match identity(home_team_id, away_team_id,
-                         controller.getCurrentDate(),
-                         fixture_type.value_or(MatchType::FRIENDLY));
-    seed = static_cast<std::uint32_t>(
-        mixHash(controller.getWorldSeed(), identity.getSeed()));
+    // Deterministic per save and fixture (FM_MATCH_SEED overrides it), so a
+    // reloaded save replays the same match until a manual change is made.
+    std::uint32_t seed = 0;
+    if (const auto configured = configuredMatchSeed())
+    {
+      seed = *configured;
+    }
+    else
+    {
+      const Match identity(home_team_id, away_team_id,
+                           controller.getCurrentDate(),
+                           fixture_type.value_or(MatchType::FRIENDLY));
+      seed = static_cast<std::uint32_t>(
+          mixHash(controller.getWorldSeed(), identity.getSeed()));
+    }
+    engine = std::make_unique<MatchEngine>(
+        home_team.getLineup(), away_team.getLineup(), home_team.getStrategy(),
+        away_team.getStrategy(), controller.getStatsConfig(), seed);
+    // Cup ties and continental deciders are played to a winner: extra time,
+    // then penalties (the first leg counts in a second leg).
+    if (const auto rules = controller.getKnockoutRules(
+            controller.getCurrentDate(), home_team_id, away_team_id))
+      engine->setKnockout(*rules);
+    engine->setTeamNames(home_team.getName(), away_team.getName());
+    // Fatigue carried over from recent matches and training.
+    MatchdaySquad::carryCondition(*engine, home_team.getLineup());
+    MatchdaySquad::carryCondition(*engine, away_team.getLineup());
+    // The medical staff's minute limits: the assistant follows them when he
+    // makes the managed side's changes.
+    if (const Game* game = controller.getGame(); game && managed_is_home)
+      for (const auto& [player, flags] : MatchdaySquad::medicalFlags(
+               game->getMedical(), *managed_is_home ? home_team.getLineup()
+                                                    : away_team.getLineup()))
+        engine->setMedicalFlags(player, flags);
+    engine->setTacticalFamiliarity(
+        true, controller.getTacticalFamiliarity(home_team_id));
+    engine->setTacticalFamiliarity(
+        false, controller.getTacticalFamiliarity(away_team_id));
   }
-  engine = std::make_unique<MatchEngine>(
-      home_team.getLineup(), away_team.getLineup(), home_team.getStrategy(),
-      away_team.getStrategy(), controller.getStatsConfig(), seed);
-  // Cup ties and continental deciders are played to a winner: extra time,
-  // then penalties (the first leg counts in a second leg).
-  if (const auto rules = controller.getKnockoutRules(
-          controller.getCurrentDate(), home_team_id, away_team_id))
-    engine->setKnockout(*rules);
-  engine->setTeamNames(home_team.getName(), away_team.getName());
+  if (sandbox) engine->setRecorder(sandbox->recorder);
   decided_by.clear();
   decided_by_ready = false;
-  // Fatigue carried over from recent matches and training.
-  MatchdaySquad::carryCondition(*engine, home_team.getLineup());
-  MatchdaySquad::carryCondition(*engine, away_team.getLineup());
-  // The medical staff's minute limits: the assistant follows them when he
-  // makes the managed side's changes.
-  if (const Game* game = controller.getGame(); game && managed_is_home)
-    for (const auto& [player, flags] : MatchdaySquad::medicalFlags(
-             game->getMedical(),
-             *managed_is_home ? home_team.getLineup() : away_team.getLineup()))
-      engine->setMedicalFlags(player, flags);
-  const auto familiarity = [&](TeamID team)
-  {
-    return sandbox && sandbox->familiarity
-               ? *sandbox->familiarity
-               : controller.getTacticalFamiliarity(team);
-  };
-  engine->setTacticalFamiliarity(true, familiarity(home_team_id));
-  engine->setTacticalFamiliarity(false, familiarity(away_team_id));
   assistant_substitutions = controller.isDelegated(Duty::Substitutions);
   applySubstitutionPolicy();
   // In-match tactics start from the managed club's plan.
@@ -1132,6 +1134,7 @@ void MatchScene::render()
         team_talk.isOpen() || show_substitutions || show_tactics);
     renderPitchFocus();
     ImGui::End();
+    renderSandboxTools();
     return;
   }
 
@@ -1203,6 +1206,15 @@ void MatchScene::render()
   }
 
   ImGui::End();
+  renderSandboxTools();
+}
+
+void MatchScene::renderSandboxTools()
+{
+  // Never while a quick result plays the engine on its worker.
+  if (!sandbox || !sandbox->on_render || !engine || quick_result.valid())
+    return;
+  sandbox->on_render(*engine, is_paused);
 }
 
 void MatchScene::renderQuickResultProgress()

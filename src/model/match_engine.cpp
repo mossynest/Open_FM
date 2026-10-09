@@ -34,6 +34,7 @@
 #include <sstream>
 
 #include "model/match_commentary.h"
+#include "model/match_recorder.h"
 #include "model/medical_centre.h"
 #include "model/player.h"
 #include "model/role_utils.h"
@@ -882,6 +883,17 @@ void MatchEngine::loadCommandReplay(std::vector<MatchCommandRecord> log)
   ++inputRevision;
 }
 
+void MatchEngine::continueReplay(std::vector<MatchCommandRecord> commands,
+                                 std::vector<MatchInputRecord> inputs)
+{
+  // The cursors keep marking what this copy has applied: the logs it holds
+  // are a prefix of the complete ones.
+  if (commands.size() < commandCursor || inputs.size() < inputCursor) return;
+  commandLog = std::move(commands);
+  inputLog = std::move(inputs);
+  ++inputRevision;
+}
+
 bool MatchEngine::recordCommand(const MatchCommandRecord& command)
 {
   if (!executeCommand(command)) return false;
@@ -1608,6 +1620,7 @@ void MatchEngine::simulateStep(float dt)
 {
   simulateStepBody(dt);
   describePendingEvents();
+  if (MatchRecorder* recorder = getRecorder()) recorder->onStepEnd(*this);
 }
 
 void MatchEngine::simulateStepBody(float dt)
@@ -2646,6 +2659,163 @@ void MatchEngine::refreshTacticalTargets(float dt)
 
   const MatchPlayer* homeCoverOutlet = findCoverOutlet(true);
   const MatchPlayer* awayCoverOutlet = findCoverOutlet(false);
+
+  if (MatchRecorder* recorder = getRecorder())
+  {
+    // Reported with the scores that ranked them; recomputing them reads the
+    // same frozen snapshot and draws nothing.
+    const auto idOf = [](const MatchPlayer* player)
+    { return player && player->player ? player->player->getId() : 0U; };
+    const auto report = [&](bool homeTeam)
+    {
+      MatchTeamPlan plan;
+      plan.homeTeam = homeTeam;
+      plan.phase = homeTeam ? homePhase : awayPhase;
+      const auto& pressers = homeTeam ? homePressers : awayPressers;
+      for (std::size_t index = 0; index < plan.pressers.size(); ++index)
+      {
+        plan.pressers[index] = idOf(pressers[index]);
+        if (pressers[index])
+          plan.pressArrivalSeconds[index] =
+              estimatedArrivalTime(*pressers[index]);
+      }
+      const auto& runners = homeTeam ? homeRunners : awayRunners;
+      for (std::size_t index = 0; index < plan.runners.size(); ++index)
+      {
+        plan.runners[index] = idOf(runners[index]);
+        if (runners[index]) plan.runPriority[index] = runPriority(*runners[index]);
+      }
+      plan.midfieldArrival =
+          idOf(homeTeam ? homeMidfieldArrival : awayMidfieldArrival);
+      plan.farPostRunner = idOf(homeTeam ? homeFarPostRunner : awayFarPostRunner);
+      plan.overlappingFullback =
+          idOf(homeTeam ? homeOverlappingFullback : awayOverlappingFullback);
+      const auto& supporters = homeTeam ? homeSupporters : awaySupporters;
+      for (std::size_t index = 0; index < plan.supporters.size(); ++index)
+        plan.supporters[index] = idOf(supporters[index]);
+      plan.coverOutlet = idOf(homeTeam ? homeCoverOutlet : awayCoverOutlet);
+      recorder->onTeamPlan(*this, plan);
+    };
+    report(true);
+    report(false);
+
+    if (recorder->wantsDetail())
+    {
+      // Debugger detail: the two rankings broken down, for every candidate.
+      // The same terms as estimatedArrivalTime() and runPriority() above.
+      const auto arrivalTerms = [&](const MatchPlayer& candidate)
+      {
+        ScoreBreakdown score;
+        score.total = estimatedArrivalTime(candidate);
+        const Vector2F toTarget =
+            toMetres({pressurePosition.x - candidate.position.x,
+                      pressurePosition.y - candidate.position.y});
+        const float targetDistance = length(toTarget);
+        if (targetDistance > EPSILON)
+        {
+          const Vector2F direction{toTarget.x / targetDistance,
+                                   toTarget.y / targetDistance};
+          const float toward =
+              std::max(0.0f, candidate.velocity.x * direction.x +
+                                 candidate.velocity.y * direction.y);
+          const float speed = std::max(
+              currentTopSpeed(candidate) +
+                  toward * MatchTuning::Player::CURRENT_VELOCITY_PURSUIT_WEIGHT,
+              MatchTuning::Player::MINIMUM_PURSUIT_SPEED);
+          score.add("distance / pursuit speed (Pace, stamina, momentum)",
+                    TermSource::SITUATION, targetDistance / speed);
+        }
+        if (carrier && carrier->isHomeTeam != candidate.isHomeTeam)
+        {
+          score.add("role's press eagerness", TermSource::SLOT_ROLE,
+                    -roleProfileOf(candidate).pressBias *
+                        TacticsTuning::PRESS_BIAS_SECONDS);
+          score.add("team talk", TermSource::MORALE,
+                    -talkSwing(candidate.isHomeTeam) *
+                        TacticsTuning::TALK_PRESS_SECONDS);
+        }
+        if (candidate.intent == PlayerIntent::PRESS_BALL ||
+            candidate.intent == PlayerIntent::CLAIM_LOOSE_BALL)
+          score.add("already going (continuity)", TermSource::SITUATION,
+                    -MatchTuning::Shape::PRESSER_CONTINUITY_SECONDS);
+        // Arrival times cannot go below zero.
+        if (const float clamp = score.residual(); std::abs(clamp) > 1e-6f)
+          score.add("clamped at zero", TermSource::SITUATION, clamp);
+        return score;
+      };
+      const auto runTerms = [&](const MatchPlayer& candidate)
+      {
+        ScoreBreakdown score;
+        score.total = runPriority(candidate);
+        float rolePriority = MatchTuning::Shape::MIDFIELDER_RUN_PRIORITY;
+        switch (candidate.player->getRole())
+        {
+          case PlayerRole::ST:
+            rolePriority = MatchTuning::Shape::STRIKER_RUN_PRIORITY;
+            break;
+          case PlayerRole::LW:
+          case PlayerRole::RW:
+            rolePriority = MatchTuning::Shape::WINGER_RUN_PRIORITY;
+            break;
+          case PlayerRole::CAM:
+            rolePriority = MatchTuning::Shape::ATTACKING_MIDFIELDER_RUN_PRIORITY;
+            break;
+          case PlayerRole::CDM:
+            rolePriority = MatchTuning::Shape::HOLDING_MIDFIELDER_RUN_PRIORITY;
+            break;
+          default:
+            break;
+        }
+        const float depth = candidate.isHomeTeam ? candidate.position.x
+                                                 : 1.0f - candidate.position.x;
+        const float separation =
+            carrier ? std::abs(candidate.position.y - carrier->position.y)
+                    : 0.0f;
+        score.add("his position (ST, W, CAM…)", TermSource::NATURAL_POSITION,
+                  rolePriority);
+        score.add("variety between attacks", TermSource::NOISE,
+                  epochNoise(candidate.player->getId(), 0x7a11edU,
+                             RUN_TIMING_EPOCH_STEPS) *
+                      MatchTuning::Shape::RUN_VARIETY_PRIORITY);
+        score.add("Pace", TermSource::ATTRIBUTE,
+                  candidate.pace * MatchTuning::Shape::RUN_PACE_PRIORITY);
+        score.add("how far forward he is", TermSource::LOCATION,
+                  depth * MatchTuning::Shape::RUN_DEPTH_PRIORITY);
+        score.add("width away from the ball", TermSource::SITUATION,
+                  separation * MatchTuning::Shape::RUN_SEPARATION_PRIORITY);
+        score.add("already running (continuity)", TermSource::SITUATION,
+                  candidate.isMakingRun
+                      ? MatchTuning::Shape::RUN_CONTINUITY_PRIORITY
+                      : 0.0f);
+        score.add("role's run bias", TermSource::SLOT_ROLE,
+                  roleProfileOf(candidate).runBias *
+                      TacticsTuning::RUN_BIAS_WEIGHT);
+        return score;
+      };
+      for (const bool homeTeam : {true, false})
+      {
+        MatchRankingDetail toBall;
+        toBall.kind = MatchRankingDetail::Kind::TO_BALL;
+        toBall.homeTeam = homeTeam;
+        MatchRankingDetail runs;
+        runs.kind = MatchRankingDetail::Kind::RUN_PRIORITY;
+        runs.homeTeam = homeTeam;
+        const bool selectingRuns = (homeTeam ? homeRunners : awayRunners)[0];
+        for (MatchPlayer* const pointer : onPitch(homeTeam))
+        {
+          const MatchPlayer& candidate = *pointer;
+          if (candidate.isGoalkeeper) continue;
+          toBall.candidates.push_back(
+              {idOf(&candidate), arrivalTerms(candidate)});
+          if (selectingRuns && &candidate != carrier && !candidate.isInjured &&
+              std::isfinite(runPriority(candidate)))
+            runs.candidates.push_back({idOf(&candidate), runTerms(candidate)});
+        }
+        recorder->onRankingDetail(*this, toBall);
+        if (!runs.candidates.empty()) recorder->onRankingDetail(*this, runs);
+      }
+    }
+  }
 
   for (auto& player : players)
   {
@@ -4955,7 +5125,45 @@ void MatchEngine::resolvePossessionAndActions(float dt)
            D::EXPOSED_ENGAGE_SHARE * dribbleExposureShare()) *
           (ballDistance > reach ? 0.5f : 1.0f) *
           engageBoost(*defender, *carrier);
-      if (randomFloat(0.0f, 1.0f) < 1.0f - std::exp(-engageRate * dt))
+      const float engageRoll = randomFloat(0.0f, 1.0f);
+      const float engageChance = 1.0f - std::exp(-engageRate * dt);
+      if (wantsDetail())
+      {
+        // Debugger detail: the rate is a product; each factor is noted as
+        // what it adds to it.
+        MatchDuelDetail duel;
+        duel.kind = MatchDuelDetail::Kind::ENGAGE;
+        duel.player = defender->player ? defender->player->getId() : 0;
+        duel.opponent = carrier->player ? carrier->player->getId() : 0;
+        duel.homeTeam = defender->isHomeTeam;
+        duel.chance.total = engageRate;
+        duel.probability = engageChance;
+        duel.roll = engageRoll;
+        float product = D::ENGAGE_RATE_PER_SECOND;
+        duel.chance.add("base rate", TermSource::SITUATION, product);
+        const auto factor = [&](const char* name, TermSource source, float by)
+        {
+          duel.chance.add(name, source, product * (by - 1.0f));
+          product *= by;
+        };
+        factor("pressing instruction", TermSource::INSTRUCTION,
+               1.0f + getEffectiveSliders(defender->isHomeTeam).pressing *
+                          D::PRESSING_ENGAGE_BONUS);
+        factor("final third", TermSource::LOCATION,
+               carrierDepth >= MatchTuning::Rules::HOME_FINAL_THIRD_START
+                   ? D::FINAL_THIRD_ENGAGE_FACTOR
+                   : 1.0f);
+        factor("ball away from his feet", TermSource::SITUATION,
+               D::CLOSE_CONTROL_ENGAGE_SHARE +
+                   D::EXPOSED_ENGAGE_SHARE * dribbleExposureShare());
+        factor("beyond tackling reach", TermSource::SITUATION,
+               ballDistance > reach ? 0.5f : 1.0f);
+        factor("role, team talk and opposition orders", TermSource::SLOT_ROLE,
+               engageBoost(*defender, *carrier));
+        if (MatchRecorder* recorder = getRecorder())
+          recorder->onDuelDetail(*this, duel);
+      }
+      if (engageRoll < engageChance)
       {
         attemptTackle(*carrier, *defender, ballDistance > reach);
         if (ball.possessedBy != carrier->player || state != MatchState::PLAYING)
@@ -5086,7 +5294,54 @@ bool MatchEngine::attemptTakeOn(MatchPlayer& carrier, MatchPlayer& defender)
                : 0.0f) -
           doubleUpPenalty(carrier, defender),
       R::MIN_TAKE_ON, R::MAX_TAKE_ON);
-  if (randomFloat(0.0f, 1.0f) >= success)
+  const float takeOnRoll = randomFloat(0.0f, 1.0f);
+  const bool beaten = takeOnRoll < success;
+  if (wantsDetail())
+  {
+    MatchDuelDetail duel;
+    duel.kind = MatchDuelDetail::Kind::TAKE_ON;
+    duel.player = carrier.player ? carrier.player->getId() : 0;
+    duel.opponent = defender.player ? defender.player->getId() : 0;
+    duel.homeTeam = carrier.isHomeTeam;
+    duel.chance.total = success;
+    duel.probability = success;
+    duel.roll = takeOnRoll;
+    duel.chance.add("base", TermSource::SITUATION, R::TAKE_ON_BASE);
+    duel.chance.add("his Dribbling", TermSource::ATTRIBUTE,
+                    carrier.dribbling * R::TAKE_ON_SKILL);
+    duel.chance.add("defender's Defending", TermSource::ATTRIBUTE,
+                    -defender.defending * R::TAKE_ON_SKILL);
+    duel.chance.add("team edge (home, numbers, talk)", TermSource::SITUATION,
+                    (teamEdge(carrier.isHomeTeam) -
+                     teamEdge(defender.isHomeTeam)) *
+                        MatchTuning::Rules::DUEL_EDGE_WEIGHT * R::TAKE_ON_SKILL);
+    duel.chance.add("Pace difference", TermSource::ATTRIBUTE,
+                    (carrier.pace - defender.pace) * R::TAKE_ON_PACE);
+    duel.chance.add("human defender jockeying", TermSource::SITUATION,
+                    controlInput.jockey && isControlled(defender)
+                        ? -MatchTuning::Control::JOCKEY_TAKE_ON_PENALTY
+                        : 0.0f);
+    duel.chance.add("doubled up on (order)", TermSource::INSTRUCTION,
+                    -doubleUpPenalty(carrier, defender));
+    if (const float clamp = duel.chance.residual(); std::abs(clamp) > 1e-6f)
+      duel.chance.add("clamped to its range", TermSource::SITUATION, clamp);
+    if (MatchRecorder* recorder = getRecorder())
+      recorder->onDuelDetail(*this, duel);
+  }
+  if (MatchRecorder* recorder = getRecorder())
+  {
+    MatchActionRecord action;
+    action.kind = MatchActionKind::TAKE_ON;
+    action.player = carrier.player ? carrier.player->getId() : 0;
+    action.homeTeam = carrier.isHomeTeam;
+    action.target = defender.player ? defender.player->getId() : 0;
+    action.from = carrier.position;
+    action.to = defender.position;
+    action.estimate = success;
+    action.result = beaten ? MatchDuelResult::WON : MatchDuelResult::LOST;
+    recorder->onAction(*this, action);
+  }
+  if (!beaten)
   {
     // Read and stopped: the defender takes the ball (a clean challenge).
     attemptTackle(carrier, defender, false);
@@ -5164,12 +5419,122 @@ void MatchEngine::attemptTackle(MatchPlayer& carrier, MatchPlayer& defender,
   context.defenderBooked = defender.yellowCards > 0;
   const float winChance = MatchRules::tackleWinChance(context);
   const float foulPropensity = MatchRules::tackleFoulPropensity(context);
-  if (randomFloat(0.0f, 1.0f) < winChance)
+  const auto report = [&](MatchDuelResult result)
+  {
+    MatchRecorder* recorder = getRecorder();
+    if (!recorder) return;
+    MatchActionRecord action;
+    action.kind = MatchActionKind::TACKLE;
+    action.player = defender.player ? defender.player->getId() : 0;
+    action.homeTeam = defender.isHomeTeam;
+    action.target = carrier.player ? carrier.player->getId() : 0;
+    action.from = defender.position;
+    action.to = carrier.position;
+    action.lofted = sliding;
+    action.estimate = winChance;
+    action.foulPropensity = foulPropensity;
+    action.result = result;
+    recorder->onAction(*this, action);
+  };
+  // Debugger detail: both chances broken down, with the rolls against them.
+  const auto reportDetail = [&](float winRoll, float foulRoll,
+                                float foulThreshold)
+  {
+    if (!wantsDetail()) return;
+    using D = MatchTuning::Defending;
+    MatchDuelDetail duel;
+    duel.kind = MatchDuelDetail::Kind::TACKLE;
+    duel.player = defender.player ? defender.player->getId() : 0;
+    duel.opponent = carrier.player ? carrier.player->getId() : 0;
+    duel.homeTeam = defender.isHomeTeam;
+    duel.probability = winChance;
+    duel.roll = winRoll;
+    duel.foulThreshold = foulThreshold;
+    duel.foulRoll = foulRoll;
+    const float defenderEdge =
+        teamEdge(defender.isHomeTeam) * MatchTuning::Rules::DUEL_EDGE_WEIGHT;
+    const float carrierEdge =
+        teamEdge(carrier.isHomeTeam) * MatchTuning::Rules::DUEL_EDGE_WEIGHT;
+    ScoreBreakdown& win = duel.chance;
+    win.total = winChance;
+    win.add("base", TermSource::SITUATION, D::BASE_WIN_CHANCE);
+    win.add("his Defending", TermSource::ATTRIBUTE,
+            defender.defending * D::DEFENDING_WIN_BONUS);
+    win.add("carrier's Dribbling", TermSource::ATTRIBUTE,
+            -carrier.dribbling * D::DRIBBLING_WIN_PENALTY);
+    win.add("team edge (home, numbers, talk)", TermSource::SITUATION,
+            defenderEdge * D::DEFENDING_WIN_BONUS -
+                carrierEdge * D::DRIBBLING_WIN_PENALTY);
+    win.add("Physicality difference", TermSource::ATTRIBUTE,
+            (defender.physicality - carrier.physicality) *
+                D::PHYSICALITY_DUEL_WEIGHT);
+    win.add("pressing instruction", TermSource::INSTRUCTION,
+            context.pressing * D::PRESSING_WIN_EFFECT);
+    win.add("ball away from his feet", TermSource::SITUATION,
+            std::clamp(exposure, 0.0f, 1.0f) * D::EXPOSURE_WIN_BONUS);
+    win.add("carrier shielding (his Physicality)", TermSource::ATTRIBUTE,
+            shielding ? -carrier.physicality * D::SHIELD_PHYSICALITY_PENALTY
+                      : 0.0f);
+    win.add("sliding", TermSource::SITUATION,
+            sliding ? -D::SLIDE_WIN_PENALTY : 0.0f);
+    win.add("from behind", TermSource::SITUATION,
+            fromBehind ? -D::FROM_BEHIND_WIN_PENALTY : 0.0f);
+    if (const float clamp = win.residual(); std::abs(clamp) > 1e-6f)
+      win.add("clamped to its range", TermSource::SITUATION, clamp);
+
+    // The propensity is a sum scaled by factors; each factor is noted as
+    // what it adds.
+    ScoreBreakdown& foul = duel.foul;
+    foul.total = foulPropensity;
+    float product = D::BASE_FOUL_CHANCE;
+    foul.add("base", TermSource::SITUATION, D::BASE_FOUL_CHANCE);
+    const auto part = [&](const char* name, TermSource source, float value)
+    {
+      foul.add(name, source, value);
+      product += value;
+    };
+    part("risk-taking instruction", TermSource::INSTRUCTION,
+         context.riskTaking * D::RISK_FOUL_BONUS);
+    part("pressing instruction", TermSource::INSTRUCTION,
+         context.pressing * D::PRESSING_FOUL_BONUS);
+    part("tackling technique (Defending)", TermSource::ATTRIBUTE,
+         (1.0f - context.defending) * D::TECHNIQUE_FOUL_BONUS);
+    const auto factor = [&](const char* name, TermSource source, float by)
+    {
+      foul.add(name, source, product * (by - 1.0f));
+      product *= by;
+    };
+    factor("already booked", TermSource::GAME_STATE,
+           context.defenderBooked
+               ? MatchTuning::Discipline::BOOKED_PLAYER_CAUTION
+               : 1.0f);
+    factor("in his own penalty area", TermSource::LOCATION,
+           context.inPenaltyArea ? D::PENALTY_AREA_FOUL_SCALE : 1.0f);
+    factor("from behind", TermSource::SITUATION,
+           fromBehind ? D::FROM_BEHIND_FOUL_FACTOR : 1.0f);
+    factor("sliding", TermSource::SITUATION,
+           sliding ? D::SLIDE_FOUL_FACTOR : 1.0f);
+    factor("ball away from the man", TermSource::SITUATION,
+           1.0f - std::clamp(exposure, 0.0f, 1.0f) * D::EXPOSED_FOUL_RELIEF);
+    std::erase_if(win.terms,
+                  [](const ScoreTerm& term) { return term.value == 0.0f; });
+    std::erase_if(foul.terms,
+                  [](const ScoreTerm& term) { return term.value == 0.0f; });
+    if (MatchRecorder* recorder = getRecorder())
+      recorder->onDuelDetail(*this, duel);
+  };
+  const float winRoll = randomFloat(0.0f, 1.0f);
+  if (winRoll < winChance)
   {
     // Even a challenge that reaches the ball can be late or through the man.
-    if (incidentRoll() <
+    const float foulRoll = incidentRoll();
+    reportDetail(winRoll, foulRoll,
+                 foulPropensity *
+                     MatchTuning::Defending::WINNING_TACKLE_FOUL_SHARE);
+    if (foulRoll <
         foulPropensity * MatchTuning::Defending::WINNING_TACKLE_FOUL_SHARE)
     {
+      report(MatchDuelResult::FOUL);
       commitFoul(defender, carrier, true, sliding && fromBehind);
       return;
     }
@@ -5180,6 +5545,7 @@ void MatchEngine::attemptTackle(MatchPlayer& carrier, MatchPlayer& defender,
     ++statsOf(defender).tacklesWon;
     if (randomFloat(0.0f, 1.0f) < MatchTuning::Defending::POKE_LOOSE_CHANCE)
     {
+      report(MatchDuelResult::POKED_LOOSE);
       // The challenge knocks the ball away rather than winning it cleanly.
       const float angle =
           randomFloat(-std::numbers::pi_v<float>, std::numbers::pi_v<float>);
@@ -5200,6 +5566,7 @@ void MatchEngine::attemptTackle(MatchPlayer& carrier, MatchPlayer& defender,
       updateTeamPhases();
       return;
     }
+    report(MatchDuelResult::WON);
     setPossession(defender);
     defender.actionCooldown =
         randomFloat(MatchTuning::Defending::MIN_RECOVERY_COOLDOWN,
@@ -5207,7 +5574,14 @@ void MatchEngine::attemptTackle(MatchPlayer& carrier, MatchPlayer& defender,
     return;
   }
 
-  if (incidentRoll() >= foulPropensity) return;
+  const float foulRoll = incidentRoll();
+  reportDetail(winRoll, foulRoll, foulPropensity);
+  if (foulRoll >= foulPropensity)
+  {
+    report(MatchDuelResult::LOST);
+    return;
+  }
+  report(MatchDuelResult::FOUL);
   commitFoul(defender, carrier, false, sliding && fromBehind);
 }
 
@@ -5394,10 +5768,31 @@ void MatchEngine::decideAction(MatchPlayer& carrier)
   const float shotXG = estimateShotXG(carrier);
   const float opennessAhead = openSpaceAhead(carrier);
 
+  // Debugger detail: the parts of every score are noted beside the
+  // calculations below. Only a recorder that asks for them gets them, and
+  // nothing in the decision reads them.
+  std::unique_ptr<MatchDecisionDetail> detail;
+  if (wantsDetail())
+  {
+    detail = std::make_unique<MatchDecisionDetail>();
+    detail->player = carrier.player ? carrier.player->getId() : 0;
+    detail->homeTeam = carrier.isHomeTeam;
+  }
+  ScoreBreakdown* const passTerms = detail ? &detail->options[0] : nullptr;
+  ScoreBreakdown* const shotTerms = detail ? &detail->options[1] : nullptr;
+  ScoreBreakdown* const carryTerms = detail ? &detail->options[2] : nullptr;
+  ScoreBreakdown* const shieldTerms = detail ? &detail->options[3] : nullptr;
+  const auto note = [](ScoreBreakdown* terms, const char* name,
+                       TermSource source, float value)
+  {
+    if (terms) terms->add(name, source, value);
+  };
+
   // Evaluate the passing candidates first: the task is pure (no random draws)
   // and the deterministic best plus runner-up options are visible in the
   // decision snapshot even when a shot or dribble is eventually chosen.
-  const std::optional<PassOption> option = choosePassTarget(carrier);
+  const std::optional<PassOption> option =
+      choosePassTarget(carrier, detail ? &detail->candidates : nullptr);
 
   // Every candidate is scored in a shared utility currency.
   // Vision (scanning and reading the play) dominates decision quality, with
@@ -5411,11 +5806,39 @@ void MatchEngine::decideAction(MatchPlayer& carrier)
                   MatchTuning::Decision::FAMILIARITY_NOISE_GAIN) *
       std::max(0.5f, 1.0f - teamEdge(carrier.isHomeTeam)) *
       (1.0f - talkSwing(carrier.isHomeTeam) * TacticsTuning::TALK_COMPOSURE);
+  if (detail)
+  {
+    // The scale is a product: each factor is noted as what it adds.
+    const float base = (1.0f - decisionQuality) *
+                       MatchTuning::Decision::VISION_NOISE_SCALE;
+    const float familiarity =
+        1.0f + (1.0f - familiarityOf(carrier)) *
+                   MatchTuning::Decision::FAMILIARITY_NOISE_GAIN;
+    const float edge = std::max(0.5f, 1.0f - teamEdge(carrier.isHomeTeam));
+    const float talk =
+        1.0f - talkSwing(carrier.isHomeTeam) * TacticsTuning::TALK_COMPOSURE;
+    ScoreBreakdown& scale = detail->noiseScale;
+    scale.total = visionNoiseScale;
+    scale.add("decision quality (Vision, Passing)", TermSource::ATTRIBUTE,
+              base);
+    scale.add("tactical familiarity", TermSource::MORALE,
+              base * (familiarity - 1.0f));
+    scale.add("team edge (home, numbers, talk)", TermSource::SITUATION,
+              base * familiarity * (edge - 1.0f));
+    scale.add("team talk composure", TermSource::MORALE,
+              base * familiarity * edge * (talk - 1.0f));
+  }
 
   float passScore = -std::numeric_limits<float>::infinity();
   if (option)
   {
     passScore = option->utility;
+    // The pass score is the best candidate's utility (its terms).
+    if (passTerms)
+      for (const PassCandidateDetail& candidate : detail->candidates)
+        if (option->receiver && option->receiver->player &&
+            candidate.receiver == option->receiver->player->getId())
+          passTerms->terms = candidate.utility.terms;
     const float carrierDepth =
         carrier.isHomeTeam ? carrier.position.x : 1.0f - carrier.position.x;
     const bool pinnedToByline =
@@ -5425,6 +5848,8 @@ void MatchEngine::decideAction(MatchPlayer& carrier)
     if (pinnedToByline && option->targetPoint.x <= carrier.position.x)
     {
       passScore += MatchTuning::Decision::WIDE_RECYCLE_BONUS;
+      note(passTerms, "recycle from the byline", TermSource::LOCATION,
+           MatchTuning::Decision::WIDE_RECYCLE_BONUS);
     }
   }
 
@@ -5452,22 +5877,49 @@ void MatchEngine::decideAction(MatchPlayer& carrier)
                 carrier.shooting * MatchTuning::Decision::SHOT_SKILL_BONUS -
                 pressure * MatchTuning::Decision::SHOT_PRESSURE_PENALTY +
                 shoutShotBias(carrier.isHomeTeam) * rangeEligibility;
+    note(shotTerms, "expected goals above the threshold",
+         TermSource::SITUATION,
+         (shotXG - MatchTuning::Decision::BASE_SHOT_THRESHOLD) *
+             MatchTuning::Decision::SHOT_SCORE_SCALE);
+    note(shotTerms, "have-a-go inclination (space ahead, range)",
+         TermSource::SITUATION,
+         MatchTuning::Decision::SHOT_BASE_INCLINATION *
+             (0.6f + opennessAhead) * rangeEligibility);
+    note(shotTerms, "final-third bonus", TermSource::LOCATION,
+         finalThirdBonus);
+    note(shotTerms, "Shooting", TermSource::ATTRIBUTE,
+         carrier.shooting * MatchTuning::Decision::SHOT_SKILL_BONUS);
+    note(shotTerms, "pressure", TermSource::SITUATION,
+         -pressure * MatchTuning::Decision::SHOT_PRESSURE_PENALTY);
+    note(shotTerms, "touchline shout", TermSource::MORALE,
+         shoutShotBias(carrier.isHomeTeam) * rangeEligibility);
     if (carrierDepth >= MatchTuning::Rules::HOME_FINAL_THIRD_START &&
         std::abs(MatchTuning::Pitch::CENTRE - carrier.position.y) >=
             MatchTuning::Decision::WIDE_SHOT_WIDTH_DEVIATION)
     {
+      note(shotTerms, "wide-angle discount", TermSource::LOCATION,
+           shotScore * (MatchTuning::Decision::WIDE_SHOT_DISCOUNT - 1.0f));
       shotScore *= MatchTuning::Decision::WIDE_SHOT_DISCOUNT;
     }
     // A wide forward who has cut inside is looking for his shot.
     if (cutsInside(carrier))
+    {
       shotScore +=
           MatchTuning::Decision::CUT_INSIDE_SHOT_BONUS * rangeEligibility;
+      note(shotTerms, "cutting inside", TermSource::SLOT_ROLE,
+           MatchTuning::Decision::CUT_INSIDE_SHOT_BONUS * rangeEligibility);
+    }
     // Roles shoot more or less readily; a man forced onto his weaker foot
     // under pressure is less inclined to try.
     shotScore +=
         roleProfileOf(carrier).shotBias * TacticsTuning::SHOT_BIAS_WEIGHT *
             rangeEligibility -
         weakFootPressure(carrier) * TacticsTuning::WEAK_FOOT_SHOT_PENALTY;
+    note(shotTerms, "role's shot bias", TermSource::SLOT_ROLE,
+         roleProfileOf(carrier).shotBias * TacticsTuning::SHOT_BIAS_WEIGHT *
+             rangeEligibility);
+    note(shotTerms, "forced onto weaker foot", TermSource::INSTRUCTION,
+         -weakFootPressure(carrier) * TacticsTuning::WEAK_FOOT_SHOT_PENALTY);
   }
 
   // The longer a player has had the ball, the keener he is to release it:
@@ -5480,10 +5932,24 @@ void MatchEngine::decideAction(MatchPlayer& carrier)
       pressure * MatchTuning::Decision::CARRY_PRESSURE_PENALTY +
       strategy.riskTaking * MatchTuning::Decision::CARRY_RISK_BIAS -
       heldSeconds * MatchTuning::Decision::CARRY_HOLD_PENALTY_PER_SECOND;
+  note(carryTerms, "space ahead", TermSource::SITUATION,
+       opennessAhead * MatchTuning::Decision::CARRY_OPENNESS_WEIGHT);
+  note(carryTerms, "Dribbling", TermSource::ATTRIBUTE,
+       carrier.dribbling * MatchTuning::Decision::CARRY_DRIBBLING_BONUS);
+  note(carryTerms, "pressure", TermSource::SITUATION,
+       -pressure * MatchTuning::Decision::CARRY_PRESSURE_PENALTY);
+  note(carryTerms, "risk-taking instruction", TermSource::INSTRUCTION,
+       strategy.riskTaking * MatchTuning::Decision::CARRY_RISK_BIAS);
+  note(carryTerms, "time already on the ball", TermSource::SITUATION,
+       -heldSeconds * MatchTuning::Decision::CARRY_HOLD_PENALTY_PER_SECOND);
 
   // A wide forward cutting inside wants to run at the box himself.
   if (cutsInside(carrier))
+  {
     carryScore += MatchTuning::Decision::CUT_INSIDE_CARRY_BONUS;
+    note(carryTerms, "cutting inside", TermSource::SLOT_ROLE,
+         MatchTuning::Decision::CUT_INSIDE_CARRY_BONUS);
+  }
 
   float shieldScore = -std::numeric_limits<float>::infinity();
   const bool passUnavailableOrWeak =
@@ -5493,6 +5959,10 @@ void MatchEngine::decideAction(MatchPlayer& carrier)
   {
     shieldScore = pressure * MatchTuning::Decision::SHIELD_BONUS +
                   carrier.dribbling * MatchTuning::Decision::SHIELD_DRIBBLING;
+    note(shieldTerms, "pressure", TermSource::SITUATION,
+         pressure * MatchTuning::Decision::SHIELD_BONUS);
+    note(shieldTerms, "Dribbling", TermSource::ATTRIBUTE,
+         carrier.dribbling * MatchTuning::Decision::SHIELD_DRIBBLING);
   }
 
   // A side protecting a late lead no longer forces speculative long-range
@@ -5505,6 +5975,8 @@ void MatchEngine::decideAction(MatchPlayer& carrier)
       shotXG < MatchTuning::Decision::BASE_SHOT_THRESHOLD)
   {
     shotScore -= MatchTuning::Decision::LATE_LEAD_SPECULATIVE_PENALTY;
+    note(shotTerms, "protecting a late lead", TermSource::GAME_STATE,
+         -MatchTuning::Decision::LATE_LEAD_SPECULATIVE_PENALTY);
   }
   // Game state: a side two or more goals up manages the game, keeping the
   // ball rather than forcing half-chances.
@@ -5518,10 +5990,18 @@ void MatchEngine::decideAction(MatchPlayer& carrier)
     {
       shotScore -=
           MatchTuning::Decision::COMFORTABLE_LEAD_SHOT_PENALTY * margin;
+      note(shotTerms, "managing a comfortable lead", TermSource::GAME_STATE,
+           -MatchTuning::Decision::COMFORTABLE_LEAD_SHOT_PENALTY * margin);
     }
     carryScore -=
         MatchTuning::Decision::COMFORTABLE_LEAD_CARRY_PENALTY * margin;
+    note(carryTerms, "managing a comfortable lead", TermSource::GAME_STATE,
+         -MatchTuning::Decision::COMFORTABLE_LEAD_CARRY_PENALTY * margin);
   }
+
+  // Kept for the recorder: which option the scores alone would choose.
+  const std::array<float, 4> scoresBeforeNoise{passScore, shotScore,
+                                               carryScore, shieldScore};
 
   // Vision scales how much randomness perturbs close choices. The noise is
   // bounded so a truly nonsensical option can never win.
@@ -5540,6 +6020,69 @@ void MatchEngine::decideAction(MatchPlayer& carrier)
   lastScenarioDecision.shotUtility = shotScore;
   lastScenarioDecision.carryUtility = carryScore;
   lastScenarioDecision.shieldUtility = shieldScore;
+
+  if (MatchRecorder* recorder = getRecorder())
+  {
+    // The same comparisons as the branches below, in the same order.
+    const float ownThird =
+        carrier.isHomeTeam ? carrier.position.x : 1.0f - carrier.position.x;
+    const auto winner = [ownThird](float pass, float shot, float carry,
+                                   float shield)
+    {
+      if (shot >= pass && shot >= carry && shot >= shield)
+        return ScenarioAction::SHOT;
+      if (carry >= pass && carry >= shield) return ScenarioAction::CARRY;
+      if (shield >= pass)
+        return ownThird < MatchTuning::Defending::CLEARANCE_MAX_DEPTH
+                   ? ScenarioAction::CLEAR
+                   : ScenarioAction::SHIELD;
+      return ScenarioAction::PASS;
+    };
+    MatchDecisionRecord decision;
+    decision.player = carrier.player ? carrier.player->getId() : 0;
+    decision.homeTeam = carrier.isHomeTeam;
+    decision.pass = passScore;
+    decision.shot = shotScore;
+    decision.carry = carryScore;
+    decision.shield = shieldScore;
+    decision.chosen = winner(passScore, shotScore, carryScore, shieldScore);
+    decision.chosenWithoutNoise =
+        winner(scoresBeforeNoise[0], scoresBeforeNoise[1], scoresBeforeNoise[2],
+               scoresBeforeNoise[3]);
+    decision.pressure = pressure;
+    decision.shotXG = shotXG;
+    decision.opennessAhead = opennessAhead;
+    decision.noiseScale = visionNoiseScale;
+    if (const auto& best = lastScenarioDecision.best)
+    {
+      decision.bestReceiver = best->receiverId;
+      decision.bestPassUtility = best->utility;
+      decision.bestPassIntent = best->intent;
+    }
+    if (const auto& runnerUp = lastScenarioDecision.runnerUp)
+    {
+      decision.runnerUpReceiver = runnerUp->receiverId;
+      decision.runnerUpPassUtility = runnerUp->utility;
+    }
+    recorder->onDecision(*this, decision);
+    if (detail)
+    {
+      detail->chosen = decision.chosen;
+      const std::array<float, 4> withNoise{passScore, shotScore, carryScore,
+                                           shieldScore};
+      for (std::size_t index = 0; index < withNoise.size(); ++index)
+      {
+        detail->options[index].total = scoresBeforeNoise[index];
+        detail->noise[index] = std::isfinite(scoresBeforeNoise[index])
+                                   ? withNoise[index] - scoresBeforeNoise[index]
+                                   : 0.0f;
+        // Terms that are exactly zero say nothing here.
+        std::erase_if(detail->options[index].terms, [](const ScoreTerm& term)
+                      { return term.value == 0.0f; });
+      }
+      recorder->onDecisionDetail(*this, *detail);
+    }
+  }
 
   lastScenarioDecision.action = ScenarioAction::NONE;
   if (shotScore >= passScore && shotScore >= carryScore &&
@@ -5615,7 +6158,8 @@ void MatchEngine::decideAction(MatchPlayer& carrier)
 }
 
 MatchEngine::PassOption MatchEngine::evaluatePassOption(
-    MatchPlayer& passer, MatchPlayer& receiver) const
+    MatchPlayer& passer, MatchPlayer& receiver,
+    PassCandidateDetail* detail) const
 {
   // Estimate one receiver's safety, progress and space without consuming RNG
   // or changing the match. The completion estimate ranks options; passBall
@@ -5789,6 +6333,104 @@ MatchEngine::PassOption MatchEngine::evaluatePassOption(
   }
   const float travelDistance = distance(passer.position, target);
 
+  if (detail)
+  {
+    // Debugger detail: the same terms as the sums above, by source.
+    using P = MatchTuning::Passing;
+    namespace T = TacticsTuning;
+    using S = TermSource;
+    detail->receiver = receiver.player ? receiver.player->getId() : 0;
+    detail->intent = intent;
+    detail->distanceMetres = passDistance;
+    detail->lofted = !receiver.isGoalkeeper &&
+                     (intent == PassIntent::CROSS ||
+                      travelDistance > P::LOFTED_DISTANCE_METRES);
+
+    ScoreBreakdown& completion = detail->completion;
+    completion.total = completionProbability;
+    completion.add("base", S::SITUATION, P::BASE_COMPLETION_PROBABILITY);
+    completion.add("Passing", S::ATTRIBUTE,
+                   passer.passing * P::PASSING_COMPLETION_BONUS);
+    completion.add("receiver in space", S::SITUATION,
+                   openness * P::OPENNESS_COMPLETION_BONUS);
+    completion.add("passing-lane risk", S::SITUATION,
+                   -laneRisk * P::LANE_COMPLETION_PENALTY);
+    completion.add("distance", S::SITUATION,
+                   -passDistance * passDistance /
+                       (P::LONG_PASS_REFERENCE_METRES *
+                        P::LONG_PASS_REFERENCE_METRES) *
+                       P::DISTANCE_COMPLETION_PENALTY);
+    completion.add("pressure on the passer", S::SITUATION,
+                   -pressure * P::PRESSURE_COMPLETION_PENALTY);
+    completion.add("cross", S::LOCATION,
+                   crossOption ? -P::CROSS_COMPLETION_PENALTY : 0.0f);
+    completion.add("cutback", S::LOCATION,
+                   cutbackOption ? P::CUTBACK_COMPLETION_BONUS : 0.0f);
+    completion.add("space in behind", S::SITUATION,
+                   spaceBehindShare * P::SPACE_BEHIND_COMPLETION_BONUS);
+    // The estimate is clamped to its range.
+    completion.add("clamped to its range", S::SITUATION,
+                   completion.residual());
+
+    ScoreBreakdown& value = detail->utility;
+    value.total = utility;
+    const float progressWeight =
+        P::BASE_PROGRESS_WEIGHT +
+        strategy.offensiveBias * P::OFFENSIVE_PROGRESS_WEIGHT;
+    value.add("receiver in space", S::SITUATION, openness * P::OPENNESS_WEIGHT);
+    value.add("passing-lane risk", S::SITUATION,
+              -laneRisk * P::LANE_RISK_WEIGHT);
+    value.add("forward progress", S::SITUATION,
+              progression * P::BASE_PROGRESS_WEIGHT);
+    value.add("progress x attacking instruction", S::INSTRUCTION,
+              progression * strategy.offensiveBias *
+                  P::OFFENSIVE_PROGRESS_WEIGHT);
+    value.add("progress x risk-taking", S::INSTRUCTION,
+              progression * progressWeight * daring * P::RISK_PROGRESS_GAIN);
+    value.add("distance from the ideal length", S::SITUATION,
+              -std::abs(passDistance - P::IDEAL_DISTANCE_METRES) *
+                  P::DISTANCE_PENALTY_PER_METRE);
+    value.add("safe outlet under pressure", S::SITUATION, safeOutlet);
+    value.add("forward receiver (his position)", S::NATURAL_POSITION,
+              forwardRole && progression > 0.0f ? P::FORWARD_ROLE_BONUS
+                                                : 0.0f);
+    value.add("completion chance", S::SITUATION,
+              completionProbability * P::COMPLETION_UTILITY_WEIGHT);
+    value.add("completion x risk-taking", S::INSTRUCTION,
+              -completionProbability * P::COMPLETION_UTILITY_WEIGHT * daring *
+                  P::RISK_SAFETY_GAIN);
+    value.add("receiver making a run", S::SITUATION,
+              receiver.isMakingRun && progression > 0.0f
+                  ? P::ACTIVE_RUNNER_UTILITY_BONUS
+                  : 0.0f);
+    // passingRoleBias(): the passer's daring, the receiver's target role
+    // and an opposition tight-marking order.
+    value.add("passer's role: daring passes", S::SLOT_ROLE,
+              roleProfileOf(passer).passDaring *
+                  (progression * T::PASS_DARING_PROGRESS_WEIGHT +
+                   (1.0f - completionProbability) *
+                       T::PASS_DARING_SAFETY_WEIGHT));
+    value.add("receiver's role: target", S::SLOT_ROLE,
+              roleProfileOf(receiver).targetBias * T::TARGET_BIAS_WEIGHT *
+                  (progression > 0.0f ? 1.0f : 0.4f));
+    value.add("receiver tightly marked (order)", S::INSTRUCTION,
+              -tightMarkPenalty(receiver));
+    value.add("receiver's shot chance", S::LOCATION,
+              receiverDepth >= MatchTuning::Rules::HOME_FINAL_THIRD_START
+                  ? estimateShotXG(receiver) * P::SHOT_CREATION_WEIGHT
+                  : 0.0f);
+    value.add("space in behind", S::SITUATION,
+              spaceBehindShare * P::SPACE_BEHIND_UTILITY);
+    value.add("cross", S::LOCATION, crossOption ? P::CROSS_UTILITY_BONUS : 0.0f);
+    value.add("cutback", S::LOCATION,
+              cutbackOption ? P::CUTBACK_UTILITY_BONUS : 0.0f);
+    // Terms that are exactly zero say nothing here.
+    std::erase_if(value.terms,
+                  [](const ScoreTerm& term) { return term.value == 0.0f; });
+    std::erase_if(completion.terms,
+                  [](const ScoreTerm& term) { return term.value == 0.0f; });
+  }
+
   return {&receiver,
           target,
           intent,
@@ -5803,8 +6445,19 @@ MatchEngine::PassOption MatchEngine::evaluatePassOption(
 }
 
 std::optional<MatchEngine::PassOption> MatchEngine::choosePassTarget(
-    MatchPlayer& passer)
+    MatchPlayer& passer, std::vector<PassCandidateDetail>* details)
 {
+  // Debugger detail: a team-mate left out, and why.
+  const auto excluded = [details](const MatchPlayer& candidate,
+                                  float metres, PassExclusion reason)
+  {
+    if (!details) return;
+    PassCandidateDetail detail;
+    detail.receiver = candidate.player ? candidate.player->getId() : 0;
+    detail.excluded = reason;
+    detail.distanceMetres = metres;
+    details->push_back(std::move(detail));
+  };
   std::optional<PassOption> best;
   float bestScore = -std::numeric_limits<float>::infinity();
   std::optional<PassOption> runnerUp;
@@ -5836,11 +6489,20 @@ std::optional<MatchEngine::PassOption> MatchEngine::choosePassTarget(
     const float passDistance = distance(passer.position, candidate.position);
     if (passDistance < MatchTuning::Passing::MIN_DISTANCE_METRES ||
         passDistance > MatchTuning::Passing::MAX_DISTANCE_METRES)
+    {
+      excluded(candidate, passDistance,
+               passDistance < MatchTuning::Passing::MIN_DISTANCE_METRES
+                   ? PassExclusion::TOO_CLOSE
+                   : PassExclusion::TOO_FAR);
       continue;
+    }
     // Nobody plays a long ball back towards his own goal.
     if (candidate.isGoalkeeper &&
         passDistance > MatchTuning::Passing::MAX_BACK_PASS_METRES)
+    {
+      excluded(candidate, passDistance, PassExclusion::KEEPER_TOO_FAR);
       continue;
+    }
     // The passer judges the offside line from what he sees: poorer vision
     // misreads tight lines, which is where real offsides come from.
     const float perceivedLineError =
@@ -5848,9 +6510,18 @@ std::optional<MatchEngine::PassOption> MatchEngine::choosePassTarget(
         (1.0f - passer.vision) * MatchTuning::Passing::OFFSIDE_PERCEPTION_ERROR;
     if (isOffside(candidate, passer.isHomeTeam, defenderLine,
                   perceivedLineError))
+    {
+      excluded(candidate, passDistance, PassExclusion::LOOKS_OFFSIDE);
       continue;
+    }
 
-    PassOption option = evaluatePassOption(passer, candidate);
+    PassCandidateDetail* detail = nullptr;
+    if (details)
+    {
+      details->emplace_back();
+      detail = &details->back();
+    }
+    PassOption option = evaluatePassOption(passer, candidate, detail);
     if (option.utility > bestScore)
     {
       runnerUp = std::move(best);
@@ -5989,6 +6660,16 @@ void MatchEngine::passBall(MatchPlayer& passer, const PassOption& option,
   }
   ball.isAerialDelivery = lofted && delivery;
   ball.fromThrowIn = state == MatchState::THROW_IN;
+  if (getRecorder())
+  {
+    MatchActionRecord action;
+    action.kind = MatchActionKind::PASS;
+    action.target = receiver.player->getId();
+    action.lofted = lofted;
+    action.passIntent = lastPassDecision.intent;
+    action.estimate = option.completionProbability;
+    reportKick(action, passer, target);
+  }
   if (passer.isGoalkeeper)
   {
     GoalkeeperControl& control = keepers[passer.isHomeTeam ? 0 : 1];
@@ -6224,6 +6905,20 @@ void MatchEngine::takeShot(MatchPlayer& shooter, float forcedXG, bool header,
   if (header) event.detail = MatchEventDetail::HEADER;
   event.xg = xg;
   event.position = shooter.position;
+  if (getRecorder())
+  {
+    // Aimed where the ball's flight crosses the goal line.
+    const float goalX = shooter.isHomeTeam ? 1.0f : 0.0f;
+    const Vector2F velocity = toPitch(ball.velocity);
+    Vector2F aim{goalX, ball.position.y};
+    if (std::abs(velocity.x) > EPSILON)
+      aim.y += velocity.y * (goalX - ball.position.x) / velocity.x;
+    MatchActionRecord action;
+    action.kind = MatchActionKind::SHOT;
+    action.header = header;
+    action.estimate = xg;
+    reportKick(action, shooter, aim);
+  }
   shooter.actionCooldown =
       randomFloat(MatchTuning::Shooting::MIN_ACTION_COOLDOWN,
                   MatchTuning::Shooting::MAX_ACTION_COOLDOWN);
@@ -6246,6 +6941,27 @@ void MatchEngine::launchBall(const MatchPlayer& kicker, Vector2F origin,
   ball.kicker = kicker.player;
   ball.kickerLockout = MatchTuning::Passing::KICKER_LOCKOUT_SECONDS;
   ball.touchAttempts = 0;
+}
+
+bool MatchEngine::wantsDetail() const
+{
+  const MatchRecorder* recorder = getRecorder();
+  return recorder && recorder->wantsDetail();
+}
+
+void MatchEngine::reportKick(MatchActionRecord& action,
+                             const MatchPlayer& kicker, Vector2F target) const
+{
+  MatchRecorder* recorder = getRecorder();
+  if (!recorder) return;
+  action.player = kicker.player ? kicker.player->getId() : 0;
+  action.homeTeam = kicker.isHomeTeam;
+  action.from = ball.position;
+  action.to = target;
+  action.speed = length(ball.velocity);
+  action.verticalSpeed = ball.velocityZ;
+  action.curve = ball.curve;
+  recorder->onAction(*this, action);
 }
 
 float MatchEngine::groundLaunchSpeed(float distanceMetres, float arrivalSpeed)
@@ -7391,6 +8107,13 @@ void MatchEngine::clearBall(MatchPlayer& defender)
   clearFlightState();
   launchBall(defender, defender.position, target, speed,
              loftVerticalSpeed(clearanceMetres, speed, 0.0f, 0.0f), 0.0f);
+  if (getRecorder())
+  {
+    MatchActionRecord action;
+    action.kind = MatchActionKind::CLEARANCE;
+    action.lofted = true;
+    reportKick(action, defender, target);
+  }
   lastShooter = nullptr;
   defender.actionCooldown =
       randomFloat(MatchTuning::Passing::MIN_ACTION_COOLDOWN,
@@ -7490,10 +8213,17 @@ void MatchEngine::headBall(MatchPlayer& header)
         randomFloat(MatchTuning::Aerial::MIN_CLEARANCE_SHARE, 1.0f);
     const float height = ball.z;
     const Vector2F reach = toPitch({direction.x, direction.y});
-    launchBall(header, header.position,
-               {header.position.x + reach.x, header.position.y + reach.y},
-               speed, MatchTuning::Aerial::HEADER_LIFT, 0.0f);
+    const Vector2F aim{header.position.x + reach.x, header.position.y + reach.y};
+    launchBall(header, header.position, aim, speed,
+               MatchTuning::Aerial::HEADER_LIFT, 0.0f);
     ball.z = height;
+    if (getRecorder())
+    {
+      MatchActionRecord action;
+      action.kind = MatchActionKind::CLEARANCE;
+      action.header = true;
+      reportKick(action, header, aim);
+    }
   }
   else
   {
@@ -7528,6 +8258,14 @@ void MatchEngine::headBall(MatchPlayer& header)
                MatchTuning::Aerial::HEADER_PASS_SPEED,
                MatchTuning::Aerial::HEADER_LIFT * 0.5f, 0.0f);
     ball.z = height;
+    if (getRecorder())
+    {
+      MatchActionRecord action;
+      action.kind = MatchActionKind::KNOCK_DOWN;
+      action.header = true;
+      action.target = target && target->player ? target->player->getId() : 0;
+      reportKick(action, header, knockDown);
+    }
   }
 }
 

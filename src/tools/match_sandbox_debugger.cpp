@@ -1,0 +1,460 @@
+// -----------------------------------------------------------------------------
+//  Football Management Project
+//  Copyright (c) 2025 - 2026 Flavio Milinanni. All Rights Reserved.
+//
+//  This file is part of the Football Management Project.
+//  See the LICENSE file in the project root.
+// -----------------------------------------------------------------------------
+
+#include "tools/match_sandbox_debugger.h"
+
+#include <imgui.h>
+
+#include <algorithm>
+#include <cmath>
+#include <format>
+#include <map>
+#include <string>
+#include <utility>
+#include <variant>
+
+#include "gui/widgets/theme.h"
+#include "model/match_engine.h"
+#include "tools/match_sandbox_inspector.h"
+#include "tools/match_sandbox_names.h"
+#include "tools/match_sandbox_recorder.h"
+
+namespace
+{
+using Recorder = SandboxRecorder;
+using Kind = EngineDebugger::Kind;
+
+constexpr std::array<const char*, static_cast<std::size_t>(Kind::COUNT)>
+    KIND_NAMES{"Phase", "Job", "Intent", "Decision", "Action", "Possession",
+               "Keeper", "Event"};
+
+std::string score(float value)
+{
+  return std::isfinite(value) ? std::format("{:.2f}", value) : "-";
+}
+
+float metres(Vector2F from, Vector2F to)
+{
+  return std::hypot((to.x - from.x) * 105.0f, (to.y - from.y) * 68.0f);
+}
+
+/** Match clock "mm:ss". */
+std::string clock(float minute)
+{
+  const int seconds = static_cast<int>(std::floor(std::max(0.0f, minute) * 60.0f));
+  return std::format("{:02}:{:02}", seconds / 60, seconds % 60);
+}
+
+/** One table row: team (-1 none), player and the detail text. */
+struct Row
+{
+  int home = -1;
+  PlayerID player = 0;
+  std::string detail;
+};
+
+Row describeRow(const Recorder& recorder, const Recorder::Entry& entry)
+{
+  const auto name = [&recorder](PlayerID id) { return recorder.playerName(id); };
+  return std::visit(
+      [&](const auto& item) -> Row
+      {
+        using T = std::decay_t<decltype(item)>;
+        if constexpr (std::is_same_v<T, Recorder::PhaseChange>)
+          return {item.homeTeam, 0,
+                  std::format("{} -> {}", SandboxNames::phase(item.from),
+                              SandboxNames::phase(item.to))};
+        else if constexpr (std::is_same_v<T, Recorder::JobChange>)
+        {
+          std::string text = std::format("{}: {}", SandboxNames::job(item.job),
+                                         item.player ? name(item.player)
+                                                     : std::string("nobody"));
+          if (item.previous) text += std::format(" (was {})", name(item.previous));
+          if (item.player && (item.job == Recorder::Job::PRESSER_1 ||
+                              item.job == Recorder::Job::PRESSER_2))
+            text += std::format(" · arrives in {:.2f} s", item.score);
+          else if (item.player && (item.job == Recorder::Job::RUNNER_1 ||
+                                   item.job == Recorder::Job::RUNNER_2 ||
+                                   item.job == Recorder::Job::RUNNER_3))
+            text += std::format(" · run priority {:.2f}", item.score);
+          return {item.homeTeam, item.player, text};
+        }
+        else if constexpr (std::is_same_v<T, Recorder::IntentChange>)
+        {
+          std::string text = std::format("{} -> {}", SandboxNames::intent(item.from),
+                                         SandboxNames::intent(item.to));
+          if (item.job != Recorder::Job::NONE)
+            text += std::format("  [{}]", SandboxNames::job(item.job));
+          return {item.homeTeam, item.player, text};
+        }
+        else if constexpr (std::is_same_v<T, MatchDecisionRecord>)
+        {
+          std::string text = std::format(
+              "{}  ·  pass {}  shot {}  carry {}  shield {}", SandboxNames::choice(item.chosen),
+              score(item.pass), score(item.shot), score(item.carry),
+              score(item.shield));
+          if (item.chosen == ScenarioAction::PASS && item.bestReceiver)
+            text += std::format("  ·  to {} ({})", name(item.bestReceiver),
+                                SandboxNames::passIntent(item.bestPassIntent));
+          if (item.chosenWithoutNoise != item.chosen)
+            text += std::format("  ·  NOISE FLIPPED (scores alone: {})",
+                                SandboxNames::choice(item.chosenWithoutNoise));
+          return {item.homeTeam, item.player, text};
+        }
+        else if constexpr (std::is_same_v<T, MatchActionRecord>)
+        {
+          std::string text = SandboxNames::action(item.kind);
+          if (item.header) text += " (header)";
+          switch (item.kind)
+          {
+            case MatchActionKind::PASS:
+              text += std::format(" {}{} to {} · {:.1f} m · est. completion {:.2f}",
+                                  SandboxNames::passIntent(item.passIntent),
+                                  item.lofted ? ", lofted" : "", name(item.target),
+                                  metres(item.from, item.to), item.estimate);
+              break;
+            case MatchActionKind::SHOT:
+              text += std::format(" · xG {:.2f} · {:.1f} m/s", item.estimate,
+                                  item.speed);
+              break;
+            case MatchActionKind::CLEARANCE:
+            case MatchActionKind::KNOCK_DOWN:
+              text += std::format(" · {:.1f} m", metres(item.from, item.to));
+              if (item.target) text += std::format(" toward {}", name(item.target));
+              break;
+            case MatchActionKind::TAKE_ON:
+              text += std::format(" vs {} · chance {:.2f} · {}", name(item.target),
+                                  item.estimate, SandboxNames::duel(item.result));
+              break;
+            case MatchActionKind::TACKLE:
+              text += std::format("{} on {} · win {:.2f} · foul risk {:.2f} · {}",
+                                  item.lofted ? " (sliding)" : "",
+                                  name(item.target), item.estimate,
+                                  item.foulPropensity, SandboxNames::duel(item.result));
+              break;
+          }
+          return {item.homeTeam, item.player, text};
+        }
+        else if constexpr (std::is_same_v<T, Recorder::PossessionChange>)
+        {
+          std::string text =
+              item.from == 0 ? std::format("ball to {}", name(item.to))
+              : item.fromHome == item.toHome
+                  ? std::format("received from {}", name(item.from))
+                  : std::format("won from {}", name(item.from));
+          if (item.afterAction && *item.afterAction < recorder.entries().size())
+          {
+            const auto& cause = recorder.entries()[*item.afterAction].payload;
+            if (const auto* action = std::get_if<MatchActionRecord>(&cause))
+              text += std::format("  (after {} by {})", SandboxNames::action(action->kind),
+                                  name(action->player));
+          }
+          return {item.toHome, item.to, text};
+        }
+        else if constexpr (std::is_same_v<T, Recorder::KeeperChange>)
+        {
+          return {item.homeTeam, 0,
+                  std::format("keeper {} -> {}", goalkeeperStateName(item.from),
+                              goalkeeperStateName(item.to))};
+        }
+        else
+        {
+          const MatchEvent& event = recorder.events()[item.index];
+          return {event.hasTeam ? static_cast<int>(event.isHomeTeam) : -1,
+                  event.primaryPlayerId,
+                  std::format("{}  {}", matchEventTypeName(event.type),
+                              event.description)};
+        }
+      },
+      entry.payload);
+}
+}  // namespace
+
+EngineDebugger::Described EngineDebugger::describe(
+    const SandboxRecorder& recorder, const SandboxRecorder::Entry& entry)
+{
+  Row row = describeRow(recorder, entry);
+  return {row.home, row.player, std::move(row.detail)};
+}
+
+void EngineDebugger::reset()
+{
+  visible.clear();
+  visible_for_size = 0;
+  filters_changed = true;
+}
+
+std::optional<std::uint64_t> EngineDebugger::takeSeekRequest()
+{
+  return std::exchange(seek_request, std::nullopt);
+}
+
+void EngineDebugger::render(SandboxRecorder& recorder, MatchEngine* engine,
+                            bool* paused, std::optional<std::uint64_t> cursor,
+                            const MatchEngine* inspected,
+                            DebugInspector& inspector)
+{
+  const float scale = Theme::scale();
+  const ImGuiViewport* viewport = ImGui::GetMainViewport();
+  // Right half of the window; the review takes the left half.
+  const float margin = 8.0f * scale;
+  ImGui::SetNextWindowPos(
+      ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f + 0.5f * margin,
+             viewport->WorkPos.y + margin),
+      ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSize(
+      ImVec2(viewport->WorkSize.x * 0.5f - 1.5f * margin,
+             viewport->WorkSize.y - 2.0f * margin),
+      ImGuiCond_FirstUseEver);
+  if (!ImGui::Begin("Engine debugger"))
+  {
+    ImGui::End();
+    return;
+  }
+  renderControls(recorder, engine, paused);
+  if (ImGui::BeginTabBar("##debugger_tabs"))
+  {
+    if (ImGui::BeginTabItem("Log"))
+    {
+      renderFilters(recorder, inspector.selected);
+      renderLog(recorder, cursor, inspector);
+      ImGui::EndTabItem();
+    }
+    // The inspector reads the moment under review (or the live match).
+    if (inspected)
+    {
+      if (ImGui::BeginTabItem("Team"))
+      {
+        inspector.renderTeam(recorder, *inspected);
+        ImGui::EndTabItem();
+      }
+      if (ImGui::BeginTabItem("Player"))
+      {
+        inspector.renderPlayer(recorder, *inspected);
+        ImGui::EndTabItem();
+      }
+      if (ImGui::BeginTabItem("Decision"))
+      {
+        inspector.renderDecision(recorder, *inspected);
+        ImGui::EndTabItem();
+      }
+      if (ImGui::BeginTabItem("Referee"))
+      {
+        inspector.renderReferee(recorder, *inspected);
+        ImGui::EndTabItem();
+      }
+      if (ImGui::BeginTabItem("Summary"))
+      {
+        inspector.renderSummary(recorder, *inspected);
+        ImGui::EndTabItem();
+      }
+    }
+    ImGui::EndTabBar();
+  }
+  ImGui::End();
+}
+
+void EngineDebugger::renderControls(SandboxRecorder& recorder,
+                                    MatchEngine* engine, bool* paused)
+{
+  if (engine && paused)
+  {
+    if (ImGui::Button(*paused ? "Resume" : "Pause")) *paused = !*paused;
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!*paused);
+    // Stepping runs the same fixed steps as play, with the recorder attached.
+    if (ImGui::Button("Step 0.1 s"))
+      engine->advance(MatchTuning::Timing::FIXED_STEP_SECONDS);
+    ImGui::SameLine();
+    if (ImGui::Button("Step 1 s")) engine->advance(1.0f);
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s  ·  tick %llu", clock(engine->getMatchTimeMinutes()).c_str(),
+                        static_cast<unsigned long long>(engine->getSimulatedSteps()));
+  }
+  else
+  {
+    ImGui::TextDisabled("Match over: the log of the last match.");
+  }
+  const auto guard = recorder.lock();
+  ImGui::SameLine();
+  ImGui::TextDisabled("  ·  %zu entries  ·  ~%zu KB", recorder.entries().size(),
+                      recorder.approximateBytes() / 1024);
+}
+
+void EngineDebugger::renderFilters(const SandboxRecorder& recorder,
+                                   PlayerID selection)
+{
+  // "Only selected" keeps the player filter on the inspector's selection.
+  if (only_selected && player_filter != selection)
+  {
+    player_filter = selection;
+    filters_changed = true;
+  }
+  ImGui::SetNextItemWidth(110.0f * Theme::scale());
+  constexpr std::array<const char*, 3> TEAMS{"Both teams", "Home", "Away"};
+  if (ImGui::Combo("##team", &team_filter, TEAMS.data(),
+                   static_cast<int>(TEAMS.size())))
+    filters_changed = true;
+  ImGui::SameLine();
+
+  // Every player seen in the match, by name.
+  std::map<std::string, PlayerID> players;
+  {
+    const auto guard = recorder.lock();
+    for (const auto& [id, name] : recorder.knownPlayers())
+      players.emplace(name, id);
+  }
+  ImGui::SetNextItemWidth(190.0f * Theme::scale());
+  const std::string current =
+      player_filter ? recorder.playerName(player_filter) : "All players";
+  if (ImGui::BeginCombo("##player", current.c_str(), ImGuiComboFlags_HeightLarge))
+  {
+    if (ImGui::Selectable("All players", player_filter == 0))
+    {
+      player_filter = 0;
+      filters_changed = true;
+    }
+    for (const auto& [label, id] : players)
+      if (ImGui::Selectable(label.c_str(), player_filter == id))
+      {
+        player_filter = id;
+        filters_changed = true;
+      }
+    ImGui::EndCombo();
+  }
+  ImGui::SameLine();
+  if (ImGui::Checkbox("Only selected", &only_selected))
+  {
+    player_filter = only_selected ? selection : 0;
+    filters_changed = true;
+  }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Show only the player selected on the review pitch, "
+                      "in the Team or Player tab, or by clicking a row.");
+  ImGui::SameLine();
+  ImGui::Checkbox("Follow", &follow);
+
+  for (std::size_t kind = 0; kind < shown.size(); ++kind)
+  {
+    if (kind > 0) ImGui::SameLine();
+    ImGui::PushID(static_cast<int>(kind));
+    if (ImGui::Checkbox(KIND_NAMES[kind], &shown[kind])) filters_changed = true;
+    ImGui::PopID();
+  }
+}
+
+void EngineDebugger::refreshVisible(const SandboxRecorder& recorder)
+{
+  const auto& entries = recorder.entries();
+  if (filters_changed || entries.size() < visible_for_size)
+  {
+    visible.clear();
+    visible_for_size = 0;
+    filters_changed = false;
+  }
+  const std::size_t before = visible.size();
+  for (std::size_t index = visible_for_size; index < entries.size(); ++index)
+  {
+    const auto& entry = entries[index];
+    if (!shown[entry.payload.index()]) continue;
+    if (team_filter != 0 || player_filter != 0)
+    {
+      const Row row = describeRow(recorder, entry);
+      if (team_filter != 0 && row.home != (team_filter == 1 ? 1 : 0)) continue;
+      if (player_filter != 0 && row.player != player_filter) continue;
+    }
+    visible.push_back(index);
+  }
+  visible_for_size = entries.size();
+  if (visible.size() != before && follow) scroll_to_end = true;
+}
+
+void EngineDebugger::renderLog(const SandboxRecorder& recorder,
+                               std::optional<std::uint64_t> cursor,
+                               DebugInspector& inspector)
+{
+  const auto guard = recorder.lock();
+  refreshVisible(recorder);
+  const auto& entries = recorder.entries();
+
+  // The last row at or before the reviewed tick; scrolled to when it moves.
+  std::optional<int> cursorRow;
+  if (cursor)
+  {
+    const auto after = std::ranges::upper_bound(
+        visible, *cursor, {},
+        [&entries](std::size_t index) { return entries[index].tick; });
+    if (after != visible.begin())
+      cursorRow = static_cast<int>(after - visible.begin()) - 1;
+  }
+  const bool scrollToCursor = cursor && cursor != scrolled_cursor;
+  scrolled_cursor = cursor;
+  if (scrollToCursor) follow = false;
+
+  constexpr ImGuiTableFlags flags =
+      ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
+      ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable |
+      ImGuiTableFlags_SizingFixedFit;
+  if (!ImGui::BeginTable("##log", 6, flags, ImVec2(0.0f, 0.0f))) return;
+  ImGui::TableSetupScrollFreeze(0, 1);
+  ImGui::TableSetupColumn("Time");
+  ImGui::TableSetupColumn("Tick");
+  ImGui::TableSetupColumn("Team");
+  ImGui::TableSetupColumn("Player");
+  ImGui::TableSetupColumn("Kind");
+  ImGui::TableSetupColumn("Detail", ImGuiTableColumnFlags_WidthStretch);
+  ImGui::TableHeadersRow();
+
+  ImGuiListClipper clipper;
+  clipper.Begin(static_cast<int>(visible.size()));
+  if (scrollToCursor && cursorRow) clipper.IncludeItemByIndex(*cursorRow);
+  while (clipper.Step())
+  {
+    for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row)
+    {
+      const auto& entry = entries[visible[static_cast<std::size_t>(row)]];
+      const Row described = describeRow(recorder, entry);
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn();
+      // The whole row selects: clicking it rewinds the review to its tick.
+      ImGui::PushID(row);
+      const bool atCursor = cursorRow && entries[visible[static_cast<std::size_t>(*cursorRow)]].tick == entry.tick;
+      if (ImGui::Selectable(clock(entry.minute).c_str(), atCursor,
+                            ImGuiSelectableFlags_SpanAllColumns))
+      {
+        seek_request = entry.tick;
+        follow = false;
+        if (described.player != 0) inspector.selected = described.player;
+      }
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
+        ImGui::SetTooltip("Click to rewind the review to this moment.");
+      ImGui::PopID();
+      if (scrollToCursor && cursorRow == row) ImGui::SetScrollHereY(0.5f);
+      ImGui::TableNextColumn();
+      ImGui::Text("%llu", static_cast<unsigned long long>(entry.tick));
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(described.home < 0   ? ""
+                             : described.home > 0 ? "Home"
+                                                  : "Away");
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(
+          described.player ? recorder.playerName(described.player).c_str() : "");
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(KIND_NAMES[entry.payload.index()]);
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(described.detail.c_str());
+    }
+  }
+  if (scroll_to_end)
+  {
+    ImGui::SetScrollHereY(1.0f);
+    scroll_to_end = false;
+  }
+  ImGui::EndTable();
+}

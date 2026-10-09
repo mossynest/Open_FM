@@ -163,6 +163,7 @@ set(FM_CORE_SOURCES
     model/match_engine.cpp
     model/match_engine_tracking.cpp
     model/match_events.h
+    model/match_recorder.h
     model/match_insights.h
     model/match_insights.cpp
     model/match_tracking.h
@@ -614,6 +615,30 @@ add_executable(match_sandbox
     tools/match_sandbox_main.cpp
     tools/match_sandbox_scene.h
     tools/match_sandbox_scene.cpp
+    tools/match_sandbox_recorder.h
+    tools/match_sandbox_recorder.cpp
+    tools/match_sandbox_debugger.h
+    tools/match_sandbox_debugger.cpp
+    tools/match_sandbox_checks.h
+    tools/match_sandbox_checks.cpp
+    tools/match_sandbox_rewind.h
+    tools/match_sandbox_rewind.cpp
+    tools/match_sandbox_review.h
+    tools/match_sandbox_review.cpp
+    tools/match_sandbox_names.h
+    tools/match_sandbox_inspector.h
+    tools/match_sandbox_inspector.cpp
+    tools/match_sandbox_inspector_detail.cpp
+    tools/match_sandbox_detail.h
+    tools/match_sandbox_detail.cpp
+    tools/match_sandbox_setup.h
+    tools/match_sandbox_setup.cpp
+    tools/match_sandbox_recording.h
+    tools/match_sandbox_recording.cpp
+    tools/match_sandbox_compare.h
+    tools/match_sandbox_compare.cpp
+    tools/match_sandbox_scenario.h
+    tools/match_sandbox_scenario.cpp
 )
 target_link_libraries(match_sandbox PRIVATE fm_ui fm_lab_lib)
 target_compile_options(match_sandbox PRIVATE ${FM_WARNING_FLAGS})

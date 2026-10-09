@@ -91,6 +91,10 @@ enum class PassIntent
   SET_PIECE
 };
 
+class MatchRecorder;
+struct MatchActionRecord;
+struct PassCandidateDetail;
+
 struct PassDecision
 {
   std::uint32_t passerId = 0;
@@ -736,6 +740,14 @@ class MatchEngine
   /** Schedules a recorded command log; a new change made during the replay
    * discards the rest of it. */
   void loadCommandReplay(std::vector<MatchCommandRecord> log);
+  /**
+   * Continues a copy of a match taken earlier with the original's complete
+   * logs (getCommandLog(), getInputLog()), so it replays the changes made
+   * after the copy. This copy's own logs must be the start of those logs:
+   * what it already applied stays applied and the rest is scheduled.
+   */
+  void continueReplay(std::vector<MatchCommandRecord> commands,
+                      std::vector<MatchInputRecord> inputs);
   /** Fixed steps simulated since kick-off. */
   std::uint64_t getSimulatedSteps() const { return stepCounter; }
 
@@ -929,7 +941,34 @@ class MatchEngine
     return lastScenarioDecision;
   }
 
+  /**
+   * Attaches an observer of the simulation (nullptr detaches it); see
+   * model/match_recorder.h. It only receives reports and never changes the
+   * match. Copies of this engine start without one.
+   */
+  void setRecorder(MatchRecorder* recorder) { recorderLink.target = recorder; }
+  MatchRecorder* getRecorder() const { return recorderLink.target; }
+
  private:
+  /** The attached recorder; a copy of the engine never inherits it, so
+   * highlight look-ahead and saved states are never recorded. */
+  struct RecorderLink
+  {
+    RecorderLink() = default;
+    RecorderLink(const RecorderLink& /*other*/) noexcept {}
+    RecorderLink& operator=(const RecorderLink& /*other*/) noexcept
+    {
+      target = nullptr;
+      return *this;
+    }
+    ~RecorderLink() = default;
+    MatchRecorder* target = nullptr;
+  };
+  RecorderLink recorderLink;
+  /** Completes a kick's report from the launched ball and sends it. */
+  void reportKick(MatchActionRecord& action, const MatchPlayer& kicker,
+                  Vector2F target) const;
+
   std::vector<MatchPlayer> players;
   MatchBall ball;
   const StatsConfig& statsConfig;
@@ -1461,9 +1500,15 @@ class MatchEngine
   void trackPressures();
   void clearFlightState();
 
-  std::optional<PassOption> choosePassTarget(MatchPlayer& passer);
-  PassOption evaluatePassOption(MatchPlayer& passer,
-                                MatchPlayer& receiver) const;
+  /** @param details Debugger detail: every team-mate looked at (or null). */
+  std::optional<PassOption> choosePassTarget(
+      MatchPlayer& passer,
+      std::vector<PassCandidateDetail>* details = nullptr);
+  /** @param detail Debugger detail: the utility and completion terms. */
+  PassOption evaluatePassOption(MatchPlayer& passer, MatchPlayer& receiver,
+                                PassCandidateDetail* detail = nullptr) const;
+  /** Whether the attached recorder asks for score breakdowns. */
+  [[nodiscard]] bool wantsDetail() const;
   MatchPlayer* findClosestPlayer(Vector2F position, bool homeTeam,
                                  bool includeGoalkeeper = true);
   MatchPlayer* findGoalkeeper(bool homeTeam);

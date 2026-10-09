@@ -175,8 +175,8 @@ void selectPlayer(Lineup& lineup, const Player& current, const Player& chosen)
 }
 }  // namespace
 
-MatchSandboxScene::MatchSandboxScene(GUIView* guiView_ptr)
-    : GUIScene(guiView_ptr)
+MatchSandboxScene::MatchSandboxScene(GUIView* guiView_ptr, bool kick_off_now)
+    : GUIScene(guiView_ptr), kick_off_pending(kick_off_now)
 {
 }
 
@@ -210,7 +210,12 @@ void MatchSandboxScene::onEnter()
   }
 }
 
-void MatchSandboxScene::update(float /*deltaTime*/) {}
+void MatchSandboxScene::update(float /*deltaTime*/)
+{
+  if (!kick_off_pending) return;
+  kick_off_pending = false;
+  if (sides[HOME].team != 0 && sides[AWAY].team != 0) kickOff();
+}
 
 std::optional<std::size_t> MatchSandboxScene::currentPreset(
     const Lineup& lineup)
@@ -268,6 +273,28 @@ void MatchSandboxScene::render()
 
   renderFooter();
   ImGui::End();
+  if (show_last_log) renderDebugTools(nullptr, nullptr);
+  if (show_last_log && loaded && replay_info)
+    comparison.render(*loaded, *replay_info, recorder.get(), review, inspector);
+  renderRecordings();
+}
+
+void MatchSandboxScene::renderDebugTools(MatchEngine* live, bool* livePaused)
+{
+  if (!recorder) return;
+  review.render(*recorder, live, livePaused, match_home, match_away,
+                &inspector);
+  // The inspector reads the moment under review, or the live match.
+  const MatchEngine* inspected =
+      review.shownEngine() ? review.shownEngine() : live;
+  debugger.render(*recorder, live, livePaused, review.cursor(), inspected,
+                  inspector);
+  // A clicked log row rewinds the review (and pauses the live match).
+  if (const auto tick = debugger.takeSeekRequest())
+  {
+    if (livePaused) *livePaused = true;
+    review.seek(*recorder, *tick);
+  }
 }
 
 void MatchSandboxScene::renderSide(Side& side, bool home, float width,
@@ -586,6 +613,17 @@ void MatchSandboxScene::renderFooter()
     ImGui::SetTooltip(
         "Both sides know their tactics perfectly. Off: familiarity comes "
         "from the clubs' training, and noisier decisions with it.");
+  ImGui::SameLine(0.0f, Theme::Space::XL * scale);
+  ImGui::Checkbox("Engine debugger", &show_debugger);
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Show the debugger window over the match: pause, step "
+                      "one tick at a time and read the decision log.");
+  if (recorder)
+  {
+    ImGui::SameLine();
+    if (UI::toggleButton("Review last match", show_last_log))
+      show_last_log = !show_last_log;
+  }
 
   const bool sameClub = sides[HOME].team == sides[AWAY].team;
   const bool ready = !sameClub && sides[HOME].team != 0 && sides[AWAY].team != 0;
@@ -598,9 +636,126 @@ void MatchSandboxScene::renderFooter()
   if (sameClub && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
     ImGui::SetTooltip("Choose two different clubs.");
 
+  // Second row: the last match and recordings.
   if (!last_result.empty())
+  {
+    ImGui::AlignTextToFramePadding();
     ImGui::TextColored(Theme::palette().muted, "Last match: %s",
                        last_result.c_str());
+    ImGui::SameLine();
+  }
+  ImGui::BeginDisabled(!recorder || !match_setup || loaded.has_value());
+  if (ImGui::Button("Save recording")) saveRecording();
+  ImGui::EndDisabled();
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    ImGui::SetTooltip("Save the last match to review it later, or to see how "
+                      "a changed engine plays it differently.");
+  ImGui::SameLine();
+  ImGui::Checkbox("with full detail", &save_with_detail);
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Also save every decision's breakdown (a larger file): "
+                      "enables term-by-term comparison with a later engine.");
+  ImGui::SameLine();
+  if (UI::toggleButton("Recordings...", show_recordings))
+  {
+    show_recordings = !show_recordings;
+    recording_files.clear();
+  }
+  if (!status.empty())
+  {
+    ImGui::SameLine();
+    ImGui::TextColored(Theme::palette().muted, "%s", status.c_str());
+  }
+}
+
+void MatchSandboxScene::saveRecording()
+{
+  if (!recorder || !match_setup) return;
+  const MatchRecording recording =
+      Recordings::capture(*match_setup, *recorder, save_with_detail);
+  const std::filesystem::path path =
+      Recordings::folder() / Recordings::fileName(recording);
+  std::string error;
+  status = Recordings::save(recording, path, error)
+               ? "Saved " + path.filename().string()
+               : "Could not save: " + error;
+  recording_files.clear();
+}
+
+void MatchSandboxScene::loadRecording(const std::filesystem::path& path)
+{
+  std::string error;
+  std::optional<MatchRecording> recording = Recordings::load(path, error);
+  if (!recording)
+  {
+    status = "Could not open " + path.filename().string() + ": " + error;
+    return;
+  }
+  Recordings::Replay replayed =
+      Recordings::replay(*recording, guiView->getController());
+  if (!replayed.match)
+  {
+    status = "Could not replay: " + replayed.error;
+    return;
+  }
+  // The replayed match takes the place of the last match in every window.
+  recorder = std::move(replayed.match);
+  match_setup = recording->setup;
+  match_home = recording->setup.sides[0].team;
+  match_away = recording->setup.sides[1].team;
+  debugger.reset();
+  review.reset();
+  inspector.reset();
+  comparison.reset();
+  loaded = std::move(recording);
+  replay_info = std::move(replayed);
+  show_last_log = true;
+  last_result = std::format("{} {} - {} {} (recording, seed {})",
+                            loaded->setup.sides[0].name, replay_info->homeScore,
+                            replay_info->awayScore, loaded->setup.sides[1].name,
+                            loaded->setup.matchSeed);
+  status = "Opened " + path.filename().string();
+}
+
+void MatchSandboxScene::renderRecordings()
+{
+  if (!show_recordings) return;
+  const float scale = Theme::scale();
+  ImGui::SetNextWindowSize(ImVec2(620.0f * scale, 360.0f * scale),
+                           ImGuiCond_FirstUseEver);
+  if (!ImGui::Begin("Recordings", &show_recordings))
+  {
+    ImGui::End();
+    return;
+  }
+  const std::filesystem::path folder = Recordings::folder();
+  if (recording_files.empty())
+  {
+    std::error_code ignored;
+    for (const auto& entry :
+         std::filesystem::directory_iterator(folder, ignored))
+      if (entry.path().extension() == ".json")
+        recording_files.push_back(entry.path());
+    // Newest first (the names start with the date).
+    std::ranges::sort(recording_files, std::greater{});
+  }
+  ImGui::TextDisabled("%s", folder.string().c_str());
+  ImGui::SameLine();
+  if (ImGui::SmallButton("Refresh")) recording_files.clear();
+  ImGui::TextDisabled(
+      "Opening replays the recording on this engine: review it like a live "
+      "match, and see where it plays differently.");
+  ImGui::Separator();
+  if (recording_files.empty()) ImGui::TextDisabled("No recordings yet.");
+  for (const std::filesystem::path& path : recording_files)
+  {
+    ImGui::PushID(path.string().c_str());
+    if (ImGui::SmallButton("Open")) loadRecording(path);
+    ImGui::SameLine();
+    ImGui::TextUnformatted(path.stem().string().c_str());
+    ImGui::PopID();
+  }
+  ImGui::End();
 }
 
 void MatchSandboxScene::kickOff()
@@ -610,9 +765,32 @@ void MatchSandboxScene::kickOff()
   // The home side is the managed one: its touchline and Play mode.
   controller.selectManagedTeam(sides[HOME].team);
 
+  // The match is built from its setup, so its recording can build it again.
+  match_setup = MatchSetup::capture(controller, sides[HOME].team,
+                                    sides[AWAY].team, match_seed,
+                                    full_familiarity);
   MatchScene::Sandbox sandbox;
-  sandbox.seed = match_seed;
-  if (full_familiarity) sandbox.familiarity = 1.0f;
+  sandbox.make_engine = [this]()
+  {
+    std::string error;
+    auto engine = match_setup->build(guiView->getController(), error);
+    if (!engine) status = "Could not build the match: " + error;
+    return engine;
+  };
+  // A fresh log for this match; the previous one is discarded.
+  loaded.reset();
+  recorder = std::make_unique<SandboxRecorder>();
+  debugger.reset();
+  review.reset();
+  inspector.reset();
+  show_last_log = false;
+  match_home = sides[HOME].team;
+  match_away = sides[AWAY].team;
+  sandbox.recorder = recorder.get();
+  sandbox.on_render = [this](MatchEngine& engine, bool& paused)
+  {
+    if (show_debugger) renderDebugTools(&engine, &paused);
+  };
   const std::uint32_t seed = match_seed;
   sandbox.on_finish = [this, seed](const MatchEngine& engine)
   {

@@ -10,11 +10,21 @@
 
 #include <array>
 #include <cstdint>
+#include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "global/types.h"
 #include "gui/gui_scene.h"
+#include "tools/match_sandbox_compare.h"
+#include "tools/match_sandbox_debugger.h"
+#include "tools/match_sandbox_inspector.h"
+#include "tools/match_sandbox_recorder.h"
+#include "tools/match_sandbox_recording.h"
+#include "tools/match_sandbox_review.h"
+#include "tools/match_sandbox_setup.h"
 
 class Lineup;
 class Strategy;
@@ -32,7 +42,8 @@ class Team;
 class MatchSandboxScene : public GUIScene
 {
  public:
-  explicit MatchSandboxScene(GUIView* guiView_ptr);
+  /** @param kick_off_now Start a match with the default setup straight away. */
+  explicit MatchSandboxScene(GUIView* guiView_ptr, bool kick_off_now = false);
 
   void onEnter() override;
   void update(float deltaTime) override;
@@ -59,8 +70,42 @@ class MatchSandboxScene : public GUIScene
       const Lineup& lineup);
 
   std::array<Side, 2> sides{};
+  bool kick_off_pending = false;
   std::uint32_t match_seed = 1;
   bool new_seed_each_match = true;
   bool full_familiarity = true;
   std::string last_result;
+
+  /** Draws the debugger and review windows and links them. */
+  void renderDebugTools(MatchEngine* live, bool* livePaused);
+
+  // Recordings (debugger phase 5).
+  void saveRecording();
+  void renderRecordings();
+  void loadRecording(const std::filesystem::path& path);
+
+  /** What the current (or last) match was built from. */
+  std::optional<MatchSetup> match_setup;
+  /** A recording opened for review, and how it replayed on this engine. */
+  std::optional<MatchRecording> loaded;
+  std::optional<Recordings::Replay> replay_info;
+  RecordingComparison comparison;
+  bool save_with_detail = true;
+  bool show_recordings = false;
+  std::vector<std::filesystem::path> recording_files;
+  /** Last save, load or build message, shown in the footer. */
+  std::string status;
+
+  /** The current (or last) match's log, kept until the next kick-off. */
+  std::unique_ptr<SandboxRecorder> recorder;
+  EngineDebugger debugger;
+  MatchReview review;
+  DebugInspector inspector;
+  /** Clubs of the recorded match (the pickers may change after it). */
+  TeamID match_home = 0;
+  TeamID match_away = 0;
+  /** Debugger and review windows over the live match. */
+  bool show_debugger = true;
+  /** The last match's review and log on the setup screen. */
+  bool show_last_log = false;
 };

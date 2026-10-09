@@ -62,12 +62,18 @@ class MatchScene : public GUIScene
    */
   struct Sandbox
   {
-    /** Engine seed; the fixture's seed when empty. */
-    std::optional<std::uint32_t> seed;
-    /** Tactical familiarity of both sides; the trained one when empty. */
-    std::optional<float> familiarity;
+    /**
+     * Builds the engine (seed, condition, familiarity included) in place of
+     * the fixture's setup, so a replay can build the same match again.
+     */
+    std::function<std::unique_ptr<MatchEngine>()> make_engine;
     /** Called once with the finished engine, in place of the result. */
     std::function<void(const MatchEngine&)> on_finish;
+    /** Observer attached to the engine for the whole match (may be null). */
+    MatchRecorder* recorder = nullptr;
+    /** Draws the sandbox's own windows over the match each frame; it may
+     * pause the match (`paused`) and step the engine while paused. */
+    std::function<void(MatchEngine&, bool& paused)> on_render;
   };
 
   MatchScene(class GUIView* guiView_ptr, uint16_t home_id, uint16_t away_id);
@@ -316,6 +322,8 @@ class MatchScene : public GUIScene
   /** Appends new engine events to the (optionally filtered) feed. */
   void refreshVisibleEvents();
   void renderControls();
+  /** The sandbox's windows over the match (see Sandbox::on_render). */
+  void renderSandboxTools();
   void renderViewControls();
   void renderPitch(ImVec2 size);
   void renderStatistics(ImVec2 size);

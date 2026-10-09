@@ -1,0 +1,259 @@
+// -----------------------------------------------------------------------------
+//  Football Management Project
+//  Copyright (c) 2025 - 2026 Flavio Milinanni. All Rights Reserved.
+//
+//  This file is part of the Football Management Project.
+//  See the LICENSE file in the project root.
+// -----------------------------------------------------------------------------
+
+#include "tools/match_sandbox_setup.h"
+
+#include <exception>
+#include <format>
+
+#include "controller/game_controller.h"
+#include "database/gamedata.h"
+#include "model/game.h"
+#include "model/match.h"
+#include "model/match_engine.h"
+#include "model/player.h"
+#include "model/team.h"
+
+using nlohmann::json;
+
+MatchSetup MatchSetup::capture(const GameController& controller, TeamID home,
+                               TeamID away, std::uint32_t seed,
+                               bool fullFamiliarity)
+{
+  MatchSetup setup;
+  setup.worldSeed = controller.getWorldSeed();
+  setup.matchSeed = seed;
+  const std::array<TeamID, 2> ids{home, away};
+  for (std::size_t index = 0; index < ids.size(); ++index)
+  {
+    const auto team = controller.getTeamById(ids[index]);
+    if (!team) continue;
+    Side& side = setup.sides[index];
+    const Lineup& lineup = team->get().getLineup();
+    side.team = ids[index];
+    side.name = team->get().getName();
+    side.strategy = team->get().getStrategy();
+    side.designations = lineup.getDesignations();
+    // Every player starts with his persistent condition (as carryCondition).
+    const auto squad = [&setup](const Player* player)
+    {
+      if (player)
+        setup.conditions.emplace_back(player->getId(),
+                                      player->getDynamics().condition / 100.0f);
+    };
+    if (const Player* keeper = lineup.getGoalkeeper())
+    {
+      side.goalkeeper = keeper->getId();
+      squad(keeper);
+    }
+    for (const Lineup::PositionedPlayer& slot : lineup.getOutfieldPlayers())
+    {
+      if (!slot.player) continue;
+      side.outfield.emplace_back(slot.player->getId(), slot.position);
+      squad(slot.player);
+    }
+    for (const Player* reserve : lineup.getReserves())
+    {
+      if (!reserve) continue;
+      side.reserves.push_back(reserve->getId());
+      squad(reserve);
+    }
+    setup.familiarity[index] =
+        fullFamiliarity ? 1.0f : controller.getTacticalFamiliarity(ids[index]);
+  }
+  if (const Game* game = controller.getGame())
+    if (const auto team = controller.getTeamById(home))
+      setup.medicalFlags = MatchdaySquad::medicalFlags(game->getMedical(),
+                                                       team->get().getLineup());
+  setup.autoSubstitutions = {controller.isDelegated(Duty::Substitutions), true};
+  return setup;
+}
+
+std::unique_ptr<MatchEngine> MatchSetup::build(const GameController& controller,
+                                               std::string& error) const
+{
+  const auto data = controller.getGameData();
+  if (!data)
+  {
+    error = "no world loaded";
+    return nullptr;
+  }
+  const auto find = [&](PlayerID id) -> const Player*
+  {
+    const auto player = data->getPlayer(id);
+    if (!player)
+      error = std::format("player {} is not in this world (world seed {}?)",
+                          id, worldSeed);
+    return player ? &player->get() : nullptr;
+  };
+  std::array<Lineup, 2> lineups;
+  for (std::size_t index = 0; index < sides.size(); ++index)
+  {
+    const Side& side = sides[index];
+    Lineup& lineup = lineups[index];
+    const Player* keeper = find(side.goalkeeper);
+    if (!keeper) return nullptr;
+    lineup.setGoalkeeper(keeper);
+    for (const auto& [id, position] : side.outfield)
+    {
+      const Player* player = find(id);
+      if (!player) return nullptr;
+      lineup.addOutfieldPlayer(player, position);
+    }
+    std::vector<const Player*> reserves;
+    for (const PlayerID id : side.reserves)
+    {
+      const Player* player = find(id);
+      if (!player) return nullptr;
+      reserves.push_back(player);
+    }
+    lineup.setReserves(reserves);
+    lineup.setDesignations(side.designations);
+  }
+
+  auto engine = std::make_unique<MatchEngine>(
+      lineups[0], lineups[1], sides[0].strategy, sides[1].strategy,
+      controller.getStatsConfig(), matchSeed);
+  engine->setTeamNames(sides[0].name, sides[1].name);
+  for (const auto& [id, condition] : conditions)
+    engine->setPlayerCondition(id, condition);
+  for (const auto& [id, flags] : medicalFlags) engine->setMedicalFlags(id, flags);
+  engine->setTacticalFamiliarity(true, familiarity[0]);
+  engine->setTacticalFamiliarity(false, familiarity[1]);
+  engine->setAutoSubstitutions(autoSubstitutions[0], autoSubstitutions[1]);
+  return engine;
+}
+
+// --- JSON ------------------------------------------------------------------
+
+json SandboxJson::toJson(const Strategy& strategy)
+{
+  const StrategySliders sliders = strategy.getSliders();
+  json slots = json::array();
+  for (const SlotInstruction& slot : strategy.getSlotInstructions())
+    slots.push_back({{"anchor", {slot.anchor.x, slot.anchor.y}},
+                     {"role", static_cast<int>(slot.role)},
+                     {"duty", static_cast<int>(slot.duty)},
+                     {"offset",
+                      {slot.possessionOffset.x, slot.possessionOffset.y}}});
+  json orders = json::array();
+  for (const PlayerInstruction& order : strategy.getOppositionOrders())
+    orders.push_back(
+        {{"player", order.player},
+         {"instruction", static_cast<int>(order.instruction)}});
+  return {{"sliders",
+           {sliders.pressing, sliders.riskTaking, sliders.offensiveBias,
+            sliders.widthUsage, sliders.compactness}},
+          {"keeper_role", static_cast<int>(strategy.getKeeperRole())},
+          {"slots", slots},
+          {"opposition_orders", orders}};
+}
+
+Strategy SandboxJson::strategyFromJson(const json& value)
+{
+  Strategy strategy;
+  const auto& sliders = value.at("sliders");
+  strategy.setAllSliders({sliders.at(0).get<float>(), sliders.at(1).get<float>(),
+                          sliders.at(2).get<float>(), sliders.at(3).get<float>(),
+                          sliders.at(4).get<float>()});
+  strategy.setKeeperRole(
+      static_cast<TacticalRole>(value.at("keeper_role").get<int>()));
+  std::vector<SlotInstruction> slots;
+  for (const auto& item : value.at("slots"))
+  {
+    SlotInstruction slot;
+    slot.anchor = {item.at("anchor").at(0).get<float>(),
+                   item.at("anchor").at(1).get<float>()};
+    slot.role = static_cast<TacticalRole>(item.at("role").get<int>());
+    slot.duty = static_cast<RoleDuty>(item.at("duty").get<int>());
+    slot.possessionOffset = {item.at("offset").at(0).get<float>(),
+                             item.at("offset").at(1).get<float>()};
+    slots.push_back(slot);
+  }
+  strategy.setSlotInstructions(std::move(slots));
+  std::vector<PlayerInstruction> orders;
+  for (const auto& item : value.at("opposition_orders"))
+    orders.push_back(
+        {item.at("player").get<PlayerID>(),
+         static_cast<OppositionInstruction>(item.at("instruction").get<int>())});
+  strategy.setOppositionOrders(std::move(orders));
+  return strategy;
+}
+
+json SandboxJson::toJson(const MatchSetup& setup)
+{
+  json sides = json::array();
+  for (const MatchSetup::Side& side : setup.sides)
+  {
+    json outfield = json::array();
+    for (const auto& [id, position] : side.outfield)
+      outfield.push_back({id, position.x, position.y});
+    sides.push_back({{"team", side.team},
+                     {"name", side.name},
+                     {"goalkeeper", side.goalkeeper},
+                     {"outfield", outfield},
+                     {"reserves", side.reserves},
+                     {"designations", side.designations},
+                     {"strategy", toJson(side.strategy)}});
+  }
+  json conditions = json::array();
+  for (const auto& [id, condition] : setup.conditions)
+    conditions.push_back({id, condition});
+  json medical = json::array();
+  for (const auto& [id, flags] : setup.medicalFlags)
+    medical.push_back({id, flags});
+  return {{"world_seed", setup.worldSeed},
+          {"match_seed", setup.matchSeed},
+          {"sides", sides},
+          {"familiarity", setup.familiarity},
+          {"conditions", conditions},
+          {"medical_flags", medical},
+          {"auto_substitutions", setup.autoSubstitutions}};
+}
+
+bool SandboxJson::fromJson(const json& value, MatchSetup& setup,
+                           std::string& error)
+{
+  try
+  {
+    setup = MatchSetup{};
+    setup.worldSeed = value.at("world_seed").get<std::uint64_t>();
+    setup.matchSeed = value.at("match_seed").get<std::uint32_t>();
+    const auto& sides = value.at("sides");
+    for (std::size_t index = 0; index < setup.sides.size(); ++index)
+    {
+      const auto& item = sides.at(index);
+      MatchSetup::Side& side = setup.sides[index];
+      side.team = item.at("team").get<TeamID>();
+      side.name = item.at("name").get<std::string>();
+      side.goalkeeper = item.at("goalkeeper").get<PlayerID>();
+      for (const auto& slot : item.at("outfield"))
+        side.outfield.emplace_back(
+            slot.at(0).get<PlayerID>(),
+            Vector2F{slot.at(1).get<float>(), slot.at(2).get<float>()});
+      side.reserves = item.at("reserves").get<std::vector<PlayerID>>();
+      side.designations = item.at("designations").get<SetPieceDesignations>();
+      side.strategy = strategyFromJson(item.at("strategy"));
+    }
+    setup.familiarity = value.at("familiarity").get<std::array<float, 2>>();
+    for (const auto& item : value.at("conditions"))
+      setup.conditions.emplace_back(item.at(0).get<PlayerID>(),
+                                    item.at(1).get<float>());
+    for (const auto& item : value.at("medical_flags"))
+      setup.medicalFlags.emplace_back(item.at(0).get<PlayerID>(),
+                                      item.at(1).get<std::uint8_t>());
+    setup.autoSubstitutions =
+        value.at("auto_substitutions").get<std::array<bool, 2>>();
+    return true;
+  }
+  catch (const std::exception& problem)
+  {
+    error = std::string("setup: ") + problem.what();
+    return false;
+  }
+}
