@@ -37,6 +37,9 @@
 #include "model/tactics.h"
 #include "model/team.h"
 #include "tools/lab_fixtures.h"
+#include "tools/match_sandbox_drill_scene.h"
+#include "tools/match_sandbox_measure_scene.h"
+#include "tools/match_sandbox_shot_map.h"
 
 namespace
 {
@@ -175,8 +178,12 @@ void selectPlayer(Lineup& lineup, const Player& current, const Player& chosen)
 }
 }  // namespace
 
-MatchSandboxScene::MatchSandboxScene(GUIView* guiView_ptr, bool kick_off_now)
-    : GUIScene(guiView_ptr), kick_off_pending(kick_off_now)
+MatchSandboxScene::MatchSandboxScene(GUIView* guiView_ptr, bool kick_off_now,
+                                     std::string open_drill, int open_view)
+    : GUIScene(guiView_ptr),
+      kick_off_pending(kick_off_now),
+      drill_pending(std::move(open_drill)),
+      drill_view(open_view)
 {
 }
 
@@ -212,6 +219,31 @@ void MatchSandboxScene::onEnter()
 
 void MatchSandboxScene::update(float /*deltaTime*/)
 {
+  if (!drill_pending.empty())
+  {
+    const auto lower = [](std::string text)
+    {
+      std::ranges::transform(text, text.begin(), [](unsigned char c)
+                             { return static_cast<char>(std::tolower(c)); });
+      return text;
+    };
+    for (std::size_t index = 0; index < drills.size(); ++index)
+      if (lower(drills[index]->name()) == lower(drill_pending))
+      {
+        mode = 1;
+        drill_index = static_cast<int>(index);
+        if (drill_view == 2)
+          guiView->overlayScene(
+              std::make_unique<ShotMapScene>(guiView, *drills[index], true));
+        else if (drill_view == 1)
+          guiView->overlayScene(
+              std::make_unique<DrillMeasureScene>(guiView, *drills[index], true));
+        else
+          guiView->overlayScene(
+              std::make_unique<DrillScene>(guiView, *drills[index]));
+      }
+    drill_pending.clear();
+  }
   if (!kick_off_pending) return;
   kick_off_pending = false;
   if (sides[HOME].team != 0 && sides[AWAY].team != 0) kickOff();
@@ -260,7 +292,17 @@ void MatchSandboxScene::render()
 
   UI::pageHeader("Match sandbox",
                  "Pick two clubs and both sides' tactics, then play the "
-                 "match as the home side. Nothing here is saved.");
+                 "match as the home side, or run a drill that isolates one "
+                 "behaviour. Nothing here is saved.");
+  constexpr std::array<const char*, 2> MODES{"Match", "Drills"};
+  UI::segmented("##mode", mode, MODES, 220.0f * scale);
+  ImGui::Spacing();
+  if (mode == 1)
+  {
+    renderDrills();
+    ImGui::End();
+    return;
+  }
 
   const float gap = Theme::Space::L * scale;
   const ImVec2 available = ImGui::GetContentRegionAvail();
@@ -277,6 +319,57 @@ void MatchSandboxScene::render()
   if (show_last_log && loaded && replay_info)
     comparison.render(*loaded, *replay_info, recorder.get(), review, inspector);
   renderRecordings();
+}
+
+void MatchSandboxScene::renderDrills()
+{
+  const float scale = Theme::scale();
+  const float listWidth = 260.0f * scale;
+  UI::beginCard("##drill_list", "Drills", ImVec2(listWidth, 0.0f), true);
+  for (std::size_t index = 0; index < drills.size(); ++index)
+    if (ImGui::Selectable(drills[index]->name(),
+                          static_cast<std::size_t>(drill_index) == index))
+      drill_index = static_cast<int>(index);
+  ImGui::Spacing();
+  ImGui::PushTextWrapPos(0.0f);
+  ImGui::TextDisabled("Movement drills run by the AI, by a scripted bot on "
+                      "the stick, or by you. Shooting drills are on the way.");
+  ImGui::PopTextWrapPos();
+  UI::endCard();
+  ImGui::SameLine();
+  if (drills.empty()) return;
+  Drill& drill = *drills[static_cast<std::size_t>(drill_index)];
+  UI::beginCard("##drill_page", drill.name(), ImVec2(0.0f, 0.0f), true);
+  ImGui::PushTextWrapPos(0.0f);
+  ImGui::TextUnformatted(drill.summary());
+  ImGui::PopTextWrapPos();
+  ImGui::SeparatorText("Settings");
+  ImGui::PushItemWidth(320.0f * scale);
+  drill.renderSettings();
+  ImGui::InputScalar("Seed", ImGuiDataType_U32, &drill.seed);
+  ImGui::PopItemWidth();
+  ImGui::Spacing();
+  if (UI::primaryButton("Watch"))
+    guiView->overlayScene(std::make_unique<DrillScene>(guiView, drill));
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Run the drill on the pitch, step by step if you like, "
+                      "with the debugger windows.");
+  ImGui::SameLine();
+  if (ImGui::Button("Measure"))
+    guiView->overlayScene(std::make_unique<DrillMeasureScene>(guiView, drill));
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Run the drill headless over a range of a setting: "
+                      "curves, tables and CSV.");
+  if (drill.offersShotMap())
+  {
+    ImGui::SameLine();
+    if (ImGui::Button("Shot map"))
+      guiView->overlayScene(std::make_unique<ShotMapScene>(guiView, drill));
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("A grid of spots, many shots each: conversion against "
+                        "the engine's xG as a heatmap, and the calibration.");
+  }
+  UI::endCard();
 }
 
 void MatchSandboxScene::renderDebugTools(MatchEngine* live, bool* livePaused)

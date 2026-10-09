@@ -268,10 +268,17 @@ void EngineDebugger::renderControls(SandboxRecorder& recorder,
     ImGui::SameLine();
     ImGui::BeginDisabled(!*paused);
     // Stepping runs the same fixed steps as play, with the recorder attached.
-    if (ImGui::Button("Step 0.1 s"))
-      engine->advance(MatchTuning::Timing::FIXED_STEP_SECONDS);
+    const auto stepBy = [&](int steps)
+    {
+      if (stepper)
+        stepper(steps);
+      else
+        engine->advance(static_cast<float>(steps) *
+                        MatchTuning::Timing::FIXED_STEP_SECONDS);
+    };
+    if (ImGui::Button("Step 0.1 s")) stepBy(1);
     ImGui::SameLine();
-    if (ImGui::Button("Step 1 s")) engine->advance(1.0f);
+    if (ImGui::Button("Step 1 s")) stepBy(10);
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::TextDisabled("%s  ·  tick %llu", clock(engine->getMatchTimeMinutes()).c_str(),

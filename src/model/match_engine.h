@@ -357,7 +357,11 @@ enum class MatchCommandType : std::uint8_t
   MOVE_TO_SLOT,
   SUBSTITUTION,
   /** A team talk's modifier for one half (see setTeamTalkModifier). */
-  TEAM_TALK
+  TEAM_TALK,
+  /** Drills: hold (or release) a player's movement target. */
+  DRILL_TARGET,
+  /** Drills: the player shoots as soon as he has the ball and can act. */
+  FORCE_SHOT
 };
 
 /**
@@ -384,6 +388,10 @@ struct MatchCommandRecord
   /** Half (1 or 2) and modifier of a TEAM_TALK. */
   int talkHalf = 1;
   float talkModifier = 0.0f;
+  /** DRILL_TARGET: the target (normalised pitch; none releases it) and
+   * whether he runs at it urgently. */
+  std::optional<Vector2F> target;
+  bool urgent = false;
 };
 
 /** One-shot action requested by an external controller (play mode). */
@@ -947,6 +955,51 @@ class MatchEngine
    * match. Copies of this engine start without one.
    */
   void setRecorder(MatchRecorder* recorder) { recorderLink.target = recorder; }
+
+  // --- Drills (the match sandbox's minigames) ------------------------------
+  // All opt-in: an engine none of these are called on plays by the Laws.
+
+  /** Rule switches for drills; the defaults are the Laws of the Game. */
+  struct DrillRules
+  {
+    /** Off: nobody is ever offside. */
+    bool offside = true;
+    /** Off: a side below seven players does not abandon the match. */
+    bool minimumPlayers = true;
+  };
+  void setDrillRules(const DrillRules& rules) { drillRules = rules; }
+  const DrillRules& getDrillRules() const { return drillRules; }
+
+  /**
+   * Before the match starts: the player takes no part, as if he had not
+   * been selected (no keeper is promoted in his place, no shape changes).
+   * False once play has begun or for an unknown player.
+   */
+  bool removeBeforeKickOff(PlayerID playerId);
+
+  /**
+   * Starts a drill: places the players and the ball as `scenario` says and
+   * puts the ball in play, without the carrier deciding anything yet
+   * (applyScenario() makes his decision at once). `carrierId` 0 leaves the
+   * ball loose. Players keep their condition. False when a placed player or
+   * the carrier is unknown.
+   */
+  bool startDrill(const MatchScenario& scenario);
+
+  /**
+   * Drills: holds a player's movement target (normalised pitch), which then
+   * replaces the planner's; `urgent` makes him run at it flat out. No
+   * target releases him to the planner. Logged and replayed like any
+   * manager change.
+   */
+  void setDrillTarget(PlayerID playerId, std::optional<Vector2F> target,
+                      bool urgent);
+  /** The target a drill holds for a player, if any. */
+  std::optional<Vector2F> getDrillTarget(PlayerID playerId) const;
+
+  /** Drills: the player shoots, through the AI's own shot, as soon as he
+   * has the ball and can act. Logged and replayed. */
+  void forceShot(PlayerID playerId);
   MatchRecorder* getRecorder() const { return recorderLink.target; }
 
  private:
@@ -965,6 +1018,30 @@ class MatchEngine
     MatchRecorder* target = nullptr;
   };
   RecorderLink recorderLink;
+
+  // Drills (see the public drill section).
+  DrillRules drillRules;
+  struct DrillTarget
+  {
+    PlayerID player = 0;
+    Vector2F target{0.0f, 0.0f};
+    bool urgent = false;
+  };
+  std::vector<DrillTarget> drillTargets;
+  /** A forced shot waiting for its shooter to be able to act (0: none). */
+  PlayerID forcedShooter = 0;
+  /** Places the scenario's players and ball; the carrier (null when the
+   * ball is loose), or nothing when a player is unknown. */
+  std::optional<MatchPlayer*> placeScenario(const MatchScenario& scenario,
+                                            MatchState scenarioState,
+                                            float scenarioMatchTime,
+                                            int scenarioHomeScore,
+                                            int scenarioAwayScore,
+                                            bool resetCondition);
+  /** Holds the drill targets over the planner's (end of a refresh). */
+  void applyDrillTargets();
+  /** The slot of a player by id (null when he is not in the match). */
+  MatchPlayer* drillPlayer(PlayerID playerId);
   /** Completes a kick's report from the launched ball and sends it. */
   void reportKick(MatchActionRecord& action, const MatchPlayer& kicker,
                   Vector2F target) const;

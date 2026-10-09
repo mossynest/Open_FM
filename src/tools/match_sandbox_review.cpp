@@ -472,6 +472,9 @@ void MatchReview::renderPitch(const SandboxRecorder& recorder,
   view.y = origin.y + std::max(0.0f, (size.y - view.height) * 0.5f);
 
   fillMatchRenderSnapshot(*engine, snapshot);
+  if (hideOffPitch)
+    std::erase_if(snapshot.players, [](const MatchRenderPlayer& player)
+                  { return !player.onPitch; });
   // A rebuilt moment is shown exactly, not between two steps.
   if (shown) snapshot.interpolationAlpha = 1.0f;
   snapshot.homeTeam = home;

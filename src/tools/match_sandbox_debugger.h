@@ -11,6 +11,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -71,6 +72,10 @@ class EngineDebugger
 
   /** Starts a new match: filters stay, the cached view is rebuilt. */
   void reset();
+
+  /** Replaces the Step buttons' engine advance (a drill steps its own
+   * script with the engine); called with a number of fixed steps. */
+  std::function<void(int)> stepper;
 
  private:
   void renderControls(SandboxRecorder& recorder, MatchEngine* engine,

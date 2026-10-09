@@ -639,6 +639,17 @@ add_executable(match_sandbox
     tools/match_sandbox_compare.cpp
     tools/match_sandbox_scenario.h
     tools/match_sandbox_scenario.cpp
+    tools/match_sandbox_drill.h
+    tools/match_sandbox_drill.cpp
+    tools/match_sandbox_drills.cpp
+    tools/match_sandbox_drill_scene.h
+    tools/match_sandbox_drill_scene.cpp
+    tools/match_sandbox_measure.h
+    tools/match_sandbox_measure.cpp
+    tools/match_sandbox_measure_scene.h
+    tools/match_sandbox_measure_scene.cpp
+    tools/match_sandbox_shot_map.h
+    tools/match_sandbox_shot_map.cpp
 )
 target_link_libraries(match_sandbox PRIVATE fm_ui fm_lab_lib)
 target_compile_options(match_sandbox PRIVATE ${FM_WARNING_FLAGS})

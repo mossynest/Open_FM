@@ -46,6 +46,9 @@ class MatchReview
               bool* livePaused, TeamID home, TeamID away,
               DebugInspector* inspector = nullptr);
 
+  /** Hide players off the pitch (a drill's players not in it). */
+  bool hideOffPitch = false;
+
   /** The rewound match shown, or null while following the live one. */
   [[nodiscard]] const MatchEngine* shownEngine() const { return shown.get(); }
 

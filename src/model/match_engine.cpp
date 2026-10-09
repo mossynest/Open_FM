@@ -918,6 +918,28 @@ bool MatchEngine::executeCommand(const MatchCommandRecord& command)
   const std::size_t team = command.homeTeam ? 0 : 1;
   switch (command.type)
   {
+    case MatchCommandType::DRILL_TARGET:
+    {
+      MatchPlayer* player = drillPlayer(command.player);
+      if (!player) return false;
+      std::erase_if(drillTargets, [&command](const DrillTarget& held)
+                    { return held.player == command.player; });
+      if (command.target)
+      {
+        drillTargets.push_back({command.player, *command.target,
+                                command.urgent});
+        // Taken at once, not at the next planner refresh.
+        player->tacticalTarget = *command.target;
+        player->urgentMovement = command.urgent;
+      }
+      ++inputRevision;
+      return true;
+    }
+    case MatchCommandType::FORCE_SHOT:
+      if (!drillPlayer(command.player)) return false;
+      forcedShooter = command.player;
+      ++inputRevision;
+      return true;
     case MatchCommandType::TEAM_TALK:
       if (command.talkHalf < 1 || command.talkHalf > 2 ||
           !std::isfinite(command.talkModifier))
@@ -3445,6 +3467,8 @@ void MatchEngine::refreshTacticalTargets(float dt)
     player.tacticalTarget = target;
     player.urgentMovement = urgentTarget;
   }
+  // Drills hold some players' targets over the plan.
+  if (!drillTargets.empty()) applyDrillTargets();
 }
 
 bool MatchEngine::cutsInside(const MatchPlayer& player) const
@@ -5180,9 +5204,20 @@ void MatchEngine::resolvePossessionAndActions(float dt)
       ball.dribbleExposure <= MatchTuning::Dribble::KICK_REACH_METRES)
   {
     if (controlled)
+    {
       performControlledAction(*carrier);
+    }
+    else if (forcedShooter != 0 && carrier->player &&
+             carrier->player->getId() == forcedShooter)
+    {
+      // A drill's forced shot: the AI's own shot, from where he stands.
+      forcedShooter = 0;
+      takeShot(*carrier);
+    }
     else
+    {
       decideAction(*carrier);
+    }
   }
 }
 
@@ -6571,7 +6606,7 @@ void MatchEngine::passBall(MatchPlayer& passer, const PassOption& option,
       state != MatchState::KICK_OFF && state != MatchState::THROW_IN &&
       state != MatchState::GOAL_KICK && state != MatchState::CORNER_KICK &&
       isOffside(receiver, passer.isHomeTeam, defenderLine);
-  if (!ball.passWasOffside && state == MatchState::PLAYING &&
+  if (drillRules.offside && !ball.passWasOffside && state == MatchState::PLAYING &&
       option.progression > 0.0f &&
       (receiver.isMakingRun || isAttackingRole(receiver.player->getRole())))
   {
@@ -9542,6 +9577,7 @@ float MatchEngine::offsideLine(bool attackingHome) const
 bool MatchEngine::isOffside(const MatchPlayer& receiver, bool attackingHome,
                             float defenderLine, float lineTolerance) const
 {
+  if (!drillRules.offside) return false;
   const float margin = MatchTuning::Passing::OFFSIDE_MARGIN + lineTolerance;
 
   if (attackingHome)
@@ -10033,7 +10069,8 @@ void MatchEngine::removeFromPitch(MatchPlayer& player)
   const auto remaining = std::ranges::count_if(
       players, [homeTeam](const MatchPlayer& other)
       { return active(other) && other.isHomeTeam == homeTeam; });
-  if (remaining < MatchTuning::Rules::MINIMUM_PLAYERS && !abandoned)
+  if (drillRules.minimumPlayers &&
+      remaining < MatchTuning::Rules::MINIMUM_PLAYERS && !abandoned)
   {
     abandoned = true;
     logEvent(MatchEventType::INFO).detail = MatchEventDetail::ABANDONED;
@@ -10132,13 +10169,11 @@ void MatchEngine::ensureGoalkeeper(bool homeTeam)
       MatchTuning::Pitch::CENTRE};
 }
 
-bool MatchEngine::applyScenario(const MatchScenario& scenario,
-                                MatchState scenarioState,
-                                float scenarioMatchTime, int scenarioHomeScore,
-                                int scenarioAwayScore)
+std::optional<MatchPlayer*> MatchEngine::placeScenario(
+    const MatchScenario& scenario, MatchState scenarioState,
+    float scenarioMatchTime, int scenarioHomeScore, int scenarioAwayScore,
+    bool resetCondition)
 {
-  if (scenario.players.empty() || state == MatchState::FULL_TIME) return false;
-
   ball = MatchBall{};
   state = scenarioState;
   transitionSecondsRemaining = 0.0f;
@@ -10180,7 +10215,7 @@ bool MatchEngine::applyScenario(const MatchScenario& scenario,
     matchPlayer.trapTimer = 0.0f;
     matchPlayer.isPressing = false;
     matchPlayer.isMakingRun = false;
-    matchPlayer.stamina = 1.0f;
+    if (resetCondition) matchPlayer.stamina = 1.0f;
     matchPlayer.actionCooldown = 0.0f;
     matchPlayer.tackleCooldown = 0.0f;
     matchPlayer.isMakingRun = placement.makingRun;
@@ -10189,7 +10224,9 @@ bool MatchEngine::applyScenario(const MatchScenario& scenario,
     matchPlayer.isDiving = false;
     carrierFound = carrierFound || placement.playerId == scenario.carrierId;
   }
-  if (!carrierFound) return false;
+  // A drill may start with the ball loose (no carrier).
+  if (scenario.carrierId == 0) return nullptr;
+  if (!carrierFound) return std::nullopt;
 
   const auto carrier = std::ranges::find_if(
       players,
@@ -10198,7 +10235,7 @@ bool MatchEngine::applyScenario(const MatchScenario& scenario,
         return matchPlayer.player &&
                matchPlayer.player->getId() == scenario.carrierId;
       });
-  if (carrier == players.end()) return false;
+  if (carrier == players.end()) return std::nullopt;
 
   ball.possessedBy = carrier->player;
   ball.lastPossessor = carrier->player;
@@ -10212,14 +10249,111 @@ bool MatchEngine::applyScenario(const MatchScenario& scenario,
     awayPhase = TeamPhase::POSSESSION;
     homePhase = TeamPhase::DEFENSIVE_BLOCK;
   }
+  return &*carrier;
+}
+
+bool MatchEngine::applyScenario(const MatchScenario& scenario,
+                                MatchState scenarioState,
+                                float scenarioMatchTime, int scenarioHomeScore,
+                                int scenarioAwayScore)
+{
+  if (scenario.players.empty() || state == MatchState::FULL_TIME) return false;
+  const std::optional<MatchPlayer*> placed =
+      placeScenario(scenario, scenarioState, scenarioMatchTime,
+                    scenarioHomeScore, scenarioAwayScore, true);
+  if (!placed || !*placed) return false;
+  MatchPlayer& carrier = **placed;
 
   // Make the interpolation baseline equal to the scenario so the snapshot is
   // stable, then evaluate the decision through the normal live path. A
   // carrier under external control (play mode) makes no AI decision: he
   // acts on his controller's input like in a live match.
   captureInterpolationFrame();
-  if (!isControlled(*carrier)) decideAction(*carrier);
+  if (!isControlled(carrier)) decideAction(carrier);
   return true;
+}
+
+bool MatchEngine::startDrill(const MatchScenario& scenario)
+{
+  if (scenario.players.empty() || state == MatchState::FULL_TIME) return false;
+  // The ball is live at once; nobody decides until the engine steps.
+  if (!placeScenario(scenario, MatchState::PLAYING, 0.0f, homeScore, awayScore,
+                     false))
+    return false;
+  captureInterpolationFrame();
+  return true;
+}
+
+bool MatchEngine::removeBeforeKickOff(PlayerID playerId)
+{
+  if (stepCounter != 0) return false;
+  MatchPlayer* player = drillPlayer(playerId);
+  if (!player || !player->onPitch) return false;
+  // Off the pitch, parked by the dugouts like a player sent off, but with
+  // no keeper promoted and no shape changed: he was never in the drill.
+  int parked = 0;
+  for (const auto& other : players)
+    if (other.player && !other.onPitch) ++parked;
+  player->onPitch = false;
+  player->isGoalkeeper = false;
+  player->intent = PlayerIntent::HOLD_SHAPE;
+  player->velocity = {0.0f, 0.0f};
+  player->position = {MatchTuning::Pitch::CENTRE +
+                          (player->isHomeTeam ? -1.0f : 1.0f) *
+                              (MatchTuning::Rules::PARKED_PLAYER_OFFSET +
+                               static_cast<float>(parked) *
+                                   MatchTuning::Rules::PARKED_PLAYER_SPACING),
+                      MatchTuning::Pitch::PLAYER_MIN_Y};
+  player->movementTarget = player->position;
+  player->tacticalTarget = player->position;
+  if (ball.possessedBy == player->player) ball.possessedBy = nullptr;
+  return true;
+}
+
+void MatchEngine::setDrillTarget(PlayerID playerId,
+                                 std::optional<Vector2F> target, bool urgent)
+{
+  MatchCommandRecord command;
+  command.type = MatchCommandType::DRILL_TARGET;
+  command.player = playerId;
+  command.target = target;
+  command.urgent = urgent;
+  recordCommand(command);
+}
+
+std::optional<Vector2F> MatchEngine::getDrillTarget(PlayerID playerId) const
+{
+  for (const DrillTarget& held : drillTargets)
+    if (held.player == playerId) return held.target;
+  return std::nullopt;
+}
+
+void MatchEngine::forceShot(PlayerID playerId)
+{
+  MatchCommandRecord command;
+  command.type = MatchCommandType::FORCE_SHOT;
+  command.player = playerId;
+  recordCommand(command);
+}
+
+MatchPlayer* MatchEngine::drillPlayer(PlayerID playerId)
+{
+  for (MatchPlayer& player : players)
+    if (player.player && player.player->getId() == playerId) return &player;
+  return nullptr;
+}
+
+void MatchEngine::applyDrillTargets()
+{
+  for (const DrillTarget& held : drillTargets)
+    if (MatchPlayer* player = drillPlayer(held.player);
+        player && active(*player))
+    {
+      player->tacticalTarget = held.target;
+      player->urgentMovement = held.urgent;
+      player->isPressing = false;
+      player->isMakingRun = false;
+    }
 }
 
 MatchEvent& MatchEngine::logEvent(MatchEventType type)

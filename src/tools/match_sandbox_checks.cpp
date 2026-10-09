@@ -14,18 +14,27 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <algorithm>
 #include <format>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <optional>
+#include <string>
+#include <string_view>
+#include <tuple>
 #include <variant>
 #include <vector>
 
 #include "controller/game_controller.h"
 #include "model/match_engine.h"
+#include "model/match_scenario.h"
 #include "model/team.h"
 #include "tools/match_sandbox_detail.h"
+#include "tools/match_sandbox_drill.h"
+#include "tools/match_sandbox_measure.h"
+#include "tools/match_sandbox_shot_map.h"
 #include "tools/match_sandbox_recorder.h"
 #include "tools/match_sandbox_recording.h"
 #include "tools/match_sandbox_setup.h"
@@ -123,6 +132,267 @@ std::unique_ptr<MatchEngine> makeEngine(const Team& home, const Team& away,
 double secondsSince(Clock::time_point start)
 {
   return std::chrono::duration<double>(Clock::now() - start).count();
+}
+
+/** A drill engine: everyone removed but `keep`, ball loose or carried. */
+std::unique_ptr<MatchEngine> drillEngine(const Team& home, const Team& away,
+                                         const StatsConfig& config,
+                                         std::uint32_t seed,
+                                         const std::vector<PlayerID>& keep)
+{
+  auto engine = makeEngine(home, away, config, seed);
+  engine->setDrillRules({false, false});
+  for (const MatchPlayer& slot : engine->getPlayers())
+    if (slot.player &&
+        std::ranges::find(keep, slot.player->getId()) == keep.end())
+      (void)engine->removeBeforeKickOff(slot.player->getId());
+  return engine;
+}
+
+/** Results of the drill checks (engine drill support). */
+bool runDrillChecks(const Team& home, const Team& away,
+                    const StatsConfig& config)
+{
+  // Sprint: one AI runner, held to a target ~31 m away, flat out.
+  const Player* runner = home.getLineup().getOutfieldPlayers().front().player;
+  const auto sprint = [&](SandboxRecorder* recorder)
+  {
+    auto engine = drillEngine(home, away, config, 7, {runner->getId()});
+    engine->setRecorder(recorder);
+    MatchScenario scenario;
+    scenario.players.push_back({runner->getId(), {0.30f, 0.50f}, false});
+    scenario.ballPosition = {0.95f, 0.95f};
+    const bool started = engine->startDrill(scenario);
+    const Vector2F target{0.60f, 0.50f};
+    engine->setDrillTarget(runner->getId(), target, true);
+    std::uint64_t arrived = 0;
+    for (int tick = 0; started && tick < 300 && arrived == 0; ++tick)
+    {
+      engine->advance(MatchTuning::Timing::FIXED_STEP_SECONDS);
+      for (const MatchPlayer& slot : engine->getPlayers())
+        if (slot.player == runner &&
+            std::hypot((slot.position.x - target.x) * 105.0f,
+                       (slot.position.y - target.y) * 68.0f) < 1.0f)
+          arrived = engine->getSimulatedSteps();
+    }
+    return std::pair{arrived, SandboxRecorder::stateChecksum(*engine)};
+  };
+  SandboxRecorder recorded;
+  const auto first = sprint(&recorded);
+  const auto second = sprint(nullptr);
+  bool rewound = false;
+  if (first.first > 2)
+  {
+    const auto rebuilt = MatchRewind::rebuild(recorded, first.first / 2);
+    rewound = rebuilt.engine && !rebuilt.divergedAt;
+  }
+  const bool sprintOk = first.first > 0 && first == second && rewound;
+  std::cout << std::format(
+      "\nDrill sprint: 31.5 m in {:.1f} s ({}), same twice: {}, rewinds "
+      "exactly: {}\n",
+      static_cast<double>(first.first) * MatchTuning::Timing::FIXED_STEP_SECONDS,
+      runner->getName(), first == second ? "yes" : "NO",
+      rewound ? "yes" : "NO");
+
+  // Forced shot: a striker on the edge of the box against the keeper.
+  const Player* shooter = home.getLineup().getOutfieldPlayers().back().player;
+  const Player* keeper = away.getLineup().getGoalkeeper();
+  const auto shot = [&](std::uint32_t seed)
+  {
+    auto engine = drillEngine(home, away, config, seed,
+                              {shooter->getId(), keeper->getId()});
+    MatchScenario scenario;
+    scenario.players.push_back({shooter->getId(), {0.84f, 0.55f}, false});
+    scenario.players.push_back({keeper->getId(), {0.985f, 0.50f}, false});
+    scenario.carrierId = shooter->getId();
+    scenario.ballPosition = {0.84f, 0.55f};
+    if (!engine->startDrill(scenario)) return std::string("not started");
+    engine->forceShot(shooter->getId());
+    // The run ends at the first stoppage or once the shot is dealt with.
+    for (int tick = 0; tick < 80; ++tick)
+    {
+      engine->advance(MatchTuning::Timing::FIXED_STEP_SECONDS);
+      for (const MatchEvent& event : engine->getEvents())
+      {
+        if (event.type == MatchEventType::GOAL ||
+            event.type == MatchEventType::SAVE ||
+            event.type == MatchEventType::WOODWORK ||
+            event.type == MatchEventType::SHOT_BLOCKED)
+          return std::string(matchEventTypeName(event.type));
+        // The engine logs no "off target" event: a miss goes out of play.
+        if (event.type == MatchEventType::GOAL_KICK ||
+            event.type == MatchEventType::CORNER ||
+            event.type == MatchEventType::THROW_IN)
+          return std::string("off target");
+      }
+      // A weak miss the keeper simply picks up is logged as nothing either.
+      if (engine->getBall().possessedBy == keeper && !engine->getBall().isShot)
+        return std::string("off target (gathered)");
+    }
+    return std::string("no outcome");
+  };
+  std::map<std::string, int> outcomes;
+  for (std::uint32_t seed = 1; seed <= 100; ++seed) ++outcomes[shot(seed)];
+  const bool repeatable = shot(42) == shot(42);
+  std::string summary;
+  for (const auto& [outcome, count] : outcomes)
+    summary += std::format("{} {}  ", outcome, count);
+  const bool shotOk = repeatable && !outcomes.contains("not started") &&
+                      !outcomes.contains("no outcome");
+  std::cout << std::format(
+      "Drill forced shot (100 seeds, {} v the keeper): {}· same twice: {}\n",
+      shooter->getName(), summary, repeatable ? "yes" : "NO");
+
+  // The drill framework: every drill, run twice to its end through
+  // DrillRun, reports the same and its run rewinds exactly, by the AI and
+  // by the bot on the stick (the two movement paths).
+  bool framework = true;
+  for (const auto& drill : makeDrills())
+  for (const float path : {0.0f, 1.0f})
+  {
+    bool hasPath = false;
+    for (const DrillParameter& parameter : drill->parameters())
+      if (std::string_view(parameter.name) == "Who runs")
+      {
+        *parameter.value = path;
+        hasPath = true;
+      }
+    if (!hasPath && path > 0.0f) continue;
+    const auto runToEnd = [&](bool rewind)
+    {
+      DrillRun run(*drill, config);
+      while (run.step())
+      {
+      }
+      bool exact = true;
+      if (rewind)
+      {
+        const std::uint64_t middle = run.engine().getSimulatedSteps() / 2;
+        const auto rebuilt = MatchRewind::rebuild(run.recorder(), middle);
+        exact = rebuilt.engine && !rebuilt.divergedAt;
+      }
+      // Running tallies over several runs differ by design: left out.
+      std::vector<std::string> report = drill->report();
+      std::erase_if(report, [](const std::string& line)
+                    { return line.starts_with("These settings so far"); });
+      return std::pair{report, exact};
+    };
+    const auto first = runToEnd(true);
+    const auto second = runToEnd(false);
+    const bool same = first.first == second.first && first.second;
+    framework = framework && same;
+    // The headline result: the total or finish line (the run completed),
+    // else the last line.
+    std::string result = first.first.empty() ? "" : first.first.back();
+    bool completed = false;
+    for (const std::string& line : first.first)
+      if (line.starts_with("TOTAL") || line.starts_with("FINISH") ||
+          line.starts_with("Decrement") || line.starts_with("OUTCOME"))
+      {
+        result = line;
+        completed = true;
+      }
+    framework = framework && completed;
+    std::cout << std::format(
+        "Drill {}{}: {}  ·  same twice and rewinds: {}{}\n", drill->name(),
+        !hasPath ? "" : path > 0.0f ? " (bot)" : " (AI)", result,
+        same ? "yes" : "NO", completed ? "" : "  ·  DID NOT FINISH");
+  }
+
+  // Measure mode: a sweep gives the same results as running the drill
+  // directly with those settings, and leaves the drill's settings as found.
+  bool measureOk = true;
+  {
+    auto drills = makeDrills();
+    Drill& sprint = *drills.front();
+    std::vector<float> before;
+    for (const DrillParameter& parameter : sprint.parameters())
+      before.push_back(*parameter.value);
+    MeasureSpec spec;
+    spec.sweep = {"Pace", {50.0f, 70.0f}};
+    spec.by = MeasureAxis{"Who runs", {0.0f, 1.0f}};
+    spec.repeats = 2;
+    DrillMeasure measure(sprint, config, spec);
+    while (measure.work(1.0))
+    {
+    }
+    std::vector<float> after;
+    for (const DrillParameter& parameter : sprint.parameters())
+      after.push_back(*parameter.value);
+    // The same point run directly: Pace 70 by the bot, seed 2.
+    double direct = -1.0;
+    for (const DrillParameter& parameter : sprint.parameters())
+    {
+      if (std::string_view(parameter.name) == "Pace") *parameter.value = 70.0f;
+      if (std::string_view(parameter.name) == "Who runs") *parameter.value = 1.0f;
+    }
+    sprint.seed = 2;
+    {
+      DrillRun run(sprint, config, false);
+      while (run.step())
+      {
+      }
+      for (const DrillMetric& metric : sprint.metrics())
+        if (metric.name == "Finish (s)") direct = metric.value;
+    }
+    double measured = -2.0;
+    for (const MeasureRun& run : measure.runs())
+      if (run.x == 70.0f && run.by == 1.0f && run.seed == 2)
+        for (const DrillMetric& metric : run.metrics)
+          if (metric.name == "Finish (s)") measured = metric.value;
+    measureOk = measure.runs().size() == 8 && before == after &&
+                direct == measured;
+    std::cout << std::format(
+        "Drill measure (sprint, Pace × who runs × 2 seeds): {} runs, "
+        "matches a direct run: {}, settings restored: {}\n",
+        measure.runs().size(), direct == measured ? "yes" : "NO",
+        before == after ? "yes" : "NO");
+  }
+
+  // Shot map: a small grid twice gives the same goals and xG per spot.
+  bool shotMapOk = false;
+  {
+    auto drills = makeDrills();
+    Drill* shotDrill = nullptr;
+    for (const auto& drill : drills)
+      if (drill->offersShotMap()) shotDrill = drill.get();
+    if (shotDrill)
+    {
+      ShotMapSpec spec;
+      spec.lineFrom = 6.0f;
+      spec.lineTo = 18.0f;
+      spec.lineCount = 3;
+      spec.sideFrom = -8.0f;
+      spec.sideTo = 8.0f;
+      spec.sideCount = 3;
+      spec.repeats = 10;
+      const auto summary = [&]
+      {
+        ShotMap map(*shotDrill, config, spec);
+        while (map.work(1.0))
+        {
+        }
+        std::vector<std::tuple<int, int, double>> cells;
+        for (const ShotMapCell& cell : map.cells())
+          cells.emplace_back(cell.shots, cell.goals, cell.xg);
+        return cells;
+      };
+      const auto first = summary();
+      shotMapOk = first.size() == 9 && first == summary();
+      int shots = 0;
+      int goals = 0;
+      for (const auto& [cellShots, cellGoals, xg] : first)
+      {
+        shots += cellShots;
+        goals += cellGoals;
+      }
+      std::cout << std::format(
+          "Drill shot map (3 × 3 spots × 10): {} shots, {} goals, same twice: "
+          "{}\n",
+          shots, goals, shotMapOk ? "yes" : "NO");
+    }
+  }
+  return sprintOk && shotOk && framework && measureOk && shotMapOk;
 }
 }  // namespace
 
@@ -513,5 +783,8 @@ int runSandboxChecks(GameController& controller, int matches)
                       "match.\n"
                     : "FAIL: a rewind or recording replay differed from the "
                       "match.\n");
-  return allIdentical && rewindExact ? 0 : 1;
+  const bool drillsWork = runDrillChecks(*clubs[0], *clubs[1], config);
+  std::cout << (drillsWork ? "PASS: drills run, repeat and rewind.\n"
+                           : "FAIL: a drill check failed.\n");
+  return allIdentical && rewindExact && drillsWork ? 0 : 1;
 }

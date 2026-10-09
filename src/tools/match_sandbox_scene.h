@@ -20,6 +20,7 @@
 #include "gui/gui_scene.h"
 #include "tools/match_sandbox_compare.h"
 #include "tools/match_sandbox_debugger.h"
+#include "tools/match_sandbox_drill.h"
 #include "tools/match_sandbox_inspector.h"
 #include "tools/match_sandbox_recorder.h"
 #include "tools/match_sandbox_recording.h"
@@ -42,8 +43,14 @@ class Team;
 class MatchSandboxScene : public GUIScene
 {
  public:
-  /** @param kick_off_now Start a match with the default setup straight away. */
-  explicit MatchSandboxScene(GUIView* guiView_ptr, bool kick_off_now = false);
+  /**
+   * @param kick_off_now Start a match with the default setup straight away.
+   * @param open_drill Open this drill (by name, any case) in Watch mode.
+   * @param open_view How to open it: 0 Watch, 1 Measure, 2 Shot map.
+   */
+  explicit MatchSandboxScene(GUIView* guiView_ptr, bool kick_off_now = false,
+                             std::string open_drill = {},
+                             int open_view = 0);
 
   void onEnter() override;
   void update(float deltaTime) override;
@@ -71,6 +78,8 @@ class MatchSandboxScene : public GUIScene
 
   std::array<Side, 2> sides{};
   bool kick_off_pending = false;
+  std::string drill_pending;
+  int drill_view = 0;
   std::uint32_t match_seed = 1;
   bool new_seed_each_match = true;
   bool full_familiarity = true;
@@ -78,6 +87,13 @@ class MatchSandboxScene : public GUIScene
 
   /** Draws the debugger and review windows and links them. */
   void renderDebugTools(MatchEngine* live, bool* livePaused);
+
+  // Drills.
+  void renderDrills();
+  /** 0: match setup, 1: drills. */
+  int mode = 0;
+  std::vector<std::unique_ptr<Drill>> drills = makeDrills();
+  int drill_index = 0;
 
   // Recordings (debugger phase 5).
   void saveRecording();

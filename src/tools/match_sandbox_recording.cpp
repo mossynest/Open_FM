@@ -73,7 +73,10 @@ json toJson(const MatchCommandRecord& command)
           {"incoming", command.incoming},
           {"slot", command.slot ? json(*command.slot) : json(nullptr)},
           {"talk_half", command.talkHalf},
-          {"talk_modifier", command.talkModifier}};
+          {"talk_modifier", command.talkModifier},
+          {"target", command.target ? json{command.target->x, command.target->y}
+                                    : json(nullptr)},
+          {"urgent", command.urgent}};
 }
 
 MatchCommandRecord commandFromJson(const json& value)
@@ -92,6 +95,11 @@ MatchCommandRecord commandFromJson(const json& value)
     command.slot = value.at("slot").get<std::size_t>();
   command.talkHalf = value.at("talk_half").get<int>();
   command.talkModifier = value.at("talk_modifier").get<float>();
+  // Drill commands (older recordings have none).
+  if (const auto target = value.find("target");
+      target != value.end() && !target->is_null())
+    command.target = Vector2F{target->at(0).get<float>(), target->at(1).get<float>()};
+  command.urgent = value.value("urgent", false);
   return command;
 }
 
