@@ -217,6 +217,12 @@ void EngineDebugger::render(SandboxRecorder& recorder, MatchEngine* engine,
     return;
   }
   renderControls(recorder, engine, paused);
+  if (const MatchEngine* shown = inspected ? inspected : engine)
+    ImGui::TextDisabled(
+        "Brains: %s · Bodies: %s · Handshake: %s",
+        brainPairName({shown->getBrain(true), shown->getBrain(false)}).c_str(),
+        bodyPairName({shown->getBody(true), shown->getBody(false)}).c_str(),
+        handshakeName(shown->getHandshake()).data());
   if (ImGui::BeginTabBar("##debugger_tabs"))
   {
     if (ImGui::BeginTabItem("Log"))

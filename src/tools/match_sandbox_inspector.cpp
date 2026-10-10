@@ -426,6 +426,8 @@ void DebugInspector::renderPlayer(const SandboxRecorder& recorder,
     ImGui::TableSetupColumn("key", ImGuiTableColumnFlags_WidthFixed,
                             140.0f * Theme::scale());
     ImGui::TableSetupColumn("value");
+    property("Brain", std::string(brainName(engine.getBrain(slot->isHomeTeam))));
+    property("Body", std::string(bodyName(engine.getBody(slot->isHomeTeam))));
     property("Intent", SandboxNames::intent(slot->intent));
     property("Why",
              job != Job::NONE

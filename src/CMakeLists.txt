@@ -159,7 +159,26 @@ set(FM_CORE_SOURCES
     model/match_report.cpp
     model/match_commentary.h
     model/match_commentary.cpp
+    model/match_body.h
+    model/match_body_dispatch.cpp
+    model/match_body_new_v1.cpp
+    model/match_body_new_v1_members.h
+    model/match_body_original.cpp
+    model/match_body_original_members.h
+    model/match_brain.h
+    model/match_brain_dispatch.cpp
+    model/match_brain_new_v1.cpp
+    model/match_brain_new_v1_members.h
+    model/match_brain_original.cpp
+    model/match_brain_original_members.h
+    model/match_handshake.h
+    model/match_handshake_dispatch.cpp
+    model/match_handshake_new_v1.cpp
+    model/match_handshake_new_v1_members.h
+    model/match_handshake_original.cpp
+    model/match_handshake_original_members.h
     model/match_engine.h
+    model/match_engine_internal.h
     model/match_engine.cpp
     model/match_engine_tracking.cpp
     model/match_events.h

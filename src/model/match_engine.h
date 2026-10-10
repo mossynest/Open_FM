@@ -21,6 +21,9 @@
 #include "global/stats_config.h"
 #include "global/types.h"
 #include "model/lineup.h"
+#include "model/match_body.h"
+#include "model/match_brain.h"
+#include "model/match_handshake.h"
 #include "model/match_context.h"
 #include "model/match_events.h"
 #include "model/match_rules.h"
@@ -77,6 +80,8 @@ enum class PlayerIntent
   RECOVER_SHAPE,
   GOALKEEP
 };
+inline constexpr std::size_t PLAYER_INTENT_COUNT =
+    static_cast<std::size_t>(PlayerIntent::GOALKEEP) + 1;
 
 /** Tactical purpose of the most recently executed pass. */
 enum class PassIntent
@@ -531,9 +536,16 @@ class MatchEngine
   MatchEngine(const Lineup& home_lineup, const Lineup& away_lineup,
               const Strategy& home_strat, const Strategy& away_strat,
               const StatsConfig& config);
+  /**
+   * @param handshake How the inputs become match state (match_handshake.h);
+   * chosen here because the conversion starts here.
+   */
   MatchEngine(const Lineup& home_lineup, const Lineup& away_lineup,
               const Strategy& home_strat, const Strategy& away_strat,
-              const StatsConfig& config, uint32_t seed);
+              const StatsConfig& config, uint32_t seed,
+              HandshakeId handshake = HandshakeId::ORIGINAL);
+  /** The handshake this match was built with. */
+  HandshakeId getHandshake() const { return handshakeId; }
 
   /**
    * Live update: advances `deltaTime` simulated seconds (wall-clock seconds
@@ -611,6 +623,22 @@ class MatchEngine
   {
     return effectiveFamiliarity(homeTeam ? 0 : 1);
   }
+  /**
+   * The brain a side decides with (see match_brain.h). Set before kickoff;
+   * both sides use BrainId::ORIGINAL unless told otherwise.
+   */
+  void setBrain(bool homeTeam, BrainId brain);
+  BrainId getBrain(bool homeTeam) const { return brains[homeTeam ? 0 : 1]; }
+  /**
+   * The body a side's players move and play with (see match_body.h),
+   * independent of its brain. Set before kickoff; Original unless told
+   * otherwise.
+   */
+  void setBody(bool homeTeam, BodyId body)
+  {
+    bodies[homeTeam ? 0 : 1] = body;
+  }
+  BodyId getBody(bool homeTeam) const { return bodies[homeTeam ? 0 : 1]; }
   /**
    * Replaces a side's tactics at any time; the sliders apply from the next
    * step and the players re-form over a few seconds (their target response).
@@ -1051,6 +1079,12 @@ class MatchEngine
   const StatsConfig& statsConfig;
   Strategy homeStrategy;
   Strategy awayStrategy;
+  /** Each side's brain (home, away); see setBrain. */
+  std::array<BrainId, 2> brains{BrainId::ORIGINAL, BrainId::ORIGINAL};
+  /** Each side's body (home, away); see setBody. */
+  std::array<BodyId, 2> bodies{BodyId::ORIGINAL, BodyId::ORIGINAL};
+  /** The match's handshake (constructor). */
+  HandshakeId handshakeId = HandshakeId::ORIGINAL;
   std::mt19937 rng;
   // Referee decisions and injuries draw from their own stream so tuning them
   // does not reshuffle player decisions and ball physics.
@@ -1307,6 +1341,272 @@ class MatchEngine
     bool lofted = false;
   };
 
+  // --- Brain: decisions ------------------------------------------------------
+  // What a side's players choose to do. Each choice returns an intention that
+  // the body (physics, execution, contests, rules) then carries out; see
+  // match_brain.h. Nothing here launches the ball or resolves a contest.
+
+  /**
+   * How a side's players move toward their plan: how fast they absorb a new
+   * target (the target lag) and how hard they choose to run. The shared
+   * movement code reads it; the side's brain supplies it.
+   */
+  struct MovementStyle
+  {
+    /** Target response per second, normally and when the move is urgent. */
+    float tacticalResponsePerSecond = 0.0f;
+    float urgentResponsePerSecond = 0.0f;
+    /** Response lost by a side with no familiarity with its tactics. */
+    float familiarityResponseLoss = 0.0f;
+    /** Share of fresh top speed each intent runs at (by PlayerIntent). */
+    std::array<float, PLAYER_INTENT_COUNT> intentSpeedShares{};
+    /** Walking to a restart position, as a share of fresh top speed. */
+    float restartWalkShare = 0.0f;
+    /** Far from his target a player runs harder: maxUrgencyShare at this
+     * distance and beyond, proportionally less closer in. */
+    float urgencyDistanceMetres = 0.0f;
+    float maxUrgencyShare = 0.0f;
+  };
+  /** The brain a side decides with. */
+  BrainId brainOf(bool homeTeam) const { return brains[homeTeam ? 0 : 1]; }
+  /** The body a side's players move and play with. */
+  BodyId bodyOf(bool homeTeam) const { return bodies[homeTeam ? 0 : 1]; }
+  /** The movement style of a side's brain. */
+  const MovementStyle& movementStyle(bool homeTeam) const;
+
+  /** The carrier's choice: shoot, carry, shield, clear or pass. */
+  struct BallAction
+  {
+    ScenarioAction kind = ScenarioAction::NONE;
+    /** PASS: the chosen pass. */
+    std::optional<PassOption> pass;
+    /** CARRY and SHIELD: how long he keeps the ball before deciding again. */
+    float holdSeconds = 0.0f;
+  };
+  /** Scores the carrier's options and picks one (decision record included). */
+  BallAction chooseBallAction(MatchPlayer& carrier);
+  /** The team's off-ball intents the moment a pass is released. */
+  void afterPassReleased(const MatchPlayer& passer, const MatchPlayer& receiver);
+  /** Where a shot is aimed, in metres across and up the goal mouth. */
+  struct ShotAim
+  {
+    /** Across the goal from its centre (positive toward pitch y = 1). */
+    float aimY = 0.0f;
+    float aimZ = 0.0f;
+    /** How far inside the post he aimed (the controlled shot uses it). */
+    float inset = 0.0f;
+  };
+  ShotAim chooseShotAim(const MatchPlayer& shooter, bool header, bool penalty,
+                        bool freeKick);
+  /** A keeper's guess at a penalty: -1 or 1 (side of pitch y), 0 to stay. */
+  float choosePenaltyGuess(const MatchPlayer& keeper);
+  /** Where a clearance is aimed and how far it should go. */
+  struct ClearanceAim
+  {
+    Vector2F target;
+    float metres = 0.0f;
+  };
+  ClearanceAim chooseClearanceAim(const MatchPlayer& defender);
+  /** Where to knock the ball over the own goal line, wide of the posts. */
+  Vector2F chooseClearBehindTarget(const MatchPlayer& defender);
+  /** What a header is for: a shot, cushioning a team-mate's ball, or play. */
+  enum class HeaderAttempt
+  {
+    SHOOT,
+    CUSHION,
+    PLAY
+  };
+  HeaderAttempt chooseHeaderAttempt(const MatchPlayer& header,
+                                    bool fromTeammate);
+  /** A header in play: over the own line, cleared, or knocked down. */
+  struct HeaderPlay
+  {
+    enum class Kind
+    {
+      BEHIND,
+      CLEAR,
+      KNOCK_DOWN
+    };
+    Kind kind = Kind::KNOCK_DOWN;
+    /** CLEAR and KNOCK_DOWN: the point headed toward. */
+    Vector2F aim;
+    /** KNOCK_DOWN: the team-mate it is meant for (may be null). */
+    const MatchPlayer* target = nullptr;
+  };
+  HeaderPlay chooseHeaderPlay(const MatchPlayer& header, bool fromTeammate);
+  /** A defender going in on the carrier this step (none: no challenge). */
+  struct Challenge
+  {
+    MatchPlayer* defender = nullptr;
+    bool sliding = false;
+  };
+  Challenge chooseChallenge(const MatchPlayer& carrier, float dt);
+  /** Whether an outfielder in a shot's path throws his body in. */
+  bool choosesToBlock(const MatchPlayer& player);
+  /** Whether a defender who blocked a shot puts it behind. */
+  bool choosesToPutBlockBehind(const MatchPlayer& player);
+  /** Whether a defender meeting a delivery near his goal puts it behind. */
+  bool choosesToClearCrossBehind(const MatchPlayer& player);
+  /** Who takes a restart of the given kind (spot: where it is taken). */
+  MatchPlayer* chooseRestartTaker(MatchState restart, bool homeTeam,
+                                  Vector2F spot, bool topCorner = false);
+  /** How a restart is released: a direct shot, a pass or kept. */
+  struct RestartPlay
+  {
+    enum class Kind
+    {
+      DIRECT_SHOT,
+      PASS,
+      HOLD
+    };
+    Kind kind = Kind::HOLD;
+    std::optional<PassOption> pass;
+    /** PASS: played in the air whatever the option says. */
+    bool lofted = false;
+  };
+  RestartPlay chooseRestartPlay(MatchPlayer& taker, MatchState restartState);
+  /**
+   * How the score and the gap in quality bend a side's tactics: in front it
+   * sits deeper and takes fewer risks, behind it pushes on; the underdog
+   * sits deeper and presses less.
+   */
+  void applyTeamMentality(StrategySliders& sliders, bool homeTeam) const;
+  /** The attackers a side sends into the box at a set piece, most
+   * dangerous first (what the defending side sees). */
+  struct SetPieceAttackers
+  {
+    std::array<const MatchPlayer*, 5> players{};
+    std::size_t count = 0;
+  };
+  SetPieceAttackers arrangeSetPieceAttack(bool attackingHome,
+                                          Vector2F ballPosition);
+  void arrangeSetPieceDefence(bool defendingHome, Vector2F ballPosition,
+                              const SetPieceAttackers& attackers);
+
+  // The brain functions above take the decision for a side: each dispatches
+  // to that side's brain (match_brain_dispatch.cpp). The brains' own members
+  // follow, one file per brain.
+#include "model/match_brain_original_members.h"
+#include "model/match_brain_new_v1_members.h"
+
+  // --- Body: carrying out the brain's choices --------------------------------
+  void executeBallAction(MatchPlayer& carrier, const BallAction& action);
+
+  // --- Handshake: the game's inputs become match state (match_handshake.h) --
+  // One per match. Besides these, computeLevel, rawAttribute, attribute,
+  // loadAttributes, initializePlayers, resolveTactics, placeFormation,
+  // drawRefereeStrictness and computeUnderdogShares are the handshake's.
+
+  /** The match context, sanitised, and the finishing precision it sets. */
+  void convertMatchContext(const MatchContext& context);
+  /** A player's starting condition (0-1) as match stamina. */
+  float convertCondition(float condition) const;
+  /** A side's tactical familiarity (0-1). */
+  float convertFamiliarity(float familiarity) const;
+  /** A team talk's effect, within its allowed swing. */
+  float convertTeamTalk(float modifier) const;
+
+  // --- Player body: one player's body (see match_body.h) ---------------------
+  // How well one player's body carries out his brain's choice and what it
+  // costs him. Each runs with the body of the player's side; contests between
+  // players, the ball's flight and the rules are shared.
+
+  /** The controlled player's body following the stick (Play mode): physics
+   * sub-steps, and his facing kept on `faceToward` while jockeying. */
+  void moveControlled(MatchPlayer& player, Vector2F desired, float desiredSpeed,
+                      float topSpeed, float fatigue, float dt,
+                      const MatchPlayer* faceToward);
+  /** One load period of energy for players gathered in lanes. */
+  struct FitnessLanes
+  {
+    static constexpr std::size_t LANES = 32;
+    alignas(16) std::array<float, LANES> fromX;
+    alignas(16) std::array<float, LANES> fromY;
+    alignas(16) std::array<float, LANES> toX;
+    alignas(16) std::array<float, LANES> toY;
+    alignas(16) std::array<float, LANES> topSpeed;
+    alignas(16) std::array<float, LANES> endurance;
+    alignas(16) std::array<float, LANES> pressingEffort;
+    alignas(16) std::array<float, LANES> sideDrain;
+    alignas(16) std::array<float, LANES> stamina;
+    alignas(16) std::array<float, LANES> reserve;
+    /** Results: distance covered, and the stamina and sprint reserve after. */
+    alignas(16) std::array<float, LANES> stepMetres;
+    alignas(16) std::array<float, LANES> nextStamina;
+    alignas(16) std::array<float, LANES> nextReserve;
+  };
+  /** Stamina drain and sprint-reserve drain or recovery for lanes
+   * [begin, end), all players of one side. */
+  void spendEnergy(FitnessLanes& lanes, std::size_t begin, std::size_t end,
+                   float dt, bool homeTeam) const;
+  /** Chance of a non-contact injury in the next check interval. */
+  float injuryChance(const MatchPlayer& player) const;
+  /** How a kicked ball leaves the foot: the point it is really struck to
+   * and its launch (the world's launchBall then flies it). */
+  struct Kick
+  {
+    Vector2F target;
+    float speed = 0.0f;
+    float verticalSpeed = 0.0f;
+    float curve = 0.0f;
+  };
+  /** The passer's strike: execution error, weight, height and curve. */
+  Kick kickPass(const MatchPlayer& passer, const MatchPlayer& receiver,
+                Vector2F target, float passDistance, bool lofted,
+                bool delivery);
+  /** How long a player needs after an action before he can act again. */
+  enum class Recovery
+  {
+    PASS,
+    SHOT
+  };
+  float recoverySeconds(const MatchPlayer& player, Recovery after);
+  /** A shot's execution error (metres, one standard deviation). */
+  float shotSpread(const MatchPlayer& shooter, bool header, bool penalty,
+                   bool freeKick, float metres) const;
+  /** Where a shot crosses the goal line (metres) and how hard it is hit. */
+  struct ShotStrike
+  {
+    float crossingY = 0.0f;
+    float crossingZ = 0.0f;
+    float speed = 0.0f;
+  };
+  /** @param powerScale Play mode's power (1 for the AI). */
+  ShotStrike strikeShotBody(const MatchPlayer& shooter, float aimY, float aimZ,
+                            float spread, bool header, float powerScale);
+  float clearanceSpeed(const MatchPlayer& defender);
+  float headerClearanceSpeed(const MatchPlayer& header);
+  /** Where a knock-down meant for `aim` really goes. */
+  Vector2F knockDownPoint(const MatchPlayer& header, Vector2F aim);
+  /** Brings a received ball under control: trap time and when he can act
+   * (a keeper with it in his hands: how long he holds it). */
+  void settleOnBall(MatchPlayer& player, float touchSkill, bool hands);
+  float keeperHoldSeconds(const MatchPlayer& keeper);
+  /** Whether an outfielder in a shot's path gets his body in the way
+   * (stretch: how far he had to reach, 0-1). */
+  bool blocksShot(const MatchPlayer& player, float stretch);
+  /** Whether he reads and reaches a ball not meant for him. */
+  bool reachesBall(const MatchPlayer& player, float ballSpeed, float stretch);
+  /** His first-touch skill (hands: a keeper allowed to handle it). */
+  float touchSkill(const MatchPlayer& player, bool hands) const;
+  /** Whether his first touch brings the ball under control. */
+  bool controlsBall(const MatchPlayer& player, float skill, float ballSpeed,
+                    float heightMetres);
+  /** The ball's velocity after a heavy first touch. */
+  Vector2F heavyTouchVelocity(const MatchPlayer& player, Vector2F velocity);
+  /** The keeper reads an open-play shot: where to dive and how long he
+   * needs to react (defenders in the line of the shot screen it). */
+  void readShot(const MatchPlayer& keeper, GoalkeeperControl& control);
+  /** Whether a save is held rather than parried. */
+  bool holdsShot(const MatchPlayer& keeper, float stretch, float speedExcess);
+  /** How a parried ball comes back off the keeper. */
+  struct Spill
+  {
+    Vector2F velocity;
+    float verticalSpeed = 0.0f;
+  };
+  Spill parrySpill(const MatchPlayer& keeper, float speed);
+
   void initializePlayers(const Lineup& lineup, bool isHomeTeam);
   void loadAttributes(MatchPlayer& matchPlayer, const Player* player) const;
   std::size_t addPlayerStats(const MatchPlayer& matchPlayer, bool started);
@@ -1361,6 +1661,9 @@ class MatchEngine
    */
   void integrateMovements(const std::uint8_t* slots, std::size_t count,
                           float dt, bool walking);
+  /** Moves the players in `slots`, each side with its own body. */
+  void movePlayers(const std::uint8_t* slots, std::size_t count, float dt,
+                   bool walking);
   void updateRestartMovement(float dt);
   bool userRestartPassRequested() const;
   void updateRestartSupport(MatchPlayer& player, const MatchPlayer* taker);
@@ -1390,11 +1693,10 @@ class MatchEngine
    * `distanceMetres` of horizontal travel. */
   static float loftVerticalSpeed(float distanceMetres, float horizontalSpeed,
                                  float startHeight, float arrivalHeight);
+  /** Releases a restart the way the taker's brain chooses. */
   void takeSetPiece(MatchPlayer& taker, MatchState restartState);
-  void takeCorner(MatchPlayer& taker);
   void takeDirectFreeKick(MatchPlayer& taker);
   void arrangeSetPiece(bool attackingHome, Vector2F ballPosition);
-  MatchPlayer* bestSetPieceTaker(bool homeTeam, bool shooting);
   /**
    * Taker of a dead-ball duty right now: the side's designated player while
    * he is on the pitch and fit (so substitutions are followed), otherwise
@@ -1412,45 +1714,17 @@ class MatchEngine
   /** Reads roles and opposition instructions from a side's tactics. */
   void resolveTactics(bool homeTeam);
   const RoleProfile& roleProfileOf(const MatchPlayer& player) const;
-  /** Formation spot while his side has the ball (role and shape shift). */
-  Vector2F possessionAnchor(const MatchPlayer& player) const;
-  /** Signed x shift of the role in the defensive block (normalised). */
-  float defensiveRoleShift(const MatchPlayer& player) const;
   OppositionInstruction instructionAgainst(const MatchPlayer& target) const;
-  /** The man this player marks when he is under a tight-marking order. */
-  const MatchPlayer* tightMarkTarget(const MatchPlayer& marker) const;
-  /** Moves a marker's target tight and goal-side of his man. */
-  Vector2F tightMarkPoint(const MatchPlayer& marker, const MatchPlayer& target,
-                          Vector2F current) const;
-  /** Pass utility lost to a tight marker standing next to the receiver. */
-  float tightMarkPenalty(const MatchPlayer& receiver) const;
-  /** Pass utility added by the passer's and the receiver's roles. */
-  float passingRoleBias(const MatchPlayer& passer, const MatchPlayer& receiver,
-                        float progression, float completion) const;
-  /** Seconds a role is quicker (+) or slower to close the ball down. */
-  float pressEagerness(const MatchPlayer& candidate,
-                       const MatchPlayer* carrier) const;
-  /** Multiplier of a defender's rate of engaging the carrier. */
-  float engageBoost(const MatchPlayer& defender,
-                    const MatchPlayer& carrier) const;
-  /** Share of the presser's normal stand-off distance. */
-  float pressStandOffShare(const MatchPlayer& presser,
-                           const MatchPlayer& carrier) const;
-  /** Presser's lateral shade onto the carrier's stronger side (normalised
-   * y; 0 without a weaker-foot order). */
-  float weakFootShade(const MatchPlayer& carrier) const;
   /** Pressure in [0, 1] on a carrier forced onto his weaker foot. */
   float weakFootPressure(const MatchPlayer& carrier) const;
-  /** Second presser's spot when doubling up on the carrier, if ordered. */
-  std::optional<Vector2F> doubleUpPoint(const MatchPlayer& helper,
-                                        const MatchPlayer& carrier,
-                                        const MatchPlayer* firstPresser) const;
   /** Take-on success lost to a second defender doubling up. */
   float doubleUpPenalty(const MatchPlayer& carrier,
                         const MatchPlayer& defender) const;
   /** Team-talk effect in [-1, 1] (see getTeamTalkEffect). */
   float talkSwing(bool homeTeam) const;
   StrategySliders computeEffectiveSliders(bool homeTeam) const;
+  /** The touchline shout's nudge to a side's sliders. */
+  StrategySliders shoutSliders(StrategySliders sliders, bool homeTeam) const;
   /** How clearly each side is the weaker one in [0, 1] (see Touchline). */
   void computeUnderdogShares();
   void refreshEffectiveSliders();
@@ -1458,14 +1732,13 @@ class MatchEngine
   float teamEdge(bool homeTeam) const;
   /** Per-match referee strictness from the draw and the context. */
   float drawRefereeStrictness() const;
-  /** Shot appetite added by a shout (positive shoots more). */
-  float shoutShotBias(bool homeTeam) const;
   /** Work-rate bonus from an encouraging shout. */
   float shoutWorkRate(bool homeTeam) const;
   /** AI managers adjust with shouts to the score late in the game. */
   void runAiTouchline(bool homeTeam);
   void refreshTargetBlends();
-  void assignMarks();
+  /** A side's man-marking assignments (markAssignments). */
+  void assignMarks(bool home);
   /** Changes the ticks per step (the fidelity) and the per-step blends. */
   void setStepTicks(std::uint32_t ticks);
   /** Ticks of the next background-fidelity step (see MatchFidelity). */
@@ -1485,8 +1758,8 @@ class MatchEngine
   void simulateStep(float dt);
   void updateTeamPhases();
   void updateMovement(float dt);
-  /** Team shape and every off-ball target (see updateMovement). */
-  void refreshTacticalTargets(float dt);
+  /** A side's shape and every off-ball target (see updateMovement). */
+  void refreshTacticalTargets(float dt, bool planHome);
   /** Integrates the free ball in sub-steps, resolving contacts in each. */
   void updateBall(float dt);
   /** Pure ball physics for one sub-step (no contacts or rules). */
@@ -1503,6 +1776,7 @@ class MatchEngine
   /** Swept first-touch resolution over the last ball sub-step. */
   void resolveLooseBall();
   void attemptTackle(MatchPlayer& carrier, MatchPlayer& defender, bool sliding);
+  /** The carrier's turn: the brain chooses, the body carries it out. */
   void decideAction(MatchPlayer& carrier);
   /** Applies input records due at the current step. */
   void applyDueInputs();
@@ -1519,9 +1793,6 @@ class MatchEngine
   /** Tactical familiarity in force: the drilled level less a reshape cost. */
   float effectiveFamiliarity(std::size_t team) const;
   bool isControlled(const MatchPlayer& player) const;
-  /** Whether a wide forward in the final third is cutting inside toward
-   * the box rather than going down the line to cross. */
-  bool cutsInside(const MatchPlayer& player) const;
   /** Stick-driven movement of the controlled player (fine sub-steps). */
   void integrateControlled(MatchPlayer& player, float dt);
   /** Performs the controlled carrier's action; true if the ball left him. */
@@ -1544,9 +1815,6 @@ class MatchEngine
   /** Seconds a team-mate needs to get to the ball (see
    * suggestActivePlayer). */
   float switchSeconds(const MatchPlayer& candidate) const;
-  /** Acceleration, braking, lateral limit, position and facing update. */
-  void stepKinematics(MatchPlayer& player, Vector2F desired, float desiredSpeed,
-                      float topSpeed, float fatigue, float dt);
   void passBall(MatchPlayer& passer, const PassOption& option,
                 bool forceLofted = false);
   void takeShot(MatchPlayer& shooter, float forcedXG = -1.0f,
@@ -1577,10 +1845,6 @@ class MatchEngine
   void trackPressures();
   void clearFlightState();
 
-  /** @param details Debugger detail: every team-mate looked at (or null). */
-  std::optional<PassOption> choosePassTarget(
-      MatchPlayer& passer,
-      std::vector<PassCandidateDetail>* details = nullptr);
   /** @param detail Debugger detail: the utility and completion terms. */
   PassOption evaluatePassOption(MatchPlayer& passer, MatchPlayer& receiver,
                                 PassCandidateDetail* detail = nullptr) const;
@@ -1634,4 +1898,12 @@ class MatchEngine
   std::string squadPlayerName(PlayerID playerId) const;
   /** One fixed step of the simulation (simulateStep adds the commentary). */
   void simulateStepBody(float dt);
+
+  // The bodies' own members, one file per body (after every type they use;
+  // the functions in "Player body" above dispatch to them,
+  // match_body_dispatch.cpp).
+#include "model/match_body_original_members.h"
+#include "model/match_body_new_v1_members.h"
+#include "model/match_handshake_original_members.h"
+#include "model/match_handshake_new_v1_members.h"
 };

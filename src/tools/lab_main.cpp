@@ -53,11 +53,13 @@ constexpr std::string_view USAGE = R"(fm_lab - headless balance lab
 Usage:
   fm_lab matches [--n N] [--seed S] [--home-rating X --away-rating Y | --spread
                  [--rating-min A --rating-max B]] [--fidelity full|background]
-                 [--threads T] [--out-dir DIR]
+                 [--brains HOME,AWAY] [--bodies HOME,AWAY] [--threads T]
+                 [--handshake H] [--out-dir DIR]
   fm_lab season  [--leagues all|top|ID,ID...] [--seasons N] [--seed S]
                  [--threads T] [--max-days D] [--reload] [--out-dir DIR]
   fm_lab tactics [--n SEEDS_PER_PAIR] [--seed S] [--rating X] [--threads T]
-                 [--fidelity full|background] [--out-dir DIR]
+                 [--fidelity full|background] [--brains HOME,AWAY]
+                 [--bodies HOME,AWAY] [--handshake H] [--out-dir DIR]
 
 matches  isolated matches between synthetic 4-4-2 squads (default 2000 at
          rating 65 v 65; --spread draws both ratings uniformly per match)
@@ -71,6 +73,16 @@ tactics  round robin of the tactic presets between equal teams; each seed is
 
 Fidelity: full (default, the live engine's 10 Hz step) or background (the
 cheaper step unwatched fixtures use); compare both to check equivalence.
+
+Brains: each side's decision-making, original (default) or new-v1; one name
+sets both sides ("--brains new-v1"), two set home and away
+("--brains original,new-v1").
+
+Bodies: each side's players' bodies (movement, fitness, kicking, first
+touch, goalkeeping), original (default) or new-v1, set the same way.
+
+Handshake: how the inputs become match state (attribute scale, physical
+limits, roles), one for the match: original (default) or new-v1.
 
 Threads: --threads, else FM_SIM_THREADS, else 4 (max 8); the process lowers
 its own priority. Output: report.md and metrics.json in --out-dir (default a
@@ -109,11 +121,11 @@ Arguments parseArguments(int argc, char** argv)
 {
   static constexpr std::array<std::string_view, 4> FLAGS = {
       "--spread", "--reload", "--help", "-h"};
-  static constexpr std::array<std::string_view, 13> OPTIONS = {
+  static constexpr std::array<std::string_view, 16> OPTIONS = {
       "--n",       "--seed",       "--home-rating", "--away-rating",
       "--rating",  "--rating-min", "--rating-max",  "--threads",
       "--out-dir", "--leagues",    "--seasons",     "--max-days",
-      "--fidelity"};
+      "--fidelity", "--brains",    "--bodies",      "--handshake"};
   Arguments arguments;
   if (argc < 2) throw UsageError("missing mode");
   arguments.mode = argv[1];
@@ -236,6 +248,64 @@ bool backgroundFidelity(const Arguments& arguments)
   return fidelity == "background";
 }
 
+/** --brains HOME,AWAY (or one brain for both sides); default original. */
+std::array<BrainId, 2> brainPair(const Arguments& arguments)
+{
+  const std::string text = arguments.value("--brains").value_or("original");
+  const auto brains = parseBrainPair(text);
+  if (!brains)
+    throw UsageError(
+        "--brains must be HOME,AWAY or one brain, each original or new-v1");
+  return *brains;
+}
+
+/** --bodies HOME,AWAY (or one body for both sides); default original. */
+std::array<BodyId, 2> bodyPair(const Arguments& arguments)
+{
+  const std::string text = arguments.value("--bodies").value_or("original");
+  const auto bodies = parseBodyPair(text);
+  if (!bodies)
+    throw UsageError(
+        "--bodies must be HOME,AWAY or one body, each original or new-v1");
+  return *bodies;
+}
+
+void setBrainsAndBodies(std::vector<Lab::MatchJob>& jobs,
+                        std::array<BrainId, 2> brains,
+                        std::array<BodyId, 2> bodies)
+{
+  for (Lab::MatchJob& job : jobs)
+  {
+    job.home.brain = brains[0];
+    job.away.brain = brains[1];
+    job.home.body = bodies[0];
+    job.away.body = bodies[1];
+  }
+}
+
+std::string brainsParameter(std::array<BrainId, 2> brains)
+{
+  return std::format("home {}, away {}", brainName(brains[0]),
+                     brainName(brains[1]));
+}
+
+std::string bodiesParameter(std::array<BodyId, 2> bodies)
+{
+  return std::format("home {}, away {}", bodyName(bodies[0]),
+                     bodyName(bodies[1]));
+}
+
+/** --handshake original|new-v1 (one for the match); default original. */
+HandshakeId handshakeOption(const Arguments& arguments)
+{
+  const std::string text =
+      arguments.value("--handshake").value_or("original");
+  const auto handshake = handshakeFromKey(text);
+  if (!handshake)
+    throw UsageError("--handshake must be original or new-v1");
+  return *handshake;
+}
+
 Lab::LabReport runMatchesMode(const Arguments& arguments, unsigned threads)
 {
   const int count =
@@ -256,6 +326,9 @@ Lab::LabReport runMatchesMode(const Arguments& arguments, unsigned threads)
     throw UsageError("--spread cannot be combined with fixed ratings");
   if (minRating > maxRating) throw UsageError("--rating-min > --rating-max");
   const bool background = backgroundFidelity(arguments);
+  const std::array<BrainId, 2> brains = brainPair(arguments);
+  const std::array<BodyId, 2> bodies = bodyPair(arguments);
+  const HandshakeId handshake = handshakeOption(arguments);
 
   std::vector<Lab::MatchJob> jobs(static_cast<std::size_t>(count));
   for (std::size_t i = 0; i < jobs.size(); ++i)
@@ -279,6 +352,8 @@ Lab::LabReport runMatchesMode(const Arguments& arguments, unsigned threads)
       jobs[i].away.rating = awayRating;
     }
   }
+  setBrainsAndBodies(jobs, brains, bodies);
+  for (Lab::MatchJob& job : jobs) job.handshake = handshake;
 
   const StatsConfig config = Lab::loadStatsConfig();
   const auto started = std::chrono::steady_clock::now();
@@ -308,6 +383,9 @@ Lab::LabReport runMatchesMode(const Arguments& arguments, unsigned threads)
   report.parameters["cpu_ms_per_match_estimate"] =
       std::format("{:.1f}", report.ms_per_match * threads);
   report.parameters["fidelity"] = background ? "background" : "full";
+  report.parameters["brains"] = brainsParameter(brains);
+  report.parameters["bodies"] = bodiesParameter(bodies);
+  report.parameters["handshake"] = std::string(handshakeName(handshake));
   static constexpr std::array SCOPES = {Lab::Scope::Match, Lab::Scope::Engine};
   report.rows = Lab::evaluateTargets(Lab::matchMetrics(samples), SCOPES);
   report.tables = Lab::matchTables(samples);
@@ -333,6 +411,11 @@ Lab::LabReport runTacticsMode(const Arguments& arguments, unsigned threads)
   std::vector<Lab::MatchJob> jobs = Lab::tacticJobs(seed, seeds, rating);
   const bool background = backgroundFidelity(arguments);
   for (Lab::MatchJob& job : jobs) job.background = background;
+  const std::array<BrainId, 2> brains = brainPair(arguments);
+  const std::array<BodyId, 2> bodies = bodyPair(arguments);
+  const HandshakeId handshake = handshakeOption(arguments);
+  setBrainsAndBodies(jobs, brains, bodies);
+  for (Lab::MatchJob& job : jobs) job.handshake = handshake;
   const StatsConfig config = Lab::loadStatsConfig();
   const auto started = std::chrono::steady_clock::now();
   const std::vector<Lab::MatchSample> samples = Lab::simulateMatches(
@@ -359,6 +442,9 @@ Lab::LabReport runTacticsMode(const Arguments& arguments, unsigned threads)
   report.parameters["rating"] = std::format("{:.0f}", rating);
   report.parameters["seeds_per_pair"] = std::to_string(seeds);
   report.parameters["fidelity"] = background ? "background" : "full";
+  report.parameters["brains"] = brainsParameter(brains);
+  report.parameters["bodies"] = bodiesParameter(bodies);
+  report.parameters["handshake"] = std::string(handshakeName(handshake));
   static constexpr std::array SCOPES = {Lab::Scope::Tactics};
   report.rows = Lab::evaluateTargets(metrics, SCOPES);
   report.notes.push_back(

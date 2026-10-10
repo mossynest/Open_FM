@@ -398,6 +398,9 @@ void MatchSandboxScene::renderSide(Side& side, bool home, float width,
                 home ? "Home - you manage this side" : "Away - played by the AI",
                 ImVec2(width, height), true);
   renderClubPicker(side, home);
+  renderBrainPicker(home);
+  ImGui::SameLine(0.0f, Theme::Space::L * Theme::scale());
+  renderBodyPicker(home);
   if (const auto team = mutableTeam(guiView, side.team))
   {
     ImGui::Spacing();
@@ -441,6 +444,50 @@ void MatchSandboxScene::renderClubPicker(Side& side, bool home)
     }
   }
   ImGui::EndCombo();
+}
+
+void MatchSandboxScene::renderBrainPicker(bool home)
+{
+  BrainId& brain = sandboxBrains()[home ? 0 : 1];
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted("Brain");
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(160.0f * Theme::scale());
+  if (ImGui::BeginCombo("##brain", brainName(brain).data()))
+  {
+    for (const BrainId option : ALL_BRAINS)
+      if (ImGui::Selectable(brainName(option).data(), option == brain))
+        brain = option;
+    ImGui::EndCombo();
+  }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip(
+        "The decision-making this side plays with: Original is the inherited "
+        "engine, kept as it was; New v1 is the version being developed. "
+        "Physics and rules are the same for both.");
+}
+
+void MatchSandboxScene::renderBodyPicker(bool home)
+{
+  BodyId& body = sandboxBodies()[home ? 0 : 1];
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted("Body");
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(160.0f * Theme::scale());
+  if (ImGui::BeginCombo("##body", bodyName(body).data()))
+  {
+    for (const BodyId option : ALL_BODIES)
+      if (ImGui::Selectable(bodyName(option).data(), option == body))
+        body = option;
+    ImGui::EndCombo();
+  }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip(
+        "How this side's players' bodies carry out what their brain chose: "
+        "movement, fitness, kicking, first touch, goalkeeping, injuries. "
+        "Original is the inherited engine; New v1 is being developed. "
+        "Contests between players, the ball and the rules are the same for "
+        "both.");
 }
 
 void MatchSandboxScene::renderFormation(Team& team)
@@ -707,6 +754,24 @@ void MatchSandboxScene::renderFooter()
         "Both sides know their tactics perfectly. Off: familiarity comes "
         "from the clubs' training, and noisier decisions with it.");
   ImGui::SameLine(0.0f, Theme::Space::XL * scale);
+  ImGui::TextUnformatted("Handshake");
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(120.0f * scale);
+  HandshakeId& handshake = sandboxHandshake();
+  if (ImGui::BeginCombo("##handshake", handshakeName(handshake).data()))
+  {
+    for (const HandshakeId option : ALL_HANDSHAKES)
+      if (ImGui::Selectable(handshakeName(option).data(), option == handshake))
+        handshake = option;
+    ImGui::EndCombo();
+  }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip(
+        "How the game's inputs become the match's numbers, for both sides: "
+        "the attribute scale (level shift, stretch), top speed and "
+        "acceleration, roles, positions, match context. Original is the "
+        "inherited engine; New v1 is being developed.");
+  ImGui::SameLine(0.0f, Theme::Space::XL * scale);
   ImGui::Checkbox("Engine debugger", &show_debugger);
   if (ImGui::IsItemHovered())
     ImGui::SetTooltip("Show the debugger window over the match: pause, step "
@@ -775,7 +840,11 @@ void MatchSandboxScene::saveRecording()
   recording_files.clear();
 }
 
-void MatchSandboxScene::loadRecording(const std::filesystem::path& path)
+void MatchSandboxScene::loadRecording(
+    const std::filesystem::path& path,
+    std::optional<std::array<BrainId, 2>> brains,
+    std::optional<std::array<BodyId, 2>> bodies,
+    std::optional<HandshakeId> handshake)
 {
   std::string error;
   std::optional<MatchRecording> recording = Recordings::load(path, error);
@@ -785,7 +854,8 @@ void MatchSandboxScene::loadRecording(const std::filesystem::path& path)
     return;
   }
   Recordings::Replay replayed =
-      Recordings::replay(*recording, guiView->getController());
+      Recordings::replay(*recording, guiView->getController(), brains, bodies,
+                         handshake);
   if (!replayed.match)
   {
     status = "Could not replay: " + replayed.error;
@@ -794,6 +864,9 @@ void MatchSandboxScene::loadRecording(const std::filesystem::path& path)
   // The replayed match takes the place of the last match in every window.
   recorder = std::move(replayed.match);
   match_setup = recording->setup;
+  if (brains) match_setup->brains = *brains;
+  if (bodies) match_setup->bodies = *bodies;
+  if (handshake) match_setup->handshake = *handshake;
   match_home = recording->setup.sides[0].team;
   match_away = recording->setup.sides[1].team;
   debugger.reset();
@@ -803,10 +876,23 @@ void MatchSandboxScene::loadRecording(const std::filesystem::path& path)
   loaded = std::move(recording);
   replay_info = std::move(replayed);
   show_last_log = true;
-  last_result = std::format("{} {} - {} {} (recording, seed {})",
-                            loaded->setup.sides[0].name, replay_info->homeScore,
-                            replay_info->awayScore, loaded->setup.sides[1].name,
-                            loaded->setup.matchSeed);
+  last_result = std::format(
+      "{} {} - {} {} (recording, seed {}, {})", loaded->setup.sides[0].name,
+      replay_info->homeScore, replay_info->awayScore,
+      loaded->setup.sides[1].name, loaded->setup.matchSeed,
+      brains || bodies || handshake
+          ? std::format("replayed with brains {}, bodies {}, handshake {}; "
+                        "recorded with brains {}, bodies {}, handshake {}",
+                        brainPairName(match_setup->brains),
+                        bodyPairName(match_setup->bodies),
+                        handshakeName(match_setup->handshake),
+                        brainPairName(loaded->setup.brains),
+                        bodyPairName(loaded->setup.bodies),
+                        handshakeName(loaded->setup.handshake))
+          : std::format("brains {}; bodies {}; handshake {}",
+                        brainPairName(loaded->setup.brains),
+                        bodyPairName(loaded->setup.bodies),
+                        handshakeName(loaded->setup.handshake)));
   status = "Opened " + path.filename().string();
 }
 
@@ -838,12 +924,70 @@ void MatchSandboxScene::renderRecordings()
   ImGui::TextDisabled(
       "Opening replays the recording on this engine: review it like a live "
       "match, and see where it plays differently.");
+  // Side by side: the same match (setup, seed, manager's changes) played
+  // by other brains or bodies, compared with the recording.
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted("Replay with brains:");
+  for (std::size_t side = 0; side < replay_brains.size(); ++side)
+  {
+    ImGui::SameLine();
+    ImGui::PushID(static_cast<int>(side));
+    ImGui::SetNextItemWidth(120.0f * scale);
+    if (ImGui::BeginCombo(side == 0 ? "home" : "away",
+                          brainName(replay_brains[side]).data()))
+    {
+      for (const BrainId option : ALL_BRAINS)
+        if (ImGui::Selectable(brainName(option).data(),
+                              option == replay_brains[side]))
+          replay_brains[side] = option;
+      ImGui::EndCombo();
+    }
+    ImGui::PopID();
+  }
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted("and bodies:          ");
+  for (std::size_t side = 0; side < replay_bodies.size(); ++side)
+  {
+    ImGui::SameLine();
+    ImGui::PushID(static_cast<int>(side) + 2);
+    ImGui::SetNextItemWidth(120.0f * scale);
+    if (ImGui::BeginCombo(side == 0 ? "home" : "away",
+                          bodyName(replay_bodies[side]).data()))
+    {
+      for (const BodyId option : ALL_BODIES)
+        if (ImGui::Selectable(bodyName(option).data(),
+                              option == replay_bodies[side]))
+          replay_bodies[side] = option;
+      ImGui::EndCombo();
+    }
+    ImGui::PopID();
+  }
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted("and handshake:       ");
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(120.0f * scale);
+  if (ImGui::BeginCombo("##replay_handshake",
+                        handshakeName(replay_handshake).data()))
+  {
+    for (const HandshakeId option : ALL_HANDSHAKES)
+      if (ImGui::Selectable(handshakeName(option).data(),
+                            option == replay_handshake))
+        replay_handshake = option;
+    ImGui::EndCombo();
+  }
   ImGui::Separator();
   if (recording_files.empty()) ImGui::TextDisabled("No recordings yet.");
   for (const std::filesystem::path& path : recording_files)
   {
     ImGui::PushID(path.string().c_str());
     if (ImGui::SmallButton("Open")) loadRecording(path);
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Replay with"))
+      loadRecording(path, replay_brains, replay_bodies, replay_handshake);
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("Play this match again with the brains, bodies and "
+                        "handshake chosen above and compare it with the "
+                        "recording.");
     ImGui::SameLine();
     ImGui::TextUnformatted(path.stem().string().c_str());
     ImGui::PopID();
@@ -885,7 +1029,11 @@ void MatchSandboxScene::kickOff()
     if (show_debugger) renderDebugTools(&engine, &paused);
   };
   const std::uint32_t seed = match_seed;
-  sandbox.on_finish = [this, seed](const MatchEngine& engine)
+  const std::array<BrainId, 2> brains = match_setup->brains;
+  const std::array<BodyId, 2> bodies = match_setup->bodies;
+  const HandshakeId handshake = match_setup->handshake;
+  sandbox.on_finish =
+      [this, seed, brains, bodies, handshake](const MatchEngine& engine)
   {
     const GameController& gameController = guiView->getController();
     const auto home = gameController.getTeamById(sides[HOME].team);
@@ -897,7 +1045,9 @@ void MatchSandboxScene::kickOff()
     if (engine.hasShootout())
       score += std::format(" ({} - {} pens)", engine.getShootoutScore(true),
                            engine.getShootoutScore(false));
-    last_result = std::format("{}  (seed {})", score, seed);
+    last_result = std::format(
+        "{}  (seed {}; brains {}; bodies {}; handshake {})", score, seed,
+        brainPairName(brains), bodyPairName(bodies), handshakeName(handshake));
   };
   guiView->overlayScene(std::make_unique<MatchScene>(
       guiView, sides[HOME].team, sides[AWAY].team, std::move(sandbox)));

@@ -21,6 +21,24 @@
 
 using nlohmann::json;
 
+std::array<BrainId, 2>& sandboxBrains()
+{
+  static std::array<BrainId, 2> brains{BrainId::ORIGINAL, BrainId::ORIGINAL};
+  return brains;
+}
+
+std::array<BodyId, 2>& sandboxBodies()
+{
+  static std::array<BodyId, 2> bodies{BodyId::ORIGINAL, BodyId::ORIGINAL};
+  return bodies;
+}
+
+HandshakeId& sandboxHandshake()
+{
+  static HandshakeId handshake = HandshakeId::ORIGINAL;
+  return handshake;
+}
+
 MatchSetup MatchSetup::capture(const GameController& controller, TeamID home,
                                TeamID away, std::uint32_t seed,
                                bool fullFamiliarity)
@@ -71,6 +89,9 @@ MatchSetup MatchSetup::capture(const GameController& controller, TeamID home,
       setup.medicalFlags = MatchdaySquad::medicalFlags(game->getMedical(),
                                                        team->get().getLineup());
   setup.autoSubstitutions = {controller.isDelegated(Duty::Substitutions), true};
+  setup.brains = sandboxBrains();
+  setup.bodies = sandboxBodies();
+  setup.handshake = sandboxHandshake();
   return setup;
 }
 
@@ -118,7 +139,7 @@ std::unique_ptr<MatchEngine> MatchSetup::build(const GameController& controller,
 
   auto engine = std::make_unique<MatchEngine>(
       lineups[0], lineups[1], sides[0].strategy, sides[1].strategy,
-      controller.getStatsConfig(), matchSeed);
+      controller.getStatsConfig(), matchSeed, handshake);
   engine->setTeamNames(sides[0].name, sides[1].name);
   for (const auto& [id, condition] : conditions)
     engine->setPlayerCondition(id, condition);
@@ -126,6 +147,10 @@ std::unique_ptr<MatchEngine> MatchSetup::build(const GameController& controller,
   engine->setTacticalFamiliarity(true, familiarity[0]);
   engine->setTacticalFamiliarity(false, familiarity[1]);
   engine->setAutoSubstitutions(autoSubstitutions[0], autoSubstitutions[1]);
+  engine->setBrain(true, brains[0]);
+  engine->setBrain(false, brains[1]);
+  engine->setBody(true, bodies[0]);
+  engine->setBody(false, bodies[1]);
   return engine;
 }
 
@@ -213,7 +238,11 @@ json SandboxJson::toJson(const MatchSetup& setup)
           {"familiarity", setup.familiarity},
           {"conditions", conditions},
           {"medical_flags", medical},
-          {"auto_substitutions", setup.autoSubstitutions}};
+          {"auto_substitutions", setup.autoSubstitutions},
+          {"brains",
+           {brainKey(setup.brains[0]), brainKey(setup.brains[1])}},
+          {"bodies", {bodyKey(setup.bodies[0]), bodyKey(setup.bodies[1])}},
+          {"handshake", handshakeKey(setup.handshake)}};
 }
 
 bool SandboxJson::fromJson(const json& value, MatchSetup& setup,
@@ -249,6 +278,44 @@ bool SandboxJson::fromJson(const json& value, MatchSetup& setup,
                                       item.at(1).get<std::uint8_t>());
     setup.autoSubstitutions =
         value.at("auto_substitutions").get<std::array<bool, 2>>();
+    // Older setups have no brains: both sides played the Original brain.
+    if (const auto brains = value.find("brains"); brains != value.end())
+      for (std::size_t index = 0; index < setup.brains.size(); ++index)
+      {
+        const auto key = brains->at(index).get<std::string>();
+        const auto brain = brainFromKey(key);
+        if (!brain)
+        {
+          error = std::format("setup: unknown brain '{}'", key);
+          return false;
+        }
+        setup.brains[index] = *brain;
+      }
+    // Likewise older setups have no bodies: both sides played the Original.
+    if (const auto bodies = value.find("bodies"); bodies != value.end())
+      for (std::size_t index = 0; index < setup.bodies.size(); ++index)
+      {
+        const auto key = bodies->at(index).get<std::string>();
+        const auto body = bodyFromKey(key);
+        if (!body)
+        {
+          error = std::format("setup: unknown body '{}'", key);
+          return false;
+        }
+        setup.bodies[index] = *body;
+      }
+    // And no handshake: they were built with the Original.
+    if (const auto handshake = value.find("handshake"); handshake != value.end())
+    {
+      const auto key = handshake->get<std::string>();
+      const auto converted = handshakeFromKey(key);
+      if (!converted)
+      {
+        error = std::format("setup: unknown handshake '{}'", key);
+        return false;
+      }
+      setup.handshake = *converted;
+    }
     return true;
   }
   catch (const std::exception& problem)

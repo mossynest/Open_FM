@@ -54,6 +54,7 @@
 #include "tools/match_sandbox_measure.h"
 #include "tools/match_sandbox_shot_map.h"
 #include "tools/match_sandbox_scene.h"
+#include "tools/match_sandbox_setup.h"
 
 namespace
 {
@@ -93,6 +94,30 @@ int main(int argc, char* argv[])
       if (std::from_chars(value.data(), value.data() + value.size(), worldSeed)
               .ec == std::errc())
         continue;
+    }
+    else if (argument == "--brains" && index + 1 < argc)
+    {
+      if (const auto brains = parseBrainPair(argv[++index]))
+      {
+        sandboxBrains() = *brains;
+        continue;
+      }
+    }
+    else if (argument == "--bodies" && index + 1 < argc)
+    {
+      if (const auto bodies = parseBodyPair(argv[++index]))
+      {
+        sandboxBodies() = *bodies;
+        continue;
+      }
+    }
+    else if (argument == "--handshake" && index + 1 < argc)
+    {
+      if (const auto handshake = handshakeFromKey(argv[++index]))
+      {
+        sandboxHandshake() = *handshake;
+        continue;
+      }
     }
     else if (argument == "--measure-view" && index + 1 < argc)
     {
@@ -148,8 +173,10 @@ int main(int argc, char* argv[])
       continue;
     }
     std::cerr << "Usage: " << argv[0]
-              << " [--world-seed N] [--kick-off] [--drill NAME] "
-                 "[--check [MATCHES]]\n"
+              << " [--world-seed N] [--brains HOME,AWAY] [--bodies HOME,AWAY]"
+                 " [--handshake H] [--kick-off] [--drill NAME] [--check [MATCHES]]\n"
+                 "  (--brains, --bodies: original or new-v1 per side, one name "
+                 "for both; before --measure or --shot-map)\n"
                  "  [--measure DRILL --sweep \"Pace=40:95:12\" [--by \"Who runs\"]\n"
                  "   [--set NAME=VALUE]... [--repeats N] [--seed N] [--csv [PATH]]]\n"
                  "  [--shot-map [--line A:B:N] [--side A:B:N] [--repeats N]\n"

@@ -213,6 +213,15 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
 
   for (const PlayerMatchStats& entry : engine.getPlayerStats())
   {
+    sample.tackles_attempted += entry.tacklesAttempted;
+    sample.tackles_won += entry.tacklesWon;
+    sample.interceptions += entry.interceptions;
+    sample.clearances += entry.clearances;
+    sample.aerial_duels += entry.aerialDuelsWon + entry.aerialDuelsLost;
+    sample.pressures += entry.pressures;
+    sample.key_passes += entry.keyPasses;
+    sample.saves += entry.saves;
+    sample.touches += entry.touches;
     const bool fullMatch = entry.started && !entry.substitutedOff &&
                            !entry.sentOff && !entry.injured;
     if (!fullMatch || entry.role == PlayerRole::GK) continue;
@@ -220,6 +229,10 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
     sample.full_match_distance += static_cast<double>(entry.distanceMetres);
     sample.second_half_distance +=
         static_cast<double>(entry.secondHalfDistanceMetres);
+    sample.full_match_high_intensity +=
+        static_cast<double>(entry.highIntensityMetres);
+    sample.full_match_sprint += static_cast<double>(entry.sprintMetres);
+    sample.full_match_sprints += entry.sprints;
   }
   sample.first_half_distance =
       sample.full_match_distance - sample.second_half_distance;
@@ -286,7 +299,12 @@ MatchSample simulateMatch(const MatchJob& job, const StatsConfig& config)
   Strategy awayStrategy;
   awayStrategy.setAllSliders(job.away.sliders);
 
-  MatchEngine engine(home, away, homeStrategy, awayStrategy, config, job.seed);
+  MatchEngine engine(home, away, homeStrategy, awayStrategy, config, job.seed,
+                     job.handshake);
+  engine.setBrain(true, job.home.brain);
+  engine.setBrain(false, job.away.brain);
+  engine.setBody(true, job.home.body);
+  engine.setBody(false, job.away.body);
   MatchdaySquad::carryCondition(engine, home);
   MatchdaySquad::carryCondition(engine, away);
   runToFullTime(engine, job.seed, job.background);
@@ -522,10 +540,43 @@ std::map<std::string, Estimate> matchMetrics(
   metrics["added_time_minutes"] = meanEstimate(
       column([](const MatchSample& s) { return s.added_minutes; }));
   // Distance: full-match outfield starters, km per player.
+  const std::vector<double> fullMatchPlayers =
+      column([](const MatchSample& s) { return s.full_match_players; });
   metrics["distance_per_outfielder_km"] = ratioEstimate(
       column([](const MatchSample& s)
              { return s.full_match_distance / 1000.0; }),
-      column([](const MatchSample& s) { return s.full_match_players; }));
+      fullMatchPlayers);
+  // Player behaviour: what the brain decides shows here first.
+  const std::vector<double> tackles =
+      column([](const MatchSample& s) { return s.tackles_attempted; });
+  metrics["tackles_per_team"] =
+      perTeam([](const MatchSample& s) { return s.tackles_attempted; });
+  metrics["tackle_success"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.tackles_won; }), tackles);
+  metrics["interceptions_per_team"] =
+      perTeam([](const MatchSample& s) { return s.interceptions; });
+  metrics["clearances_per_team"] =
+      perTeam([](const MatchSample& s) { return s.clearances; });
+  metrics["aerial_duels_per_match"] =
+      meanEstimate(column([](const MatchSample& s) { return s.aerial_duels; }));
+  metrics["pressures_per_team"] =
+      perTeam([](const MatchSample& s) { return s.pressures; });
+  metrics["key_passes_per_team"] =
+      perTeam([](const MatchSample& s) { return s.key_passes; });
+  metrics["saves_per_team"] =
+      perTeam([](const MatchSample& s) { return s.saves; });
+  metrics["touches_per_team"] =
+      perTeam([](const MatchSample& s) { return s.touches; });
+  metrics["high_intensity_per_outfielder_km"] = ratioEstimate(
+      column([](const MatchSample& s)
+             { return s.full_match_high_intensity / 1000.0; }),
+      fullMatchPlayers);
+  metrics["sprint_per_outfielder_km"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.full_match_sprint / 1000.0; }),
+      fullMatchPlayers);
+  metrics["sprints_per_outfielder"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.full_match_sprints; }),
+      fullMatchPlayers);
   // Second-half vs first-half distance per minute of those players, pooled
   // over matches (distance / (half length x players)); bootstrap.
   metrics["second_half_distance_change"] = bootstrapEstimate(

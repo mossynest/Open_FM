@@ -124,8 +124,12 @@ std::unique_ptr<MatchEngine> makeEngine(const Team& home, const Team& away,
 {
   auto engine = std::make_unique<MatchEngine>(
       home.getLineup(), away.getLineup(), home.getStrategy(),
-      away.getStrategy(), config, seed);
+      away.getStrategy(), config, seed, sandboxHandshake());
   engine->setTeamNames(home.getName(), away.getName());
+  engine->setBrain(true, sandboxBrains()[0]);
+  engine->setBrain(false, sandboxBrains()[1]);
+  engine->setBody(true, sandboxBodies()[0]);
+  engine->setBody(false, sandboxBodies()[1]);
   return engine;
 }
 
@@ -732,11 +736,45 @@ int runSandboxChecks(GameController& controller, int matches)
       bool exact = false;
       bool tickFound = false;
       bool decisionFound = false;
+      std::string newBrainReplay = "not run";
+      std::string newBodyReplay = "not run";
+      std::string newHandshakeReplay = "not run";
       if (loaded)
       {
         const Recordings::Replay replay = Recordings::replay(*loaded, controller);
         exact = replay.match && !replay.divergedAt &&
                 !replay.firstDifferentDecision;
+        // Side by side with the brain being developed (information only:
+        // identical while New v1 is still a copy of the Original brain).
+        const Recordings::Replay withNew = Recordings::replay(
+            *loaded, controller, std::array{BrainId::NEW_V1, BrainId::NEW_V1});
+        newBrainReplay =
+            !withNew.match ? "failed: " + withNew.error
+            : !withNew.divergedAt && !withNew.firstDifferentDecision
+                ? std::string("same as the recording")
+                : std::format("differs from tick {}",
+                              withNew.divergedAt.value_or(0));
+        // The same with the body being developed (information only too).
+        const Recordings::Replay withNewBody =
+            Recordings::replay(*loaded, controller, std::nullopt,
+                               std::array{BodyId::NEW_V1, BodyId::NEW_V1});
+        newBodyReplay =
+            !withNewBody.match ? "failed: " + withNewBody.error
+            : !withNewBody.divergedAt && !withNewBody.firstDifferentDecision
+                ? std::string("same as the recording")
+                : std::format("differs from tick {}",
+                              withNewBody.divergedAt.value_or(0));
+        // And with the handshake being developed (information only too).
+        const Recordings::Replay withNewHandshake =
+            Recordings::replay(*loaded, controller, std::nullopt, std::nullopt,
+                               HandshakeId::NEW_V1);
+        newHandshakeReplay =
+            !withNewHandshake.match ? "failed: " + withNewHandshake.error
+            : !withNewHandshake.divergedAt &&
+                    !withNewHandshake.firstDifferentDecision
+                ? std::string("same as the recording")
+                : std::format("differs from tick {}",
+                              withNewHandshake.divergedAt.value_or(0));
         // Tampered copies: one fingerprint, one decision's score.
         MatchRecording tampered = *loaded;
         const std::uint64_t at = tampered.lastTick / 2;
@@ -760,6 +798,15 @@ int runSandboxChecks(GameController& controller, int matches)
           captureSeconds, roundTrip ? "yes" : "NO", exact ? "yes" : "NO",
           tickFound ? "yes" : "NO", decisionFound ? "yes" : "NO",
           error.empty() ? "" : "  (" + error + ")");
+      std::cout << std::format(
+          "Replay with brains New v1 v New v1 (recorded with {}): {}\n",
+          brainPairName(recording.setup.brains), newBrainReplay);
+      std::cout << std::format(
+          "Replay with bodies New v1 v New v1 (recorded with {}): {}\n",
+          bodyPairName(recording.setup.bodies), newBodyReplay);
+      std::cout << std::format(
+          "Replay with handshake New v1 (recorded with {}): {}\n",
+          handshakeName(recording.setup.handshake), newHandshakeReplay);
     }
     std::cout << std::format(
         "\nFull detail: {} stretches, {:.1f} ms each; {} decisions, {} pass "

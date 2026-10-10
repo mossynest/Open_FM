@@ -66,6 +66,10 @@ class MatchSandboxScene : public GUIScene
 
   void renderSide(Side& side, bool home, float width, float height);
   void renderClubPicker(Side& side, bool home);
+  /** Which brain the side plays with (edits sandboxBrains()). */
+  void renderBrainPicker(bool home);
+  /** Which body the side's players play with (edits sandboxBodies()). */
+  void renderBodyPicker(bool home);
   void renderFormation(Team& team);
   void renderInstructions(Strategy& strategy);
   void renderSelection(Team& team);
@@ -98,7 +102,17 @@ class MatchSandboxScene : public GUIScene
   // Recordings (debugger phase 5).
   void saveRecording();
   void renderRecordings();
-  void loadRecording(const std::filesystem::path& path);
+  /** @param brains, bodies Replay with these (home, away) instead of the
+   * recorded ones: side by side, the comparison shows where they differ. */
+  void loadRecording(const std::filesystem::path& path,
+                     std::optional<std::array<BrainId, 2>> brains = {},
+                     std::optional<std::array<BodyId, 2>> bodies = {},
+                     std::optional<HandshakeId> handshake = {});
+  /** The brains and bodies chosen for "Replay with" in the Recordings
+   * window. */
+  std::array<BrainId, 2> replay_brains{BrainId::NEW_V1, BrainId::NEW_V1};
+  std::array<BodyId, 2> replay_bodies{BodyId::ORIGINAL, BodyId::ORIGINAL};
+  HandshakeId replay_handshake = HandshakeId::ORIGINAL;
 
   /** What the current (or last) match was built from. */
   std::optional<MatchSetup> match_setup;

@@ -18,6 +18,9 @@
 #include <vector>
 
 #include "global/stats_config.h"
+#include "model/match_body.h"
+#include "model/match_brain.h"
+#include "model/match_handshake.h"
 #include "model/strategy.h"
 #include "tools/lab_report.h"
 #include "tools/lab_stats.h"
@@ -99,6 +102,21 @@ struct MatchSample
   std::array<int, 3> state_goals{};
   std::array<double, 3> strength_minutes{};
   std::array<int, 3> strength_goals{};
+  /** Player behaviour, summed over both teams' players (engine only). */
+  int tackles_attempted = 0;
+  int tackles_won = 0;
+  int interceptions = 0;
+  int clearances = 0;
+  int aerial_duels = 0;
+  int pressures = 0;
+  int key_passes = 0;
+  int saves = 0;
+  int touches = 0;
+  /** High-intensity and sprint running of the full-match outfield starters
+   * (the same players as full_match_distance). */
+  double full_match_high_intensity = 0.0;
+  double full_match_sprint = 0.0;
+  int full_match_sprints = 0;
 
   int totalGoals() const { return goals[0] + goals[1]; }
 };
@@ -108,6 +126,8 @@ struct TeamSetup
 {
   float rating = 65.0f;
   StrategySliders sliders{};
+  BrainId brain = BrainId::ORIGINAL;
+  BodyId body = BodyId::ORIGINAL;
 };
 
 struct MatchJob
@@ -117,6 +137,8 @@ struct MatchJob
   TeamSetup away;
   /** Played with MatchFidelity::BACKGROUND (as unwatched fixtures are). */
   bool background = false;
+  /** How the inputs become match state (one per match). */
+  HandshakeId handshake = HandshakeId::ORIGINAL;
 };
 
 /** A match that did not reach full time or produced invalid numbers. */

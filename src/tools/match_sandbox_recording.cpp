@@ -439,8 +439,11 @@ std::optional<MatchRecording> Recordings::load(
   }
 }
 
-Recordings::Replay Recordings::replay(const MatchRecording& recording,
-                                      const GameController& controller)
+Recordings::Replay Recordings::replay(
+    const MatchRecording& recording, const GameController& controller,
+    std::optional<std::array<BrainId, 2>> brains,
+    std::optional<std::array<BodyId, 2>> bodies,
+    std::optional<HandshakeId> handshake)
 {
   Replay result;
   if (recording.setup.worldSeed != controller.getWorldSeed())
@@ -452,7 +455,11 @@ Recordings::Replay Recordings::replay(const MatchRecording& recording,
         recording.setup.worldSeed);
     return result;
   }
-  auto engine = recording.setup.build(controller, result.error);
+  MatchSetup setup = recording.setup;
+  if (brains) setup.brains = *brains;
+  if (bodies) setup.bodies = *bodies;
+  if (handshake) setup.handshake = *handshake;
+  auto engine = setup.build(controller, result.error);
   if (!engine) return result;
   engine->loadCommandReplay(recording.commands);
   engine->loadInputReplay(recording.inputs);

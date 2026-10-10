@@ -16,6 +16,7 @@
 #include "model/lineup.h"
 #include "model/player.h"
 #include "model/strategy.h"
+#include "tools/match_sandbox_setup.h"
 
 namespace
 {
@@ -79,8 +80,13 @@ DrillRun::DrillRun(Drill& drill_ref, const StatsConfig& config, bool record)
   }
 
   match = std::make_unique<MatchEngine>(lineups[0], lineups[1], Strategy{},
-                                        Strategy{}, config, drill.seed);
+                                        Strategy{}, config, drill.seed,
+                                        sandboxHandshake());
   match->setTeamNames("Drill home", "Drill away");
+  match->setBrain(true, sandboxBrains()[0]);
+  match->setBrain(false, sandboxBrains()[1]);
+  match->setBody(true, sandboxBodies()[0]);
+  match->setBody(false, sandboxBodies()[1]);
   match->setDrillRules({false, false});
   // Only the drill's players take part.
   for (const auto& player : pool)
