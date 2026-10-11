@@ -30,6 +30,72 @@
 
 using namespace MatchEngineInternal;
 
+namespace
+{
+// Arriving: a player at full effort slows at this share of his braking, the
+// average deceleration of a maximal stop from a sprint (about 4.2-5 m/s^2 in
+// team-sport athletes, Harper et al. 2020), against braking peaks of 6-8.
+// Lower effort slows more gently, never below the old fixed arrival rate.
+constexpr float ARRIVAL_BRAKING_SHARE = 0.7f;
+// He stops this close to his target rather than short of it.
+constexpr float ARRIVAL_TOLERANCE_METRES = 0.1f;
+// Pivoting: from a standstill he can push off in any direction; on the move
+// he speeds up or brakes along his run and turns within a lateral limit.
+// The second takes over gradually, fully from this speed (no cliff).
+constexpr float PIVOT_BLEND_SPEED = 1.2f;
+// A fully tired player brakes and turns this much less sharply. Fatigue is
+// reported to hurt changes of direction at least as much as straight-line
+// speed, so the same share as top speed for now (a guess to tune).
+constexpr float FATIGUE_BRAKING_LOSS = 0.14f;
+constexpr float FATIGUE_TURNING_LOSS = 0.14f;
+
+/** His grip: the Agility stat's multiplier on the lateral limit every
+ * player has (0.9 for a part-timer, 1.1 for the elite). One value for both
+ * feet: the body does not know which foot is down, so the outside foot's
+ * stronger cut and the inside foot's weaker one average out. */
+inline float playerGrip(const MatchPlayer& player)
+{
+  return derivedPhysicalValue(DerivedStat::AGILITY,
+                              player.derivedStat(DerivedStat::AGILITY));
+}
+
+// Energy: two tanks (critical speed and D', the W' balance model of Skiba et
+// al. for intermittent running).
+// - Fuel (`stamina`, floor MINIMUM_STAMINA): the whole match's work, drained
+//   as before but by the fuel capacity stat, never refilled in play. A
+//   fully used fuel tank lowers the critical speed and the burst capacity
+//   by these shares (late-match tiredness: fewer, slower repeat efforts).
+constexpr float CRITICAL_SPEED_FUEL_LOSS = 0.10f;
+constexpr float BURST_FUEL_LOSS = 0.25f;
+// - Burst reserve (`sprintReserve`, a share of the fresh burst capacity):
+//   metres run above the critical speed drain it one for one; below it, it
+//   refills toward full with the recovery rate's time constant, slower the
+//   closer he still runs to his critical speed (x 2.8 at it: about 120 s
+//   after light and 340 s after heavy recovery in intermittent trials).
+constexpr float RECOVERY_EFFORT_SLOWING = 1.8f;
+// With the reserve empty he can still go this share of the way from his
+// critical speed to his top speed.
+constexpr float EMPTY_BURST_SHARE = 0.35f;
+
+/** The top speed his body allows now: fuel trims the top end; above his
+ * critical speed, how much of the rest he can reach depends on the burst
+ * reserve. */
+inline float burstTopSpeed(float maxSpeed, float fatigue, float reserve,
+                           float injury, float criticalSpeed)
+{
+  using P = MatchTuning::Player;
+  const float fresh = maxSpeed * (1.0f - P::FATIGUE_TOP_SPEED_LOSS * fatigue);
+  const float sustainable = std::min(
+      criticalSpeed * (1.0f - CRITICAL_SPEED_FUEL_LOSS * fatigue), fresh);
+  const float capacity = 1.0f - BURST_FUEL_LOSS * fatigue;
+  const float fullness = std::clamp(reserve / capacity, 0.0f, 1.0f);
+  return (sustainable +
+          (fresh - sustainable) *
+              (EMPTY_BURST_SHARE + (1.0f - EMPTY_BURST_SHARE) * fullness)) *
+         injury;
+}
+}  // namespace
+
 float MatchEngine::executionErrorScaleNewV1(const MatchPlayer& player) const
 {
   // Tired players lose precision, and a home crowd lifts the home side a
@@ -77,16 +143,14 @@ void MatchEngine::moveControlledNewV1(MatchPlayer& player, Vector2F desired,
 float MatchEngine::currentTopSpeedNewV1(
     const MatchPlayer& player) const
 {
-  using P = MatchTuning::Player;
   const float fatigue =
       std::clamp((1.0f - player.stamina) * INVERSE_FATIGUE_RANGE, 0.0f, 1.0f);
-  const float reserve =
-      P::EMPTY_RESERVE_TOP_SPEED +
-      (1.0f - P::EMPTY_RESERVE_TOP_SPEED) * player.sprintReserve;
   const float injury =
       player.isInjured ? MatchTuning::Injury::INJURED_SPEED_SCALE : 1.0f;
-  return player.maxSpeed * (1.0f - P::FATIGUE_TOP_SPEED_LOSS * fatigue) *
-         reserve * injury;
+  return burstTopSpeed(
+      player.maxSpeed, fatigue, player.sprintReserve, injury,
+      derivedPhysicalValue(DerivedStat::ENDURANCE,
+                           player.derivedStat(DerivedStat::ENDURANCE)));
 }
 
 FM_KERNEL_CLONES void MatchEngine::integrateMovementsNewV1(const std::uint8_t* slots,
@@ -120,9 +184,15 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsNewV1(const std::uint8_t* s
   alignas(16) std::array<float, LANES> intentScale;
   alignas(16) std::array<float, LANES> urgencyDistance;
   alignas(16) std::array<float, LANES> maxUrgency;
+  alignas(16) std::array<float, LANES> pacing;
+  alignas(16) std::array<float, LANES> criticalSpeed;
+  alignas(16) std::array<float, LANES> burstSaving;
   alignas(16) std::array<float, LANES> talk;
   alignas(16) std::array<float, LANES> shout;
   alignas(16) std::array<float, LANES> turnRate;
+  alignas(16) std::array<float, LANES> grip;
+  alignas(16) std::array<float, LANES> targetVelocityX;
+  alignas(16) std::array<float, LANES> targetVelocityY;
   std::array<MatchPlayer*, LANES> movers;
   std::size_t moving = 0;
   for (std::size_t index = 0; index < count; ++index)
@@ -131,27 +201,40 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsNewV1(const std::uint8_t* s
     Vector2F target = walking ? player.movementTarget : player.tacticalTarget;
     target.x = std::clamp(target.x, Pitch::PLAYER_MIN_X, Pitch::PLAYER_MAX_X);
     target.y = std::clamp(target.y, Pitch::PLAYER_MIN_Y, Pitch::PLAYER_MAX_Y);
-    // Players react to a moving target with a perception/intent lag; a side
-    // unfamiliar with its tactics reacts later.
+    // A brain with a target lag has its players absorb a new target
+    // gradually (a side unfamiliar with its tactics more slowly); without one
+    // they head straight for it.
     const bool urgent = !walking && player.urgentMovement;
     const float targetBlend =
         targetBlends[(player.isHomeTeam ? 0U : 2U) + (urgent ? 1U : 0U)];
-    player.movementTarget.x +=
-        (target.x - player.movementTarget.x) * targetBlend;
-    player.movementTarget.y +=
-        (target.y - player.movementTarget.y) * targetBlend;
+    if (targetBlend >= 1.0f)
+    {
+      player.movementTarget = target;
+    }
+    else
+    {
+      player.movementTarget.x +=
+          (target.x - player.movementTarget.x) * targetBlend;
+      player.movementTarget.y +=
+          (target.y - player.movementTarget.y) * targetBlend;
+    }
     const Vector2F offset =
         toMetres({player.movementTarget.x - player.position.x,
                   player.movementTarget.y - player.position.y});
+    const Vector2F movingTarget =
+        walking ? Vector2F{0.0f, 0.0f} : player.targetVelocity;
     // A player standing on his spot stays put (the common case in stoppages).
     if (offset.x * offset.x + offset.y * offset.y <=
             P::ARRIVAL_DEAD_ZONE_METRES * P::ARRIVAL_DEAD_ZONE_METRES &&
-        player.velocity.x == 0.0f && player.velocity.y == 0.0f)
+        player.velocity.x == 0.0f && player.velocity.y == 0.0f &&
+        movingTarget.x == 0.0f && movingTarget.y == 0.0f)
       continue;
     const std::size_t lane = moving++;
     movers[lane] = &player;
     offsetX[lane] = offset.x;
     offsetY[lane] = offset.y;
+    targetVelocityX[lane] = movingTarget.x;
+    targetVelocityY[lane] = movingTarget.y;
     velocityX[lane] = player.velocity.x;
     velocityY[lane] = player.velocity.y;
     positionX[lane] = player.position.x;
@@ -171,9 +254,18 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsNewV1(const std::uint8_t* s
                 : style.intentSpeedShares[static_cast<std::size_t>(player.intent)];
     urgencyDistance[lane] = style.urgencyDistanceMetres;
     maxUrgency[lane] = style.maxUrgencyShare;
+    pacing[lane] = style.fatigueWorkRateLoss;
+    // Whether he keeps something in reserve on this job is his brain's.
+    burstSaving[lane] =
+        !walking && style.savesBurst[static_cast<std::size_t>(player.intent)]
+            ? style.burstSavingReserve
+            : 0.0f;
+    criticalSpeed[lane] = derivedPhysicalValue(
+        DerivedStat::ENDURANCE, player.derivedStat(DerivedStat::ENDURANCE));
     talk[lane] = talkOf(player.isHomeTeam);
     shout[lane] = shoutWorkRate(player.isHomeTeam);
     turnRate[lane] = player.turnRate;
+    grip[lane] = playerGrip(player);
   }
 
   for (std::size_t lane = 0; lane < moving; ++lane)
@@ -184,41 +276,63 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsNewV1(const std::uint8_t* s
         std::sqrt(targetX * targetX + targetY * targetY);
     const float fatigue =
         std::clamp((1.0f - stamina[lane]) * INVERSE_FATIGUE_RANGE, 0.0f, 1.0f);
-    const float topSpeed =
-        maxSpeed[lane] * (1.0f - P::FATIGUE_TOP_SPEED_LOSS * fatigue) *
-        (P::EMPTY_RESERVE_TOP_SPEED +
-         (1.0f - P::EMPTY_RESERVE_TOP_SPEED) * reserve[lane]) *
-        injury[lane];
+    const float topSpeed = burstTopSpeed(maxSpeed[lane], fatigue, reserve[lane],
+                                         injury[lane], criticalSpeed[lane]);
     // Players jog while in position but run hard to recover a lost position.
-    // Intent speeds are shares of the fresh top speed; tired players choose
-    // to run a little less hard and lose the top end.
+    // Intent speeds are shares of the fresh top speed; how much less hard a
+    // tired player chooses to run is his brain's pacing.
     const float urgency =
         walking
             ? intentScale[lane]
             : std::max(intentScale[lane],
                        std::min(maxUrgency[lane],
                                 targetDistance / urgencyDistance[lane]));
-    const float speedCap =
-        std::min(topSpeed, maxSpeed[lane] *
-                               (1.0f - P::FATIGUE_WORK_RATE_LOSS * fatigue +
-                                talk[lane] + shout[lane]) *
-                               urgency);
-    // Arrive without overshooting: the desired speed falls off so a
-    // comfortable deceleration stops the player on the target.
-    const float approach = targetDistance - P::ARRIVAL_DEAD_ZONE_METRES;
-    const float arrivalSpeed =
-        std::sqrt(2.0f * P::ARRIVAL_DECELERATION * std::max(approach, 0.0f));
-    const float desiredSpeed =
-        approach <= 0.0f ? 0.0f : std::min(speedCap, arrivalSpeed);
+    // Tired legs brake and turn less sharply.
+    const float brake =
+        braking[lane] * (1.0f - FATIGUE_BRAKING_LOSS * fatigue);
+    const float effort = (1.0f - pacing[lane] * fatigue +
+                          talk[lane] + shout[lane]) *
+                         urgency;
+    // On a job where his brain saves the burst reserve, a low reserve keeps
+    // him closer to his critical speed (at an empty one, to it).
+    const float sustainable =
+        std::min(criticalSpeed[lane] *
+                     (1.0f - CRITICAL_SPEED_FUEL_LOSS * fatigue),
+                 topSpeed);
+    const float fullness = std::clamp(
+        reserve[lane] / (1.0f - BURST_FUEL_LOSS * fatigue), 0.0f, 1.0f);
+    const float saved =
+        burstSaving[lane] > 0.0f
+            ? std::clamp(fullness / std::max(burstSaving[lane], EPSILON), 0.0f,
+                         1.0f)
+            : 1.0f;
+    const float pacedTop = sustainable + (topSpeed - sustainable) * saved;
+    const float speedCap = std::min(pacedTop, maxSpeed[lane] * effort);
     // Quotients are formed for every lane and discarded where unused.
     const bool aimed = targetDistance > EPSILON;
     const float directionX = targetX / targetDistance;
     const float directionY = targetY / targetDistance;
+    // Arrive without overshooting: the desired speed falls off so he stops
+    // on the target, braking as hard as the effort he is putting in. A
+    // target moving away is closed on at that speed on top.
+    const float arrivalDeceleration =
+        std::max(P::ARRIVAL_DECELERATION,
+                 ARRIVAL_BRAKING_SHARE * brake * std::min(effort, 1.0f));
+    const float approach = targetDistance - ARRIVAL_TOLERANCE_METRES;
+    const float receding = std::max(
+        0.0f, aimed ? targetVelocityX[lane] * directionX +
+                          targetVelocityY[lane] * directionY
+                    : 0.0f);
+    const float arrivalSpeed =
+        std::sqrt(2.0f * arrivalDeceleration * std::max(approach, 0.0f)) +
+        receding;
+    const float desiredSpeed = std::min(speedCap, arrivalSpeed);
     const float desiredX = (aimed ? directionX : 0.0f) * desiredSpeed;
     const float desiredY = (aimed ? directionY : 0.0f) * desiredSpeed;
 
     // Acceleration-speed profile a(v) = A0 (1 - v / vmax), stronger braking,
-    // and a lateral limit that forces a player to slow down to turn sharply.
+    // and a lateral limit (scaled by his grip) that forces a player to slow
+    // down to turn sharply.
     const float push =
         acceleration[lane] * (1.0f - P::FATIGUE_ACCELERATION_LOSS * fatigue);
     const float oldX = velocityX[lane];
@@ -226,9 +340,8 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsNewV1(const std::uint8_t* s
     const float speed = std::sqrt(oldX * oldX + oldY * oldY);
     const float changeX = desiredX - oldX;
     const float changeY = desiredY - oldY;
-    const float brake = braking[lane];
     const float drive = push * std::max(0.05f, 1.0f - speed / topSpeed);
-    // Starting from (almost) a standstill: move straight toward the target.
+    // From a standstill: push off straight toward the target.
     const float limit = (desiredSpeed >= speed ? drive : brake) * dt;
     const float magnitude = std::sqrt(changeX * changeX + changeY * changeY);
     const float shortfall = limit / magnitude;
@@ -249,13 +362,20 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsNewV1(const std::uint8_t* s
         (P::LATERAL_ACCELERATION_SLOW +
          (P::LATERAL_ACCELERATION_FAST - P::LATERAL_ACCELERATION_SLOW) *
              speedShare) *
+        grip[lane] *
+        (1.0f - FATIGUE_TURNING_LOSS * fatigue) *
         dt;
     across = std::clamp(across, -lateral, lateral);
     const float fastX = oldX + (tangentX * along + normalX * across);
     const float fastY = oldY + (tangentY * along + normalY * across);
+    // The run's own rule takes over gradually with speed (none at a
+    // standstill, where the run has no direction).
+    const float pivot = std::min(speed / PIVOT_BLEND_SPEED, 1.0f);
+    const float runX = speed > 0.0f ? fastX : slowX;
+    const float runY = speed > 0.0f ? fastY : slowY;
     const bool stop = (desiredSpeed == 0.0f) & (speed <= brake * dt);
-    float nextVelocityX = stop ? 0.0f : speed < 0.5f ? slowX : fastX;
-    float nextVelocityY = stop ? 0.0f : speed < 0.5f ? slowY : fastY;
+    float nextVelocityX = stop ? 0.0f : slowX + (runX - slowX) * pivot;
+    float nextVelocityY = stop ? 0.0f : slowY + (runY - slowY) * pivot;
     const float squaredSpeed =
         nextVelocityX * nextVelocityX + nextVelocityY * nextVelocityY;
     const float capScale = topSpeed / std::sqrt(squaredSpeed);
@@ -325,49 +445,59 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsNewV1(const std::uint8_t* s
 {
   using P = MatchTuning::Player;
   // Acceleration-speed profile a(v) = A0 (1 - v / vmax), stronger braking,
-  // and a lateral limit that forces a player to slow down to turn sharply.
+  // and a lateral limit (scaled by his grip) that forces a player to slow
+  // down to turn sharply.
   const float acceleration =
       player.acceleration * (1.0f - P::FATIGUE_ACCELERATION_LOSS * fatigue);
+  // Tired legs brake and turn less sharply.
+  const float braking =
+      player.braking * (1.0f - FATIGUE_BRAKING_LOSS * fatigue);
   Vector2F velocity = player.velocity;
   const float speed = length(velocity);
   const Vector2F change{desired.x - velocity.x, desired.y - velocity.y};
-  if (desiredSpeed == 0.0f && speed <= player.braking * dt)
+  if (desiredSpeed == 0.0f && speed <= braking * dt)
   {
     velocity = {0.0f, 0.0f};
   }
-  else if (speed < 0.5f)
+  else
   {
+    // From a standstill: push off straight toward the target.
+    const float drive =
+        acceleration * std::max(0.05f, 1.0f - speed / topSpeed);
     const float limit =
-        (desiredSpeed >= speed
-             ? acceleration * std::max(0.05f, 1.0f - speed / topSpeed)
-             : player.braking) *
-        dt;
+        (desiredSpeed >= speed ? drive : braking) * dt;
     const float magnitude = length(change);
     const float shortfall = limit / magnitude;
     const float scale = magnitude > limit ? shortfall : 1.0f;
-    velocity.x += change.x * scale;
-    velocity.y += change.y * scale;
-  }
-  else
-  {
-    const Vector2F tangent{velocity.x / speed, velocity.y / speed};
-    const Vector2F normal{-tangent.y, tangent.x};
-    float along = change.x * tangent.x + change.y * tangent.y;
-    float across = change.x * normal.x + change.y * normal.y;
-    along =
-        along > 0.0f
-            ? std::min(along, acceleration *
-                                  std::max(0.05f, 1.0f - speed / topSpeed) * dt)
-            : std::max(along, -player.braking * dt);
-    const float speedShare = std::clamp(speed / player.maxSpeed, 0.0f, 1.0f);
-    const float lateral =
-        (P::LATERAL_ACCELERATION_SLOW +
-         (P::LATERAL_ACCELERATION_FAST - P::LATERAL_ACCELERATION_SLOW) *
-             speedShare) *
-        dt;
-    across = std::clamp(across, -lateral, lateral);
-    velocity.x += tangent.x * along + normal.x * across;
-    velocity.y += tangent.y * along + normal.y * across;
+    const Vector2F pushOff{velocity.x + change.x * scale,
+                           velocity.y + change.y * scale};
+    Vector2F run = pushOff;
+    if (speed > 0.0f)
+    {
+      // On the move: accelerate or brake along the run, turn within the
+      // limit.
+      const Vector2F tangent{velocity.x / speed, velocity.y / speed};
+      const Vector2F normal{-tangent.y, tangent.x};
+      float along = change.x * tangent.x + change.y * tangent.y;
+      float across = change.x * normal.x + change.y * normal.y;
+      along = along > 0.0f ? std::min(along, drive * dt)
+                           : std::max(along, -braking * dt);
+      const float speedShare = std::clamp(speed / player.maxSpeed, 0.0f, 1.0f);
+      const float lateral =
+          (P::LATERAL_ACCELERATION_SLOW +
+           (P::LATERAL_ACCELERATION_FAST - P::LATERAL_ACCELERATION_SLOW) *
+               speedShare) *
+          playerGrip(player) *
+          (1.0f - FATIGUE_TURNING_LOSS * fatigue) *
+          dt;
+      across = std::clamp(across, -lateral, lateral);
+      run = {velocity.x + tangent.x * along + normal.x * across,
+             velocity.y + tangent.y * along + normal.y * across};
+    }
+    // The run's own rule takes over gradually with speed.
+    const float pivot = std::min(speed / PIVOT_BLEND_SPEED, 1.0f);
+    velocity = {pushOff.x + (run.x - pushOff.x) * pivot,
+                pushOff.y + (run.y - pushOff.y) * pivot};
   }
   const float squaredSpeed = velocity.x * velocity.x + velocity.y * velocity.y;
   if (squaredSpeed > topSpeed * topSpeed)
@@ -412,36 +542,51 @@ void MatchEngine::spendEnergyNewV1(FitnessLanes& lanes, std::size_t begin,
                               std::size_t end, float dt,
                               bool /*homeTeam*/) const
 {
-  using L = MatchTuning::Load;
-  using F = MatchTuning::Fatigue;
   auto& [fromX, fromY, toX, toY, topSpeed, endurance, pressingEffort,
          sideDrain, stamina, reserve, stepMetres, nextStamina, nextReserve] =
       lanes;
+  // The endurance stats, lane by lane (filled with these lanes).
+  const EnduranceLanes& physiology = enduranceLanes;
   for (std::size_t lane = begin; lane < end; ++lane)
   {
     const float metresX = (fromX[lane] - toX[lane]) * PITCH_LENGTH;
     const float metresY = (fromY[lane] - toY[lane]) * PITCH_WIDTH;
     const float metres = std::sqrt(metresX * metresX + metresY * metresY);
     const float speed = metres / dt;
-    const float drain = MatchRules::staminaDrainPerSecond(
-                            speed / std::max(topSpeed[lane], EPSILON),
-                            endurance[lane], pressingEffort[lane]) +
-                        sideDrain[lane];
+    // Fuel: the whole match's work, with the fuel capacity stat in place of
+    // the Stamina attribute; never refilled in play.
+    const float drain =
+        MatchRules::staminaDrainPerSecond(
+            speed / std::max(topSpeed[lane], EPSILON),
+            physiology.fuelCapacity[lane], pressingEffort[lane]) +
+        sideDrain[lane];
     stepMetres[lane] = metres;
     nextStamina[lane] = std::clamp(stamina[lane] - drain * dt,
                                    MatchTuning::Player::MINIMUM_STAMINA, 1.0f);
-    // Repeat-sprint reserve: emptied by high-intensity running, refilled
-    // while jogging or walking.
-    const float intensity = std::clamp(
-        (speed - L::HIGH_INTENSITY_SPEED) /
-            std::max(topSpeed[lane] - L::HIGH_INTENSITY_SPEED, EPSILON),
-        0.0f, 1.0f);
+    // Burst reserve (a share of the fresh burst capacity): metres above the
+    // critical speed drain it; below it, it refills toward what the fuel
+    // left allows, slower the closer he still runs to his critical speed.
+    const float fatigue =
+        std::clamp((1.0f - stamina[lane]) * INVERSE_FATIGUE_RANGE, 0.0f, 1.0f);
+    const float critical = physiology.criticalSpeed[lane] *
+                           (1.0f - CRITICAL_SPEED_FUEL_LOSS * fatigue);
+    const float capacity = 1.0f - BURST_FUEL_LOSS * fatigue;
     const float drained =
-        std::max(0.0f, reserve[lane] - F::RESERVE_DRAIN_PER_SECOND * intensity *
-                                           intensity * dt);
-    const float refilled = reserve[lane] + (1.0f - reserve[lane]) * dt /
-                                               F::RESERVE_RECOVERY_SECONDS;
-    nextReserve[lane] = speed > L::HIGH_INTENSITY_SPEED ? drained : refilled;
+        std::max(0.0f, reserve[lane] - (speed - critical) * dt /
+                                           std::max(physiology.burstMetres[lane],
+                                                    EPSILON));
+    const float effortShare = speed / std::max(critical, EPSILON);
+    const float refillSeconds =
+        physiology.recoverySeconds[lane] *
+        (1.0f + RECOVERY_EFFORT_SLOWING * effortShare * effortShare);
+    const float refilled =
+        reserve[lane] +
+        (capacity - reserve[lane]) * (1.0f - std::exp(-dt / refillSeconds));
+    // A restart's repositioning jump is not running.
+    const bool ran = speed <= MatchTuning::Player::MAX_COUNTED_STEP_SPEED;
+    nextReserve[lane] =
+        ran ? std::min(speed > critical ? drained : refilled, capacity)
+            : reserve[lane];
   }
 }
 

@@ -78,15 +78,25 @@ const MatchEngine::MovementStyle& MatchEngine::movementStyleNewV1()
   static const MovementStyle style = []
   {
     MovementStyle built;
-    built.tacticalResponsePerSecond = P::TACTICAL_TARGET_RESPONSE_PER_SECOND;
-    built.urgentResponsePerSecond = P::URGENT_TARGET_RESPONSE_PER_SECOND;
-    built.familiarityResponseLoss = P::FAMILIARITY_RESPONSE_LOSS;
+    // No target lag: players head for the latest plan at once.
+    built.smoothsTargets = false;
     for (std::size_t intent = 0; intent < PLAYER_INTENT_COUNT; ++intent)
       built.intentSpeedShares[intent] =
           movementSpeedScale(static_cast<PlayerIntent>(intent));
     built.restartWalkShare = P::RESTART_WALK_SPEED_SCALE;
     built.urgencyDistanceMetres = P::URGENCY_DISTANCE_METRES;
     built.maxUrgencyShare = P::MAX_URGENCY_SPEED_SCALE;
+    // Pacing: a tired player chooses to ease off, and on jobs that can wait
+    // keeps his burst reserve for the moments that matter (pressing, loose
+    // balls, runs, receiving, marking): below half a reserve he closes in
+    // on his critical speed.
+    built.fatigueWorkRateLoss = P::FATIGUE_WORK_RATE_LOSS;
+    for (const PlayerIntent intent :
+         {PlayerIntent::HOLD_SHAPE, PlayerIntent::OFFER_SUPPORT,
+          PlayerIntent::RECOVER_SHAPE, PlayerIntent::COVER_PRESS,
+          PlayerIntent::BLOCK_PASSING_LANE})
+      built.savesBurst[static_cast<std::size_t>(intent)] = true;
+    built.burstSavingReserve = 0.5f;
     return built;
   }();
   return style;
@@ -182,6 +192,11 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
   const auto lineFor = [&offsideLines](bool attackingHome)
   { return offsideLines[attackingHome ? 0 : 1]; };
   const Vector2F pressurePosition = carrier ? carrier->position : ball.position;
+  // The team shape reads the play where it is heading: while a pass
+  // travels, where it is going, so the block shifts once instead of
+  // sliding with the ball. Pressing and loose balls still go to the ball.
+  const Vector2F shapeAnchor =
+      !carrier && ball.isPass ? ball.passTarget : pressurePosition;
   const StrategySliders homeSliders = getEffectiveSliders(true);
   const StrategySliders awaySliders = getEffectiveSliders(false);
 
@@ -722,6 +737,8 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
                       *lastControlledTeamHome == player.isHomeTeam;
     Vector2F target =
         ownControl ? possessionAnchorNewV1(player) : player.basePosition;
+    // How fast the target itself moves, when it is pinned to a moving man.
+    Vector2F targetVelocity{0.0f, 0.0f};
     player.intent = PlayerIntent::HOLD_SHAPE;
     player.isPressing = false;
     player.isMakingRun = false;
@@ -734,12 +751,12 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
         sliders.widthUsage * MatchTuning::Shape::WIDTH_SLIDER_SCALE;
     target.y = MatchTuning::Pitch::CENTRE +
                (target.y - MatchTuning::Pitch::CENTRE) * widthScale;
-    target.x += (pressurePosition.x - MatchTuning::Pitch::CENTRE) *
+    target.x += (shapeAnchor.x - MatchTuning::Pitch::CENTRE) *
                 (MatchTuning::Shape::BASE_LONGITUDINAL_SHIFT +
                  sliders.compactness *
                      MatchTuning::Shape::COMPACTNESS_LONGITUDINAL_SHIFT);
     target.y +=
-        (pressurePosition.y - MatchTuning::Pitch::CENTRE) *
+        (shapeAnchor.y - MatchTuning::Pitch::CENTRE) *
         (MatchTuning::Shape::BASE_LATERAL_SHIFT +
          sliders.compactness * MatchTuning::Shape::COMPACTNESS_LATERAL_SHIFT);
 
@@ -756,7 +773,7 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
       using S = MatchTuning::Shape;
       const auto ownGoalDepth = [&](float x)
       { return player.isHomeTeam ? x : 1.0f - x; };
-      const float ballDepth = ownGoalDepth(pressurePosition.x);
+      const float ballDepth = ownGoalDepth(shapeAnchor.x);
       const float lineDepth = std::clamp(
           S::BLOCK_LINE_BASE + ballDepth * S::BLOCK_LINE_BALL_FACTOR +
               sliders.pressing * S::BLOCK_LINE_PRESSING,
@@ -779,7 +796,7 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
                  (player.basePosition.y - MatchTuning::Pitch::CENTRE) *
                      (S::BLOCK_WIDTH_SCALE -
                       sliders.compactness * S::BLOCK_COMPACTNESS_NARROWING) +
-                 (pressurePosition.y - MatchTuning::Pitch::CENTRE) *
+                 (shapeAnchor.y - MatchTuning::Pitch::CENTRE) *
                      S::BLOCK_BALL_SIDE_SHIFT;
       target.x += defensiveRoleShiftNewV1(player);
     }
@@ -1041,6 +1058,7 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
         target = pressurePosition;
         target.x -= attackDirection * standOff;
         target.y += weakFootShadeNewV1(*carrier);
+        targetVelocity = carrier->velocity;
       }
       else if (const auto doubling =
                    pressers[1] == &player
@@ -1088,6 +1106,7 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
         // goal-side and close enough to contest each ball played to him.
         player.intent = PlayerIntent::MARK_OPPONENT;
         target = tightMarkPointNewV1(player, *tight, target);
+        targetVelocity = tightMarkVelocityNewV1(*tight);
       }
       else if (teamPhase == TeamPhase::DEFENSIVE_TRANSITION)
       {
@@ -1097,7 +1116,7 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
         player.intent = PlayerIntent::RECOVER_SHAPE;
         target.x -=
             attackDirection * MatchTuning::Shape::DEFENSIVE_TRANSITION_RECOVERY;
-        target.y += (pressurePosition.y - target.y) *
+        target.y += (shapeAnchor.y - target.y) *
                     MatchTuning::Shape::DEFENSIVE_TRANSITION_BALL_COMPACTNESS;
       }
       else
@@ -1251,13 +1270,14 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
           // A tight marker goes with his man while the pass is on its way.
           player.intent = PlayerIntent::MARK_OPPONENT;
           target = tightMarkPointNewV1(player, *tight, target);
+          targetVelocity = tightMarkVelocityNewV1(*tight);
         }
         else if (teamPhase == TeamPhase::DEFENSIVE_TRANSITION)
         {
           player.intent = PlayerIntent::RECOVER_SHAPE;
           target.x -= attackDirection *
                       MatchTuning::Shape::DEFENSIVE_TRANSITION_RECOVERY;
-          target.y += (pressurePosition.y - target.y) *
+          target.y += (shapeAnchor.y - target.y) *
                       MatchTuning::Shape::DEFENSIVE_TRANSITION_BALL_COMPACTNESS;
         }
         else
@@ -1282,7 +1302,7 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
               (transitionRunner
                    ? MatchTuning::Shape::ATTACKING_TRANSITION_RUN_ADVANCE
                    : MatchTuning::Shape::ATTACKING_TRANSITION_SUPPORT_ADVANCE);
-          target.y += (pressurePosition.y - target.y) *
+          target.y += (shapeAnchor.y - target.y) *
                       MatchTuning::Shape::ATTACKING_TRANSITION_BALL_PULL;
           if (transitionRunner &&
               isOffside(player, player.isHomeTeam, lineFor(player.isHomeTeam)))
@@ -1306,6 +1326,7 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
         player.intent != PlayerIntent::CLAIM_LOOSE_BALL)
     {
       target = player.movementTarget;
+      targetVelocity = {0.0f, 0.0f};
     }
 
     if (goalkeeper)
@@ -1314,6 +1335,7 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
           ball.isPass && ball.intendedReceiver == player.player &&
           player.intent == PlayerIntent::RECEIVE_PASS;
       player.intent = PlayerIntent::GOALKEEP;
+      targetVelocity = {0.0f, 0.0f};
       if (keepers[player.isHomeTeam ? 0 : 1].state == GoalkeeperState::DIVE)
         continue;
       // A keeper receiving a team-mate's pass steps onto the ball's path.
@@ -1325,6 +1347,7 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
                               player.intent == PlayerIntent::CLAIM_LOOSE_BALL ||
                               player.intent == PlayerIntent::GOALKEEP;
     player.tacticalTarget = target;
+    player.targetVelocity = targetVelocity;
     player.urgentMovement = urgentTarget;
   }
 }
@@ -1421,6 +1444,13 @@ Vector2F MatchEngine::tightMarkPointNewV1(const MatchPlayer& marker,
       target.position.y};
   return {current.x + (point.x - current.x) * T::TIGHT_MARK_WEIGHT,
           current.y + (point.y - current.y) * T::TIGHT_MARK_WEIGHT};
+}
+
+Vector2F MatchEngine::tightMarkVelocityNewV1(const MatchPlayer& target) const
+{
+  // The marking point moves with his man, by the share it is pulled to him.
+  return {target.velocity.x * TacticsTuning::TIGHT_MARK_WEIGHT,
+          target.velocity.y * TacticsTuning::TIGHT_MARK_WEIGHT};
 }
 
 float MatchEngine::tightMarkPenaltyNewV1(const MatchPlayer& receiver) const

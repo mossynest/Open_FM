@@ -71,6 +71,14 @@ void MatchEngine::convertMatchContextNewV1(const MatchContext& context)
                                 MatchTuning::Context::FINISHING_EXPONENT);
 }
 
+const DerivedRecipes& MatchEngine::derivedRecipesNewV1()
+{
+  // New v1's own derived-stat recipes (match_derived_stats.h); the defaults
+  // for now: agility mirrors acceleration, the endurance stats echo Stamina.
+  static constexpr DerivedRecipes recipes = DEFAULT_DERIVED_RECIPES;
+  return recipes;
+}
+
 float MatchEngine::convertConditionNewV1(float condition) const
 {
   return std::clamp(condition, MatchTuning::Player::MINIMUM_STAMINA, 1.0f);

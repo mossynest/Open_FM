@@ -44,6 +44,16 @@ StatsConfig loadStatsConfig();
 Lineup buildLabLineup(TeamID team_id, float rating,
                       std::vector<std::unique_ptr<Player>>& pool);
 
+/**
+ * The same 4-4-2 squad with every stat of `config` at `rating` for every
+ * player, keepers and outfielders alike, all 26, 180 cm and right-footed:
+ * the match sandbox's "Team N" (match_sandbox_test_teams.cpp). Same ids as
+ * buildLabLineup().
+ */
+Lineup buildUniformLineup(TeamID team_id, float rating,
+                          const StatsConfig& config,
+                          std::vector<std::unique_ptr<Player>>& pool);
+
 /** Mean overall of the eleven starters (the contract's team rating). */
 float lineupRating(const Lineup& lineup, const StatsConfig& config);
 

@@ -80,6 +80,8 @@
   /** Moves a marker's target tight and goal-side of his man. */
   Vector2F tightMarkPointNewV1(const MatchPlayer& marker, const MatchPlayer& target,
                           Vector2F current) const;
+  /** How fast that tight-marking point moves with his man (m/s). */
+  Vector2F tightMarkVelocityNewV1(const MatchPlayer& target) const;
   /** The man this player marks when he is under a tight-marking order. */
   const MatchPlayer* tightMarkTargetNewV1(const MatchPlayer& marker) const;
   /** Presser's lateral shade onto the carrier's stronger side (normalised

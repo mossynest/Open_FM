@@ -43,6 +43,9 @@ struct DrillPlayerSpec
   std::map<std::string, float> stats;
   /** Height in centimetres. */
   int height = 180;
+  /** Derived stats overridden for this player, 0-100 (match_derived_stats.h);
+   * any not given come from their recipes. */
+  std::map<DerivedStat, float> derived;
 };
 
 /** One setting of a drill (also what a measure sweep can vary). */

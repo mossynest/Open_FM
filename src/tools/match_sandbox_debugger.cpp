@@ -219,10 +219,11 @@ void EngineDebugger::render(SandboxRecorder& recorder, MatchEngine* engine,
   renderControls(recorder, engine, paused);
   if (const MatchEngine* shown = inspected ? inspected : engine)
     ImGui::TextDisabled(
-        "Brains: %s · Bodies: %s · Handshake: %s",
+        "Brains: %s · Bodies: %s · Handshake: %s · Home advantage: %.2f",
         brainPairName({shown->getBrain(true), shown->getBrain(false)}).c_str(),
         bodyPairName({shown->getBody(true), shown->getBody(false)}).c_str(),
-        handshakeName(shown->getHandshake()).data());
+        handshakeName(shown->getHandshake()).data(),
+        shown->getMatchContext().homeAdvantageScale);
   if (ImGui::BeginTabBar("##debugger_tabs"))
   {
     if (ImGui::BeginTabItem("Log"))

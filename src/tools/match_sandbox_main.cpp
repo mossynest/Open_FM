@@ -55,6 +55,7 @@
 #include "tools/match_sandbox_shot_map.h"
 #include "tools/match_sandbox_scene.h"
 #include "tools/match_sandbox_setup.h"
+#include "tools/match_sandbox_test_teams.h"
 
 namespace
 {
@@ -85,6 +86,9 @@ int main(int argc, char* argv[])
   std::optional<std::vector<std::string>> shotMapArguments;
   std::optional<std::string> measureDrill;
   std::vector<std::string> measureArguments;
+  bool brainsGiven = false;
+  bool bodiesGiven = false;
+  bool homeAdvantageGiven = false;
   for (int index = 1; index < argc; ++index)
   {
     const std::string_view argument(argv[index]);
@@ -100,6 +104,7 @@ int main(int argc, char* argv[])
       if (const auto brains = parseBrainPair(argv[++index]))
       {
         sandboxBrains() = *brains;
+        brainsGiven = true;
         continue;
       }
     }
@@ -108,6 +113,7 @@ int main(int argc, char* argv[])
       if (const auto bodies = parseBodyPair(argv[++index]))
       {
         sandboxBodies() = *bodies;
+        bodiesGiven = true;
         continue;
       }
     }
@@ -116,6 +122,19 @@ int main(int argc, char* argv[])
       if (const auto handshake = handshakeFromKey(argv[++index]))
       {
         sandboxHandshake() = *handshake;
+        continue;
+      }
+    }
+    else if (argument == "--home-advantage" && index + 1 < argc)
+    {
+      const std::string_view value(argv[++index]);
+      float scale = 0.0f;
+      if (std::from_chars(value.data(), value.data() + value.size(), scale)
+                  .ec == std::errc() &&
+          scale >= 0.0f && scale <= MatchTuning::Context::MAX_HOME_ADVANTAGE_SCALE)
+      {
+        sandboxHomeAdvantage() = scale;
+        homeAdvantageGiven = true;
         continue;
       }
     }
@@ -174,9 +193,12 @@ int main(int argc, char* argv[])
     }
     std::cerr << "Usage: " << argv[0]
               << " [--world-seed N] [--brains HOME,AWAY] [--bodies HOME,AWAY]"
-                 " [--handshake H] [--kick-off] [--drill NAME] [--check [MATCHES]]\n"
+                 " [--handshake H] [--home-advantage X] [--kick-off] [--drill NAME]"
+                 " [--check [MATCHES]]\n"
                  "  (--brains, --bodies: original or new-v1 per side, one name "
                  "for both; before --measure or --shot-map)\n"
+                 "  (--home-advantage: 0 neutral venue (default) to 2, 1 the "
+                 "game's full home edge; --check defaults to 1)\n"
                  "  [--measure DRILL --sweep \"Pace=40:95:12\" [--by \"Who runs\"]\n"
                  "   [--set NAME=VALUE]... [--repeats N] [--seed N] [--csv [PATH]]]\n"
                  "  [--shot-map [--line A:B:N] [--side A:B:N] [--repeats N]\n"
@@ -184,6 +206,10 @@ int main(int argc, char* argv[])
                  "  [--measure-view DRILL] [--shot-map-view]\n";
     return 2;
   }
+
+  // The checks compare with the inherited engine, which had the full home
+  // edge; everything else plays at a neutral venue unless asked.
+  if (checkMatches && !homeAdvantageGiven) sandboxHomeAdvantage() = 1.0f;
 
   // Before anything resolves a runtime path (logs, settings, saves).
   useOwnRuntimeRoot();
@@ -199,6 +225,12 @@ int main(int argc, char* argv[])
     if (measureDrill)
       return runMeasureCommand(controller.getStatsConfig(), *measureDrill,
                                measureArguments);
+    // The window opens on Team 66 v Team 66, Original against New v1, so
+    // the two engines meet on equal players. The headless commands above
+    // keep the plain world and Original for both.
+    addSandboxTestTeams(*controller.getGameData());
+    if (!brainsGiven) sandboxBrains() = {BrainId::ORIGINAL, BrainId::NEW_V1};
+    if (!bodiesGiven) sandboxBodies() = {BodyId::ORIGINAL, BodyId::NEW_V1};
     GUIView view(controller);
     view.run(
         [kickOff, drill, drillView](GUIView* gui)

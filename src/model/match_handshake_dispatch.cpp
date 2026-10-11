@@ -57,12 +57,13 @@ void MatchEngine::loadAttributes(MatchPlayer& matchPlayer,
   switch (handshakeId)
   {
     case HandshakeId::ORIGINAL:
+      loadAttributesOriginal(matchPlayer, player);
       break;
     case HandshakeId::NEW_V1:
       loadAttributesNewV1(matchPlayer, player);
-      return;
+      break;
   }
-  loadAttributesOriginal(matchPlayer, player);
+  deriveStats(matchPlayer);
 }
 
 void MatchEngine::initializePlayers(const Lineup& lineup, bool isHomeTeam)
@@ -70,12 +71,46 @@ void MatchEngine::initializePlayers(const Lineup& lineup, bool isHomeTeam)
   switch (handshakeId)
   {
     case HandshakeId::ORIGINAL:
+      initializePlayersOriginal(lineup, isHomeTeam);
       break;
     case HandshakeId::NEW_V1:
       initializePlayersNewV1(lineup, isHomeTeam);
-      return;
+      break;
   }
-  initializePlayersOriginal(lineup, isHomeTeam);
+  // The handshakes load their players directly; derive the side's stats.
+  for (MatchPlayer& player : players)
+    if (player.isHomeTeam == isHomeTeam) deriveStats(player);
+}
+
+const DerivedRecipes& MatchEngine::derivedRecipes() const
+{
+  switch (handshakeId)
+  {
+    case HandshakeId::ORIGINAL:
+      break;
+    case HandshakeId::NEW_V1:
+      return derivedRecipesNewV1();
+  }
+  // The Original handshake has no recipes of its own.
+  return DEFAULT_DERIVED_RECIPES;
+}
+
+void MatchEngine::deriveStats(MatchPlayer& matchPlayer) const
+{
+  // Pure arithmetic on the loaded attributes: no random numbers, so it
+  // cannot change a match that does not read the results.
+  const std::array<float, BASE_ATTRIBUTE_COUNT> base{
+      matchPlayer.pace,        matchPlayer.shooting,  matchPlayer.passing,
+      matchPlayer.dribbling,   matchPlayer.defending, matchPlayer.physicality,
+      matchPlayer.endurance,   matchPlayer.vision,    matchPlayer.goalkeeping};
+  const DerivedRecipes& recipes = derivedRecipes();
+  for (std::size_t stat = 0; stat < DERIVED_STAT_COUNT; ++stat)
+  {
+    float rating = 0.0f;
+    for (std::size_t index = 0; index < BASE_ATTRIBUTE_COUNT; ++index)
+      rating += recipes[stat].weights[index] * base[index];
+    matchPlayer.derived[stat] = std::clamp(rating, 0.0f, 1.0f);
+  }
 }
 
 void MatchEngine::resolveTactics(bool homeTeam)

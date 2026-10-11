@@ -20,6 +20,7 @@
 #include "global/stats_config.h"
 #include "model/match_body.h"
 #include "model/match_brain.h"
+#include "model/match_engine.h"
 #include "model/match_handshake.h"
 #include "model/strategy.h"
 #include "tools/lab_report.h"
@@ -117,6 +118,18 @@ struct MatchSample
   double full_match_high_intensity = 0.0;
   double full_match_sprint = 0.0;
   int full_match_sprints = 0;
+  /** Movement jitter of both sides together (MatchEngine::getMovementJitter). */
+  MovementJitterStats jitter;
+  /** Derived stats summed over every player who took part, and how many. */
+  std::array<double, DERIVED_STAT_COUNT> derived_sum{};
+  int derived_players = 0;
+  /** Running by 15-minute spell, both sides together. */
+  LoadProfileStats load;
+  /** Outfield players on the pitch at full time: how many, their fuel
+   * (condition) summed, and how many were at its floor. */
+  int finishers = 0;
+  double end_fuel_sum = 0.0;
+  int finishers_at_floor = 0;
 
   int totalGoals() const { return goals[0] + goals[1]; }
 };
@@ -128,6 +141,9 @@ struct TeamSetup
   StrategySliders sliders{};
   BrainId brain = BrainId::ORIGINAL;
   BodyId body = BodyId::ORIGINAL;
+  /** Every stat of every player is `rating` (buildUniformLineup) instead
+   * of the role-shaped squad. */
+  bool uniform = false;
 };
 
 struct MatchJob
@@ -139,6 +155,9 @@ struct MatchJob
   bool background = false;
   /** How the inputs become match state (one per match). */
   HandshakeId handshake = HandshakeId::ORIGINAL;
+  /** MatchContext::homeAdvantageScale: 0 a neutral venue, 1 the engine's
+   * default (the game's full home edge), up to 2. */
+  float homeAdvantage = 1.0f;
 };
 
 /** A match that did not reach full time or produced invalid numbers. */

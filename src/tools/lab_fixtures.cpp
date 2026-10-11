@@ -29,6 +29,8 @@ constexpr std::uint8_t PLAYER_AGE = 26;
 constexpr std::uint8_t CONTRACT_YEARS = 3;
 constexpr std::uint8_t TALL_HEIGHT_CM = 188;
 constexpr std::uint8_t HEIGHT_CM = 178;
+/** Everyone in a uniform squad, as in the sandbox's test teams. */
+constexpr std::uint8_t UNIFORM_HEIGHT_CM = 180;
 
 StatsConfig builtInStatsConfig()
 {
@@ -134,39 +136,29 @@ StatsConfig loadStatsConfig()
   }
 }
 
-Lineup buildLabLineup(TeamID team_id, float rating,
-                      std::vector<std::unique_ptr<Player>>& pool)
+namespace
 {
-  static constexpr std::array<PlayerRole, STARTERS> ROLES = {
-      PlayerRole::GK, PlayerRole::LB, PlayerRole::CB, PlayerRole::CB,
-      PlayerRole::RB, PlayerRole::LM, PlayerRole::CM, PlayerRole::CM,
-      PlayerRole::RM, PlayerRole::ST, PlayerRole::ST};
-  static constexpr std::array<Vector2F, STARTERS> POSITIONS = {
-      Vector2F{0.04f, 0.50f}, Vector2F{0.20f, 0.12f}, Vector2F{0.20f, 0.38f},
-      Vector2F{0.20f, 0.62f}, Vector2F{0.20f, 0.88f}, Vector2F{0.43f, 0.12f},
-      Vector2F{0.43f, 0.38f}, Vector2F{0.43f, 0.62f}, Vector2F{0.43f, 0.88f},
-      Vector2F{0.78f, 0.38f}, Vector2F{0.78f, 0.62f}};
-  static constexpr std::array<PlayerRole, RESERVES> BENCH = {
-      PlayerRole::GK, PlayerRole::CB, PlayerRole::RB, PlayerRole::CM,
-      PlayerRole::LM, PlayerRole::ST, PlayerRole::ST};
+constexpr std::array<PlayerRole, STARTERS> ROLES = {
+    PlayerRole::GK, PlayerRole::LB, PlayerRole::CB, PlayerRole::CB,
+    PlayerRole::RB, PlayerRole::LM, PlayerRole::CM, PlayerRole::CM,
+    PlayerRole::RM, PlayerRole::ST, PlayerRole::ST};
+constexpr std::array<Vector2F, STARTERS> POSITIONS = {
+    Vector2F{0.04f, 0.50f}, Vector2F{0.20f, 0.12f}, Vector2F{0.20f, 0.38f},
+    Vector2F{0.20f, 0.62f}, Vector2F{0.20f, 0.88f}, Vector2F{0.43f, 0.12f},
+    Vector2F{0.43f, 0.38f}, Vector2F{0.43f, 0.62f}, Vector2F{0.43f, 0.88f},
+    Vector2F{0.78f, 0.38f}, Vector2F{0.78f, 0.62f}};
+constexpr std::array<PlayerRole, RESERVES> BENCH = {
+    PlayerRole::GK, PlayerRole::CB, PlayerRole::RB, PlayerRole::CM,
+    PlayerRole::LM, PlayerRole::ST, PlayerRole::ST};
 
-  const auto makePlayer = [&](std::uint32_t index, PlayerRole role)
-  {
-    const auto playerId = static_cast<PlayerID>(team_id) * 100U + index;
-    const std::uint8_t height = role == PlayerRole::GK || role == PlayerRole::CB
-                                    ? TALL_HEIGHT_CM
-                                    : HEIGHT_CM;
-    pool.push_back(std::make_unique<Player>(
-        playerId, team_id, "Lab", std::to_string(playerId), role, Language::EN,
-        PLAYER_WAGE, 0, PLAYER_AGE, CONTRACT_YEARS, height, Foot::Right,
-        roleStats(role, rating, index + 1)));
-    return static_cast<const Player*>(pool.back().get());
-  };
-
+/** The 4-4-2 and bench of ROLES/BENCH, each player from `make`. */
+template <typename MakePlayer>
+Lineup assembleLineup(MakePlayer make)
+{
   Lineup lineup;
   for (std::uint32_t index = 0; index < STARTERS; ++index)
   {
-    const Player* player = makePlayer(index, ROLES[index]);
+    const Player* player = make(index, ROLES[index]);
     if (ROLES[index] == PlayerRole::GK)
       lineup.setGoalkeeper(player);
     else
@@ -174,9 +166,46 @@ Lineup buildLabLineup(TeamID team_id, float rating,
   }
   std::vector<const Player*> reserves;
   for (std::uint32_t index = 0; index < RESERVES; ++index)
-    reserves.push_back(makePlayer(STARTERS + index, BENCH[index]));
+    reserves.push_back(make(STARTERS + index, BENCH[index]));
   lineup.setReserves(reserves);
   return lineup;
+}
+}  // namespace
+
+Lineup buildLabLineup(TeamID team_id, float rating,
+                      std::vector<std::unique_ptr<Player>>& pool)
+{
+  return assembleLineup(
+      [&](std::uint32_t index, PlayerRole role)
+      {
+        const auto playerId = static_cast<PlayerID>(team_id) * 100U + index;
+        const std::uint8_t height =
+            role == PlayerRole::GK || role == PlayerRole::CB ? TALL_HEIGHT_CM
+                                                             : HEIGHT_CM;
+        pool.push_back(std::make_unique<Player>(
+            playerId, team_id, "Lab", std::to_string(playerId), role,
+            Language::EN, PLAYER_WAGE, 0, PLAYER_AGE, CONTRACT_YEARS, height,
+            Foot::Right, roleStats(role, rating, index + 1)));
+        return static_cast<const Player*>(pool.back().get());
+      });
+}
+
+Lineup buildUniformLineup(TeamID team_id, float rating,
+                          const StatsConfig& config,
+                          std::vector<std::unique_ptr<Player>>& pool)
+{
+  std::map<std::string, float> stats;
+  for (const std::string& stat : config.possible_stats) stats[stat] = rating;
+  return assembleLineup(
+      [&](std::uint32_t index, PlayerRole role)
+      {
+        const auto playerId = static_cast<PlayerID>(team_id) * 100U + index;
+        pool.push_back(std::make_unique<Player>(
+            playerId, team_id, "Lab", std::to_string(playerId), role,
+            Language::EN, PLAYER_WAGE, 0, PLAYER_AGE, CONTRACT_YEARS,
+            UNIFORM_HEIGHT_CM, Foot::Right, stats));
+        return static_cast<const Player*>(pool.back().get());
+      });
 }
 
 float lineupRating(const Lineup& lineup, const StatsConfig& config)

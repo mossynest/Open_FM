@@ -82,6 +82,7 @@ DrillRun::DrillRun(Drill& drill_ref, const StatsConfig& config, bool record)
   match = std::make_unique<MatchEngine>(lineups[0], lineups[1], Strategy{},
                                         Strategy{}, config, drill.seed,
                                         sandboxHandshake());
+  applyHomeAdvantage(*match, sandboxHomeAdvantage());
   match->setTeamNames("Drill home", "Drill away");
   match->setBrain(true, sandboxBrains()[0]);
   match->setBrain(false, sandboxBrains()[1]);
@@ -92,6 +93,9 @@ DrillRun::DrillRun(Drill& drill_ref, const StatsConfig& config, bool record)
   for (const auto& player : pool)
     if (std::ranges::find(drillIds, player->getId()) == drillIds.end())
       (void)match->removeBeforeKickOff(player->getId());
+  for (std::size_t index = 0; index < specs.size(); ++index)
+    for (const auto& [stat, value] : specs[index].derived)
+      match->setDerivedStat(drillIds[index], stat, value / 100.0f);
   if (record) match->setRecorder(log.get());
   drill.begin(*match, drillIds);
 }

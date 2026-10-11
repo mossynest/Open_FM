@@ -49,8 +49,8 @@ constexpr std::array TARGETS = {
   TargetSpec{"CT-M08", "", "Instep kick speed", "28 m/s", Band{23.0, 35.0}, Monitor, "PEER", Number, Engine, NOT_EXPOSED},
   TargetSpec{"CT-M09", "", "Bounce restitution", "0.62", Band{0.55, 0.71}, Monitor, "REG", Number, Engine, NOT_EXPOSED},
   TargetSpec{"CT-M10", "", "Rolling deceleration", "0.8 m/s2", Band{0.5, 1.3}, Monitor, "REG", Number, Engine, NOT_EXPOSED},
-  TargetSpec{"CT-M11", "", "High-intensity running last vs first 15'", "-15%", Band{-0.45, -0.08}, Gate, "PEER", Percent, Engine, "not measurable yet: no speed-zone or 15-minute distance bins"},
-  TargetSpec{"CT-M12", "", "Total distance last vs first 15'", "-14%", Band{-0.17, -0.12}, Monitor, "PEER", Percent, Engine, "not measurable yet: only half splits exist (see LAB-DIST-H2 info row)"},
+  TargetSpec{"CT-M11", "late_high_intensity_change", "High-intensity running last vs first 15'", "-15%", Band{-0.45, -0.08}, Gate, "PEER", Percent, Engine, "outfield players per minute on the pitch, clock 75-90+ vs 0-15"},
+  TargetSpec{"CT-M12", "late_distance_change", "Total distance last vs first 15'", "-14%", Band{-0.17, -0.12}, Monitor, "PEER", Percent, Engine, "outfield players per minute on the pitch, clock 75-90+ vs 0-15"},
   // ---- Results and scoring -------------------------------------------------
   TargetSpec{"CT-M13", "goals_per_match", "Goals per match", "2.83", Band{2.5, 3.3}, Gate, "CC0/PUB", Number, Match, ""},
   TargetSpec{"CT-M14", "home_goal_multiplier", "Home / away goals multiplier", "1.55/1.28 = x1.21", Band{1.07, 1.41}, Gate, "CC0", Number, Match, "sum(home goals) / sum(away goals)"},
@@ -109,6 +109,8 @@ constexpr std::array TARGETS = {
   TargetSpec{"LAB-ADDED", "added_time_minutes", "Added time per match (min)", "~10.5", NO_BAND, Info, "orientation", Number, Engine, ""},
   TargetSpec{"LAB-INJ", "injuries_per_team", "In-match injuries per team", "~0.2-0.3", NO_BAND, Info, "orientation", Number, Engine, ""},
   TargetSpec{"LAB-DIST-H2", "second_half_distance_change", "2nd vs 1st half distance per minute", "-3 to -10%", NO_BAND, Info, "orientation", Percent, Engine, "full-match outfield starters"},
+  TargetSpec{"LAB-FUEL", "end_fuel_mean", "Fuel (condition) left at full time", "", NO_BAND, Info, "orientation", Number, Engine, "outfield players on the pitch; floor 0.35"},
+  TargetSpec{"LAB-FUEL0", "end_fuel_floor_share", "Players at the fuel floor at full time", "", NO_BAND, Info, "orientation", Percent, Engine, "outfield players on the pitch"},
   TargetSpec{"LAB-ABND", "abandoned_share", "Abandoned matches", "0%", NO_BAND, Info, "sanity", Percent, Engine, "excluded from all other match metrics"},
   // ---- Player behaviour INFO (brain comparisons; no spec band) -------------
   TargetSpec{"LAB-TKL", "tackles_per_team", "Tackles attempted per team", "", NO_BAND, Info, "behaviour", Number, Engine, ""},
@@ -123,6 +125,17 @@ constexpr std::array TARGETS = {
   TargetSpec{"LAB-HI", "high_intensity_per_outfielder_km", "High-intensity distance per outfielder (km)", "", NO_BAND, Info, "behaviour", Number, Engine, "full-match outfield starters"},
   TargetSpec{"LAB-SPR", "sprint_per_outfielder_km", "Sprint distance per outfielder (km)", "", NO_BAND, Info, "behaviour", Number, Engine, "full-match outfield starters"},
   TargetSpec{"LAB-SPRN", "sprints_per_outfielder", "Sprints per outfielder", "", NO_BAND, Info, "behaviour", Number, Engine, "full-match outfield starters"},
+  // ---- Movement jitter INFO (outfield players, open play) -------------------
+  TargetSpec{"JIT-MOVE", "jitter_target_move_m", "Target move per scheduled refresh (m)", "", NO_BAND, Info, "jitter", Number, Engine, "every 0.2 s"},
+  TargetSpec{"JIT-MOVS", "jitter_moving_share", "Scheduled refreshes moving the target > 0.5 m", "", NO_BAND, Info, "jitter", Percent, Engine, ""},
+  TargetSpec{"JIT-REV", "jitter_reversal_share", "Target moves that turn back on the previous move", "", NO_BAND, Info, "jitter", Percent, Engine, "both moves > 0.5 m, more than 90 degrees apart"},
+  TargetSpec{"JIT-REVM", "jitter_reversals_per_minute", "Target reversals per player-minute", "", NO_BAND, Info, "jitter", Number, Engine, ""},
+  TargetSpec{"JIT-SWM", "jitter_switches_per_minute", "Intent switches per player-minute", "", NO_BAND, Info, "jitter", Number, Engine, "scheduled refreshes"},
+  TargetSpec{"JIT-FLIP", "jitter_flip_back_share", "Intent switches undone within 1 s", "", NO_BAND, Info, "jitter", Percent, Engine, "back to the intent held before"},
+  TargetSpec{"JIT-EVT", "jitter_event_refreshes_per_minute", "Forced replans per player-minute", "", NO_BAND, Info, "jitter", Number, Engine, "ball changed hands, or a pass or shot started or ended"},
+  TargetSpec{"JIT-EVTM", "jitter_event_target_move_m", "Target move per forced replan (m)", "", NO_BAND, Info, "jitter", Number, Engine, ""},
+  TargetSpec{"JIT-EFF", "jitter_run_efficiency", "Run efficiency (ground gained / distance run, 2 s windows)", "", NO_BAND, Info, "jitter", Percent, Engine, ""},
+  TargetSpec{"JIT-TURN", "jitter_sharp_turn_share", "Runs turned > 90 degrees within 0.2 s", "", NO_BAND, Info, "jitter", Percent, Engine, "both speeds > 1 m/s"},
   // ---- World (season runs) --------------------------------------------------
   TargetSpec{"CT-W01", "", "Output peak age by position", "FW~25, MF 25-27, DF~27", NO_BAND, Gate, "PEER", Number, World, "not measurable in one season: needs multi-season rating-by-age curves"},
   TargetSpec{"CT-W02", "", "Physical peaks", "25.7 / 24.8 / 26.0", NO_BAND, Monitor, "PEER", Number, World, "not measurable yet"},

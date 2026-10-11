@@ -21,6 +21,8 @@
 #include "gui/render/match_renderer_2d.h"
 #include "gui/widgets/theme.h"
 #include "gui/widgets/widgets.h"
+#include "tools/match_sandbox_pickers.h"
+#include "tools/match_sandbox_setup.h"
 
 namespace
 {
@@ -162,6 +164,28 @@ void DrillScene::renderPanel(float width)
   ImGui::InputScalar("Seed", ImGuiDataType_U32, &drill.seed);
   ImGui::PopItemWidth();
   ImGui::Checkbox("New seed each run", &newSeedEachRun);
+  // The same choice as the match setup's pickers: both edit the sandbox's.
+  if (ImGui::BeginTable("##engines", 3, ImGuiTableFlags_SizingStretchProp))
+  {
+    ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed);
+    ImGui::TableSetupColumn("Brain");
+    ImGui::TableSetupColumn("Body");
+    ImGui::TableHeadersRow();
+    for (std::size_t side = 0; side < 2; ++side)
+    {
+      ImGui::PushID(static_cast<int>(side));
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn();
+      ImGui::AlignTextToFramePadding();
+      ImGui::TextUnformatted(side == 0 ? "Home" : "Away");
+      ImGui::TableNextColumn();
+      SandboxPickers::brain("##brain", sandboxBrains()[side], -1.0f);
+      ImGui::TableNextColumn();
+      SandboxPickers::body("##body", sandboxBodies()[side], -1.0f);
+      ImGui::PopID();
+    }
+    ImGui::EndTable();
+  }
   ImGui::TextDisabled("Settings apply when the run restarts.");
 
   ImGui::SeparatorText("Run");

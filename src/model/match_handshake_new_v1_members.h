@@ -18,6 +18,7 @@
   float rawAttributeNewV1(const Player* player, std::string_view name) const;
   float attributeNewV1(const Player* player, std::string_view name) const;
   void loadAttributesNewV1(MatchPlayer& matchPlayer, const Player* player) const;
+  static const DerivedRecipes& derivedRecipesNewV1();
   void initializePlayersNewV1(const Lineup& lineup, bool isHomeTeam);
   // Roles, opposition instructions and team talks (see model/tactics.h).
   /** Reads roles and opposition instructions from a side's tactics. */

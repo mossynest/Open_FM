@@ -231,6 +231,12 @@ void MatchEngine::refreshTargetBlends()
   for (std::size_t team = 0; team < 2; ++team)
   {
     const MovementStyle& style = movementStyle(team == 0);
+    if (!style.smoothsTargets)
+    {
+      targetBlends[team * 2] = 1.0f;
+      targetBlends[team * 2 + 1] = 1.0f;
+      continue;
+    }
     const float familiarity = effectiveFamiliarity(team);
     const float response =
         1.0f - style.familiarityResponseLoss * (1.0f - familiarity);
@@ -418,6 +424,7 @@ bool MatchEngine::executeCommand(const MatchCommandRecord& command)
                                 command.urgent});
         // Taken at once, not at the next planner refresh.
         player->tacticalTarget = *command.target;
+        player->targetVelocity = {0.0f, 0.0f};
         player->urgentMovement = command.urgent;
       }
       ++inputRevision;
@@ -1376,6 +1383,7 @@ void MatchEngine::startShootout()
     }
     player.movementTarget = player.position;
     player.tacticalTarget = player.position;
+    player.targetVelocity = {0.0f, 0.0f};
   }
   updateTeamPhases();
   logEvent(MatchEventType::PENALTY_SHOOTOUT);
@@ -1614,13 +1622,25 @@ void MatchEngine::updateTeamPhases()
 
 void MatchEngine::updateMovement(float dt)
 {
+  // Jitter is observed over unbroken open play: a stoppage starts afresh.
+  if (stepCounter != lastJitterStep + stepTicks)
+    for (JitterTrack& track : jitterTracks)
+    {
+      track.planned = false;
+      track.moving = false;
+    }
+  lastJitterStep = stepCounter;
+
   // Off-ball targets refresh at the tactical rate, and immediately when the
   // ball changes hands or starts/ends a flight; bodies move every step.
   const std::uint8_t flags = static_cast<std::uint8_t>(
       (ball.isPass ? 1U : 0U) | (ball.isShot ? 2U : 0U) |
       (lastControlledTeamHome ? (*lastControlledTeamHome ? 4U : 8U) : 0U));
-  if (periodElapsed(MatchTuning::Timing::TACTICAL_REFRESH_STEPS) ||
-      ball.possessedBy != tacticalOwner || flags != tacticalFlags)
+  const bool scheduled =
+      periodElapsed(MatchTuning::Timing::TACTICAL_REFRESH_STEPS);
+  const bool forced =
+      ball.possessedBy != tacticalOwner || flags != tacticalFlags;
+  if (scheduled || forced)
   {
     tacticalOwner = ball.possessedBy;
     tacticalFlags = flags;
@@ -1647,6 +1667,7 @@ void MatchEngine::updateMovement(float dt)
           previousIntents[slot] != PlayerIntent::PRESS_BALL)
         ++statsOf(player).pressures;
     }
+    observePlanJitter(scheduled && !forced);
   }
   else
   {
@@ -1681,6 +1702,131 @@ void MatchEngine::updateMovement(float dt)
   }
   movePlayers(batch.data(), batched, dt, false);
   separatePlayers();
+  observeRunJitter(dt);
+}
+
+void MatchEngine::observePlanJitter(bool scheduled)
+{
+  // A move under half a metre is noise-level; a flip back within a second
+  // (five refreshes) counts as undoing the switch.
+  constexpr float MOVE_METRES = 0.5f;
+  constexpr std::uint32_t FLIP_BACK_REFRESHES = 5;
+  for (std::size_t slot = 0; slot < players.size() && slot < jitterTracks.size();
+       ++slot)
+  {
+    const MatchPlayer& player = players[slot];
+    JitterTrack& track = jitterTracks[slot];
+    if (!active(player) || player.isGoalkeeper)
+    {
+      track.planned = false;
+      continue;
+    }
+    if (!track.planned || track.player != player.player)
+    {
+      track.player = player.player;
+      track.planned = true;
+      track.lastTarget = player.tacticalTarget;
+      track.lastMove = {0.0f, 0.0f};
+      track.intent = player.intent;
+      track.intentBefore = player.intent;
+      track.refreshesSinceSwitch = FLIP_BACK_REFRESHES + 1;
+      continue;
+    }
+    MovementJitterStats& side = movementJitter[player.isHomeTeam ? 0 : 1];
+    const Vector2F move = toMetres({player.tacticalTarget.x - track.lastTarget.x,
+                                    player.tacticalTarget.y - track.lastTarget.y});
+    const float moved = length(move);
+    const bool switched = player.intent != track.intent;
+    ++track.refreshesSinceSwitch;
+    if (scheduled)
+    {
+      MovementJitterStats::ByIntent& bucket =
+          side.byIntent[static_cast<std::size_t>(player.intent)];
+      ++bucket.refreshes;
+      bucket.targetMoveMetres += moved;
+      if (moved > MOVE_METRES)
+      {
+        ++bucket.moves;
+        if (length(track.lastMove) > MOVE_METRES &&
+            move.x * track.lastMove.x + move.y * track.lastMove.y < 0.0f)
+          ++bucket.reversals;
+      }
+      if (switched)
+      {
+        ++bucket.switchesIn;
+        if (player.intent == track.intentBefore &&
+            track.refreshesSinceSwitch <= FLIP_BACK_REFRESHES)
+          ++bucket.flipBacks;
+      }
+    }
+    else
+    {
+      ++side.eventRefreshes;
+      side.eventTargetMoveMetres += moved;
+    }
+    if (switched)
+    {
+      track.intentBefore = track.intent;
+      track.intent = player.intent;
+      track.refreshesSinceSwitch = 0;
+    }
+    track.lastMove = move;
+    track.lastTarget = player.tacticalTarget;
+  }
+}
+
+void MatchEngine::observeRunJitter(float dt)
+{
+  // Runs are judged over 2 s windows; turns every 0.2 s above 1 m/s.
+  constexpr std::uint64_t WINDOW_TICKS = 20;
+  constexpr float RUNNING_SPEED = 1.0f;
+  const bool sample = periodElapsed(MatchTuning::Timing::TACTICAL_REFRESH_STEPS);
+  const bool windowEnds = periodElapsed(WINDOW_TICKS);
+  for (std::size_t slot = 0; slot < players.size() && slot < jitterTracks.size();
+       ++slot)
+  {
+    const MatchPlayer& player = players[slot];
+    JitterTrack& track = jitterTracks[slot];
+    if (!active(player) || player.isGoalkeeper)
+    {
+      track.moving = false;
+      continue;
+    }
+    if (!track.moving || track.player != player.player)
+    {
+      track.player = player.player;
+      track.moving = true;
+      track.lastPosition = player.position;
+      track.windowStart = player.position;
+      track.windowPath = 0.0;
+      track.lastVelocity = player.velocity;
+      continue;
+    }
+    MovementJitterStats& side = movementJitter[player.isHomeTeam ? 0 : 1];
+    side.playerSeconds += dt;
+    track.windowPath += length(toMetres({player.position.x - track.lastPosition.x,
+                                         player.position.y - track.lastPosition.y}));
+    track.lastPosition = player.position;
+    if (windowEnds)
+    {
+      side.pathMetres += track.windowPath;
+      side.netMetres += length(toMetres({player.position.x - track.windowStart.x,
+                                         player.position.y - track.windowStart.y}));
+      track.windowStart = player.position;
+      track.windowPath = 0.0;
+    }
+    if (sample)
+    {
+      const Vector2F before = track.lastVelocity;
+      const Vector2F now = player.velocity;
+      if (length(before) > RUNNING_SPEED && length(now) > RUNNING_SPEED)
+      {
+        ++side.turnSamples;
+        if (before.x * now.x + before.y * now.y < 0.0f) ++side.sharpTurns;
+      }
+      track.lastVelocity = now;
+    }
+  }
 }
 
 bool MatchEngine::isControlled(const MatchPlayer& player) const
@@ -2523,6 +2669,16 @@ void MatchEngine::accumulatePlayerLoad(float dt)
                         : 0.0f;
     stamina[lane] = player.stamina;
     reserve[lane] = player.sprintReserve;
+    enduranceLanes.criticalSpeed[lane] = derivedPhysicalValue(
+        DerivedStat::ENDURANCE, player.derivedStat(DerivedStat::ENDURANCE));
+    enduranceLanes.burstMetres[lane] = derivedPhysicalValue(
+        DerivedStat::BURST_CAPACITY,
+        player.derivedStat(DerivedStat::BURST_CAPACITY));
+    enduranceLanes.recoverySeconds[lane] = derivedPhysicalValue(
+        DerivedStat::RECOVERY_RATE,
+        player.derivedStat(DerivedStat::RECOVERY_RATE));
+    enduranceLanes.fuelCapacity[lane] =
+        player.derivedStat(DerivedStat::FUEL_CAPACITY);
   }
   spendEnergy(lanes, 0, homeLanes, dt, true);
   spendEnergy(lanes, homeLanes, count, dt, false);
@@ -2530,9 +2686,27 @@ void MatchEngine::accumulatePlayerLoad(float dt)
   {
     MatchPlayer& player = players[slots[lane]];
     const float metres = stepMetres[lane];
+    // The 15-minute spell of the clock (observed only; extra time left out).
+    const auto spell = [this]() -> std::size_t
+    {
+      const auto quarter = static_cast<std::size_t>(std::max(
+          0.0f, (matchTimeMinutes - (period == 2 ? 45.0f : 0.0f)) / 15.0f));
+      return (period == 2 ? 3U : 0U) + std::min<std::size_t>(quarter, 2U);
+    };
+    LoadProfileStats* profile =
+        period <= 2 && !player.isGoalkeeper
+            ? &loadProfile[player.isHomeTeam ? 0 : 1]
+            : nullptr;
+    if (profile) profile->playerSeconds[spell()] += dt;
     // Restart repositioning teleports are not running.
     if (metres > MatchTuning::Player::MAX_COUNTED_STEP_SPEED * dt) continue;
     const float speed = metres / dt;
+    if (profile)
+    {
+      profile->metres[spell()] += metres;
+      if (speed >= L::HIGH_INTENSITY_SPEED)
+        profile->highIntensityMetres[spell()] += metres;
+    }
     PlayerMatchStats& entry = statsOf(player);
     entry.distanceMetres += metres;
     if (period == 2) entry.secondHalfDistanceMetres += metres;
@@ -3221,6 +3395,8 @@ void MatchEngine::passBall(MatchPlayer& passer, const PassOption& option,
   const Kick kick = kickPass(passer, receiver, target, passDistance, lofted,
                              delivery);
   target = kick.target;
+  ball.passTarget = {std::clamp(target.x, 0.0f, 1.0f),
+                     std::clamp(target.y, 0.0f, 1.0f)};
   launchBall(passer, ball.position, target, kick.speed, kick.verticalSpeed,
              kick.curve);
   ball.isAerialDelivery = lofted && delivery;
@@ -5951,6 +6127,7 @@ bool MatchEngine::removeBeforeKickOff(PlayerID playerId)
                       MatchTuning::Pitch::PLAYER_MIN_Y};
   player->movementTarget = player->position;
   player->tacticalTarget = player->position;
+  player->targetVelocity = {0.0f, 0.0f};
   if (ball.possessedBy == player->player) ball.possessedBy = nullptr;
   return true;
 }
@@ -5988,6 +6165,14 @@ MatchPlayer* MatchEngine::drillPlayer(PlayerID playerId)
   return nullptr;
 }
 
+void MatchEngine::setDerivedStat(PlayerID playerId, DerivedStat stat,
+                                 float rating)
+{
+  if (MatchPlayer* player = drillPlayer(playerId))
+    player->derived[static_cast<std::size_t>(stat)] =
+        std::clamp(rating, 0.0f, 1.0f);
+}
+
 void MatchEngine::applyDrillTargets()
 {
   for (const DrillTarget& held : drillTargets)
@@ -5995,6 +6180,7 @@ void MatchEngine::applyDrillTargets()
         player && active(*player))
     {
       player->tacticalTarget = held.target;
+      player->targetVelocity = {0.0f, 0.0f};
       player->urgentMovement = held.urgent;
       player->isPressing = false;
       player->isMakingRun = false;

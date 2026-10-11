@@ -15,6 +15,7 @@
 #include "database/gamedata.h"
 #include "model/game.h"
 #include "model/match.h"
+#include "model/match_context.h"
 #include "model/match_engine.h"
 #include "model/player.h"
 #include "model/team.h"
@@ -37,6 +38,21 @@ HandshakeId& sandboxHandshake()
 {
   static HandshakeId handshake = HandshakeId::ORIGINAL;
   return handshake;
+}
+
+float& sandboxHomeAdvantage()
+{
+  static float homeAdvantage = 0.0f;
+  return homeAdvantage;
+}
+
+void applyHomeAdvantage(MatchEngine& engine, float scale)
+{
+  // Setting a context redraws the referee, so the default is left alone.
+  if (scale == 1.0f) return;
+  MatchContext context;
+  context.homeAdvantageScale = scale;
+  engine.setMatchContext(context);
 }
 
 MatchSetup MatchSetup::capture(const GameController& controller, TeamID home,
@@ -92,6 +108,7 @@ MatchSetup MatchSetup::capture(const GameController& controller, TeamID home,
   setup.brains = sandboxBrains();
   setup.bodies = sandboxBodies();
   setup.handshake = sandboxHandshake();
+  setup.homeAdvantage = sandboxHomeAdvantage();
   return setup;
 }
 
@@ -140,6 +157,7 @@ std::unique_ptr<MatchEngine> MatchSetup::build(const GameController& controller,
   auto engine = std::make_unique<MatchEngine>(
       lineups[0], lineups[1], sides[0].strategy, sides[1].strategy,
       controller.getStatsConfig(), matchSeed, handshake);
+  applyHomeAdvantage(*engine, homeAdvantage);
   engine->setTeamNames(sides[0].name, sides[1].name);
   for (const auto& [id, condition] : conditions)
     engine->setPlayerCondition(id, condition);
@@ -242,7 +260,8 @@ json SandboxJson::toJson(const MatchSetup& setup)
           {"brains",
            {brainKey(setup.brains[0]), brainKey(setup.brains[1])}},
           {"bodies", {bodyKey(setup.bodies[0]), bodyKey(setup.bodies[1])}},
-          {"handshake", handshakeKey(setup.handshake)}};
+          {"handshake", handshakeKey(setup.handshake)},
+          {"home_advantage", setup.homeAdvantage}};
 }
 
 bool SandboxJson::fromJson(const json& value, MatchSetup& setup,
@@ -316,6 +335,9 @@ bool SandboxJson::fromJson(const json& value, MatchSetup& setup,
       }
       setup.handshake = *converted;
     }
+    // Nor a home advantage: they were played with the full edge.
+    if (const auto home = value.find("home_advantage"); home != value.end())
+      setup.homeAdvantage = home->get<float>();
     return true;
   }
   catch (const std::exception& problem)

@@ -171,6 +171,7 @@ set(FM_CORE_SOURCES
     model/match_brain_new_v1_members.h
     model/match_brain_original.cpp
     model/match_brain_original_members.h
+    model/match_derived_stats.h
     model/match_handshake.h
     model/match_handshake_dispatch.cpp
     model/match_handshake_new_v1.cpp
@@ -669,6 +670,10 @@ add_executable(match_sandbox
     tools/match_sandbox_measure_scene.cpp
     tools/match_sandbox_shot_map.h
     tools/match_sandbox_shot_map.cpp
+    tools/match_sandbox_pickers.h
+    tools/match_sandbox_pickers.cpp
+    tools/match_sandbox_test_teams.h
+    tools/match_sandbox_test_teams.cpp
 )
 target_link_libraries(match_sandbox PRIVATE fm_ui fm_lab_lib)
 target_compile_options(match_sandbox PRIVATE ${FM_WARNING_FLAGS})

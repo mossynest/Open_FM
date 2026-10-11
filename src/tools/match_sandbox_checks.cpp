@@ -125,6 +125,7 @@ std::unique_ptr<MatchEngine> makeEngine(const Team& home, const Team& away,
   auto engine = std::make_unique<MatchEngine>(
       home.getLineup(), away.getLineup(), home.getStrategy(),
       away.getStrategy(), config, seed, sandboxHandshake());
+  applyHomeAdvantage(*engine, sandboxHomeAdvantage());
   engine->setTeamNames(home.getName(), away.getName());
   engine->setBrain(true, sandboxBrains()[0]);
   engine->setBrain(false, sandboxBrains()[1]);
@@ -397,6 +398,86 @@ bool runDrillChecks(const Team& home, const Team& away,
     }
   }
   return sprintOk && shotOk && framework && measureOk && shotMapOk;
+}
+
+/** Derived stats: every registry row complete (a physical range holding
+ * ratings 0 to 1), every recipe summing to 1, and every player of the checked clubs finite and in range under each
+ * handshake. */
+bool runDerivedStatChecks(const std::vector<const Team*>& clubs,
+                          const StatsConfig& config)
+{
+  bool registryOk = true;
+  for (std::size_t index = 0; index < DERIVED_STAT_COUNT; ++index)
+  {
+    const DerivedStatInfo& info = DERIVED_STATS[index];
+    registryOk = registryOk && !info.name.empty() && info.label.size() == 3 &&
+                 !info.description.empty() &&
+                 (info.unit.empty() || info.minValue < info.maxValue);
+    // The safe range holds the whole line from rating 0 to 1, so the clamp
+    // never flattens a real rating.
+    if (!info.unit.empty())
+    {
+      const float slope = (info.eliteValue - info.partTimeValue) /
+                          (ELITE_RATING - PART_TIME_RATING);
+      const float atZero = info.partTimeValue - slope * PART_TIME_RATING;
+      const float atOne = atZero + slope;
+      registryOk = registryOk &&
+                   std::min(atZero, atOne) >= info.minValue &&
+                   std::max(atZero, atOne) <= info.maxValue;
+    }
+    float total = 0.0f;
+    for (const float weight : DEFAULT_DERIVED_RECIPES[index].weights)
+      total += weight;
+    registryOk = registryOk && std::abs(total - 1.0f) < 1e-4f;
+  }
+
+  bool valuesOk = true;
+  std::size_t checked = 0;
+  std::string means;
+  for (const HandshakeId handshake : ALL_HANDSHAKES)
+  {
+    std::array<double, DERIVED_STAT_COUNT> sums{};
+    std::size_t players = 0;
+    for (std::size_t pair = 0; pair + 1 < clubs.size(); pair += 2)
+    {
+      const MatchEngine engine(clubs[pair]->getLineup(),
+                               clubs[pair + 1]->getLineup(),
+                               clubs[pair]->getStrategy(),
+                               clubs[pair + 1]->getStrategy(), config, 1U,
+                               handshake);
+      for (const MatchPlayer& player : engine.getPlayers())
+      {
+        ++players;
+        for (std::size_t index = 0; index < DERIVED_STAT_COUNT; ++index)
+        {
+          const auto stat = static_cast<DerivedStat>(index);
+          const float rating = player.derivedStat(stat);
+          const DerivedStatInfo& info = DERIVED_STATS[index];
+          valuesOk = valuesOk && std::isfinite(rating) && rating >= 0.0f &&
+                     rating <= 1.0f;
+          if (!info.unit.empty())
+          {
+            const float value = derivedPhysicalValue(stat, rating);
+            valuesOk = valuesOk && value >= info.minValue &&
+                       value <= info.maxValue;
+          }
+          sums[index] += rating;
+        }
+      }
+    }
+    checked += players;
+    means += std::format("\n  {:<9}", handshakeName(handshake));
+    for (std::size_t index = 0; index < DERIVED_STAT_COUNT; ++index)
+      means += std::format(
+          " {} {:.0f}", DERIVED_STATS[index].label,
+          players ? 100.0 * sums[index] / static_cast<double>(players) : 0.0);
+  }
+  std::cout << std::format(
+      "\nDerived stats: {} kinds, registry complete: {}, {} player loads "
+      "in range: {}; mean ratings:{}\n",
+      DERIVED_STAT_COUNT, registryOk ? "yes" : "NO", checked,
+      valuesOk ? "yes" : "NO", means);
+  return registryOk && valuesOk;
 }
 }  // namespace
 
@@ -833,5 +914,8 @@ int runSandboxChecks(GameController& controller, int matches)
   const bool drillsWork = runDrillChecks(*clubs[0], *clubs[1], config);
   std::cout << (drillsWork ? "PASS: drills run, repeat and rewind.\n"
                            : "FAIL: a drill check failed.\n");
-  return allIdentical && rewindExact && drillsWork ? 0 : 1;
+  const bool derivedWork = runDerivedStatChecks(clubs, config);
+  std::cout << (derivedWork ? "PASS: derived stats complete and in range.\n"
+                            : "FAIL: a derived stat check failed.\n");
+  return allIdentical && rewindExact && drillsWork && derivedWork ? 0 : 1;
 }

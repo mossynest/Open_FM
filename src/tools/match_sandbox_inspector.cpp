@@ -479,6 +479,27 @@ void DebugInspector::renderPlayer(const SandboxRecorder& recorder,
              "The values the match engine uses: the career attributes after "
              "the level shift and the contrast curve, capped at 100. Strong "
              "players often reach the cap.");
+    {
+      // Every derived stat in the registry, with its physical value if it
+      // has one.
+      std::string derivedText;
+      std::string derivedHelp =
+          "Stats the match works out from the attributes above, with the "
+          "handshake's recipes (match_derived_stats.h):";
+      for (std::size_t index = 0; index < DERIVED_STAT_COUNT; ++index)
+      {
+        const auto stat = static_cast<DerivedStat>(index);
+        const DerivedStatInfo& info = derivedStatInfo(stat);
+        const float rating = slot->derivedStat(stat);
+        if (!derivedText.empty()) derivedText += " · ";
+        derivedText += std::format("{} {:.0f}", info.label, rating * 100.0f);
+        if (!info.unit.empty())
+          derivedText += std::format(
+              " ({:.4g} {})", derivedPhysicalValue(stat, rating), info.unit);
+        derivedHelp += std::format("\n{}: {}", info.name, info.description);
+      }
+      property("Derived stats", derivedText, derivedHelp.c_str());
+    }
     if (const PlayerMatchStats* stats = engine.findPlayerStats(inspected))
       property("Match so far",
                std::format("touches {} · passes {}/{} · shots {} · tackles {}/{} "

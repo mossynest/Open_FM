@@ -25,6 +25,7 @@
 #include "model/match_brain.h"
 #include "model/match_handshake.h"
 #include "model/match_context.h"
+#include "model/match_derived_stats.h"
 #include "model/match_events.h"
 #include "model/match_rules.h"
 #include "model/match_scenario.h"
@@ -171,6 +172,9 @@ struct MatchPlayer
   Vector2F tacticalTarget{MatchTuning::Pitch::CENTRE,
                           MatchTuning::Pitch::CENTRE};
   bool urgentMovement = false;
+  /** How fast the tactical target itself moves (m/s), when the brain pins
+   * it to something moving (a man to press or mark); zero otherwise. */
+  Vector2F targetVelocity{0.0f, 0.0f};
 
   float facingAngle = 0.0f;
   float targetAngle = 0.0f;
@@ -206,6 +210,13 @@ struct MatchPlayer
   float endurance = MatchTuning::Player::DEFAULT_ATTRIBUTE;
   float vision = MatchTuning::Player::DEFAULT_ATTRIBUTE;
   float heightMetres = MatchTuning::Units::DEFAULT_PLAYER_HEIGHT_METRES;
+  /** Derived stats (match_derived_stats.h), ratings 0-1 worked out from the
+   * attributes above when he is loaded. */
+  std::array<float, DERIVED_STAT_COUNT> derived{};
+  float derivedStat(DerivedStat stat) const
+  {
+    return derived[static_cast<std::size_t>(stat)];
+  }
 
   /** False once sent off or forced off injured with no substitute left. */
   bool onPitch = true;
@@ -250,6 +261,9 @@ struct MatchBall
   float touchTimer = 0.0f;
 
   bool isPass = false;
+  /** Where the pass in flight is heading (the kick's real target, as its
+   * flight shows it). */
+  Vector2F passTarget{MatchTuning::Pitch::CENTRE, MatchTuning::Pitch::CENTRE};
   bool passByHome = false;
   bool passWasOffside = false;
   bool isShot = false;
@@ -423,6 +437,62 @@ enum class MatchInputAction : std::uint8_t
  * player's technique, pressure, distance and fatigue decide the error), so
  * the stick only chooses where the player tries to play the ball.
  */
+/**
+ * Movement jitter of one side's outfield players in open play, observed
+ * only (it changes nothing in the match): how the plan's targets and
+ * intents change from one refresh to the next, and how the runs follow.
+ */
+struct MovementJitterStats
+{
+  /** Scheduled refreshes (every 0.2 s) that nothing forced, by the intent
+   * planned. */
+  struct ByIntent
+  {
+    /** Player-refreshes ending in this intent. */
+    std::uint32_t refreshes = 0;
+    /** How far the target moved at those refreshes, in total (m). */
+    double targetMoveMetres = 0.0;
+    /** Refreshes that moved the target more than half a metre, and those
+     * that also turned back on the previous refresh's move. */
+    std::uint32_t moves = 0;
+    std::uint32_t reversals = 0;
+    /** Switches into this intent, and those back to the intent held within
+     * the last second. */
+    std::uint32_t switchesIn = 0;
+    std::uint32_t flipBacks = 0;
+  };
+  std::array<ByIntent, PLAYER_INTENT_COUNT> byIntent{};
+  /** Refreshes forced (even on a scheduled step) by the ball changing hands
+   * or starting or ending a flight, and how far they moved the targets (m).
+   */
+  std::uint32_t eventRefreshes = 0;
+  double eventTargetMoveMetres = 0.0;
+  /** Outfield time in open play (player-seconds). */
+  double playerSeconds = 0.0;
+  /** Over 2 s windows: distance run and distance actually gained (m). */
+  double pathMetres = 0.0;
+  double netMetres = 0.0;
+  /** Velocity compared every 0.2 s while running above 1 m/s, and the
+   * times it turned more than 90 degrees. */
+  std::uint32_t turnSamples = 0;
+  std::uint32_t sharpTurns = 0;
+};
+
+/**
+ * Running by 15-minute spell of the clock (0-15, 15-30, 30-45 and added
+ * time, then the same for the second half; extra time is left out), for one
+ * side's outfield players, observed only.
+ */
+struct LoadProfileStats
+{
+  static constexpr std::size_t SPELLS = 6;
+  /** Distance, and distance above the high-intensity speed (m). */
+  std::array<double, SPELLS> metres{};
+  std::array<double, SPELLS> highIntensityMetres{};
+  /** Outfield time on the pitch (player-seconds). */
+  std::array<double, SPELLS> playerSeconds{};
+};
+
 struct MatchPlayerInput
 {
   /** Stick: run direction, magnitude 0..1 of the run speed (0 = stand). */
@@ -845,6 +915,16 @@ class MatchEngine
   {
     return playerStats;
   }
+  /** Running by 15-minute spell so far, home then away. */
+  const std::array<LoadProfileStats, 2>& getLoadProfile() const
+  {
+    return loadProfile;
+  }
+  /** Movement jitter observed so far, home then away. */
+  const std::array<MovementJitterStats, 2>& getMovementJitter() const
+  {
+    return movementJitter;
+  }
   const PlayerMatchStats* findPlayerStats(PlayerID playerId) const;
   /**
    * Touch maps, pass network, pressures and the like for the match report
@@ -1024,6 +1104,11 @@ class MatchEngine
                       bool urgent);
   /** The target a drill holds for a player, if any. */
   std::optional<Vector2F> getDrillTarget(PlayerID playerId) const;
+
+  /** Drills: overrides one of a player's derived stats (a 0-1 rating),
+   * replacing what his recipe worked out. Before kick-off; a substitute
+   * coming on works his out afresh. */
+  void setDerivedStat(PlayerID playerId, DerivedStat stat, float rating);
 
   /** Drills: the player shoots, through the AI's own shot, as soon as he
    * has the ball and can act. Logged and replayed. */
@@ -1251,6 +1336,27 @@ class MatchEngine
   std::array<std::vector<PlayerInstruction>, 2> oppositionOrders{};
   /** Per-step target blends: home tactical/urgent, away tactical/urgent. */
   std::array<float, 4> targetBlends{};
+  /** Movement jitter (observed only), and what each slot's observation
+   * compares with. */
+  std::array<MovementJitterStats, 2> movementJitter{};
+  std::array<LoadProfileStats, 2> loadProfile{};
+  struct JitterTrack
+  {
+    const Player* player = nullptr;
+    bool planned = false;
+    Vector2F lastTarget{};
+    Vector2F lastMove{};
+    PlayerIntent intent = PlayerIntent::HOLD_SHAPE;
+    PlayerIntent intentBefore = PlayerIntent::HOLD_SHAPE;
+    std::uint32_t refreshesSinceSwitch = 0;
+    bool moving = false;
+    Vector2F lastPosition{};
+    Vector2F windowStart{};
+    double windowPath = 0.0;
+    Vector2F lastVelocity{};
+  };
+  std::array<JitterTrack, 32> jitterTracks{};
+  std::uint64_t lastJitterStep = 0;
   std::array<std::uint8_t, 32> separationOrder{};
   std::size_t separationCount = 0;
   /** Positions after the last separation pass and whether it found no
@@ -1353,6 +1459,9 @@ class MatchEngine
    */
   struct MovementStyle
   {
+    /** False: players head straight for the latest tactical target, with no
+     * target lag (the response rates below are then unused). */
+    bool smoothsTargets = true;
     /** Target response per second, normally and when the move is urgent. */
     float tacticalResponsePerSecond = 0.0f;
     float urgentResponsePerSecond = 0.0f;
@@ -1366,6 +1475,15 @@ class MatchEngine
      * distance and beyond, proportionally less closer in. */
     float urgencyDistanceMetres = 0.0f;
     float maxUrgencyShare = 0.0f;
+    /** Pacing: how much less hard a fully tired player chooses to run
+     * (read by the New bodies; the Original body has it built in). */
+    float fatigueWorkRateLoss = MatchTuning::Player::FATIGUE_WORK_RATE_LOSS;
+    /** Pacing on the burst reserve (read by the New bodies): the intents
+     * that save it, and the reserve below which a saving player keeps
+     * closer to his critical speed (at an empty reserve, to it). 0: never
+     * saves. */
+    std::array<bool, PLAYER_INTENT_COUNT> savesBurst{};
+    float burstSavingReserve = 0.0f;
   };
   /** The brain a side decides with. */
   BrainId brainOf(bool homeTeam) const { return brains[homeTeam ? 0 : 1]; }
@@ -1535,6 +1653,19 @@ class MatchEngine
     alignas(16) std::array<float, LANES> nextStamina;
     alignas(16) std::array<float, LANES> nextReserve;
   };
+  /** The endurance stats' physical values, lane by lane alongside the
+   * FitnessLanes of the same step (match_derived_stats.h): critical speed
+   * (m/s), burst capacity (m), the walking refill time constant (s) and the
+   * fuel capacity rating. Read by the New bodies. */
+  struct EnduranceLanes
+  {
+    static constexpr std::size_t LANES = FitnessLanes::LANES;
+    alignas(16) std::array<float, LANES> criticalSpeed{};
+    alignas(16) std::array<float, LANES> burstMetres{};
+    alignas(16) std::array<float, LANES> recoverySeconds{};
+    alignas(16) std::array<float, LANES> fuelCapacity{};
+  };
+  EnduranceLanes enduranceLanes;
   /** Stamina drain and sprint-reserve drain or recovery for lanes
    * [begin, end), all players of one side. */
   void spendEnergy(FitnessLanes& lanes, std::size_t begin, std::size_t end,
@@ -1609,6 +1740,10 @@ class MatchEngine
 
   void initializePlayers(const Lineup& lineup, bool isHomeTeam);
   void loadAttributes(MatchPlayer& matchPlayer, const Player* player) const;
+  /** The derived-stat recipes of the match's handshake. */
+  const DerivedRecipes& derivedRecipes() const;
+  /** Works out a loaded player's derived stats from his attributes. */
+  void deriveStats(MatchPlayer& matchPlayer) const;
   std::size_t addPlayerStats(const MatchPlayer& matchPlayer, bool started);
   PlayerMatchStats& statsOf(const MatchPlayer& matchPlayer);
   void refreshRatings();
@@ -1758,6 +1893,10 @@ class MatchEngine
   void simulateStep(float dt);
   void updateTeamPhases();
   void updateMovement(float dt);
+  /** Movement jitter: the plan just refreshed (scheduled or forced). */
+  void observePlanJitter(bool scheduled);
+  /** Movement jitter: the bodies just moved. */
+  void observeRunJitter(float dt);
   /** A side's shape and every off-ball target (see updateMovement). */
   void refreshTacticalTargets(float dt, bool planHome);
   /** Integrates the free ball in sub-steps, resolving contacts in each. */

@@ -18,6 +18,7 @@
 #include "global/thread_pool.h"
 #include "model/match.h"
 #include "model/match_engine.h"
+#include "model/match_engine_internal.h"
 #include "model/match_report.h"
 #include "model/player.h"
 #include "tools/lab_fixtures.h"
@@ -234,6 +235,49 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
     sample.full_match_sprint += static_cast<double>(entry.sprintMetres);
     sample.full_match_sprints += entry.sprints;
   }
+  for (const LoadProfileStats& side : engine.getLoadProfile())
+    for (std::size_t spell = 0; spell < LoadProfileStats::SPELLS; ++spell)
+    {
+      sample.load.metres[spell] += side.metres[spell];
+      sample.load.highIntensityMetres[spell] += side.highIntensityMetres[spell];
+      sample.load.playerSeconds[spell] += side.playerSeconds[spell];
+    }
+  for (const MatchPlayer& player : engine.getPlayers())
+  {
+    if (!player.player) continue;
+    if (player.onPitch && !player.isGoalkeeper)
+    {
+      ++sample.finishers;
+      sample.end_fuel_sum += static_cast<double>(player.stamina);
+      if (player.stamina <= MatchTuning::Player::MINIMUM_STAMINA + 0.005f)
+        ++sample.finishers_at_floor;
+    }
+    ++sample.derived_players;
+    for (std::size_t index = 0; index < DERIVED_STAT_COUNT; ++index)
+      sample.derived_sum[index] += static_cast<double>(player.derived[index]);
+  }
+  for (const MovementJitterStats& side : engine.getMovementJitter())
+  {
+    MovementJitterStats& total = sample.jitter;
+    for (std::size_t intent = 0; intent < PLAYER_INTENT_COUNT; ++intent)
+    {
+      const auto& from = side.byIntent[intent];
+      auto& to = total.byIntent[intent];
+      to.refreshes += from.refreshes;
+      to.targetMoveMetres += from.targetMoveMetres;
+      to.moves += from.moves;
+      to.reversals += from.reversals;
+      to.switchesIn += from.switchesIn;
+      to.flipBacks += from.flipBacks;
+    }
+    total.eventRefreshes += side.eventRefreshes;
+    total.eventTargetMoveMetres += side.eventTargetMoveMetres;
+    total.playerSeconds += side.playerSeconds;
+    total.pathMetres += side.pathMetres;
+    total.netMetres += side.netMetres;
+    total.turnSamples += side.turnSamples;
+    total.sharpTurns += side.sharpTurns;
+  }
   sample.first_half_distance =
       sample.full_match_distance - sample.second_half_distance;
   sample.first_half_minutes = firstHalf;
@@ -292,8 +336,13 @@ std::uint32_t matchSeed(std::uint64_t seed, std::uint64_t index)
 MatchSample simulateMatch(const MatchJob& job, const StatsConfig& config)
 {
   std::vector<std::unique_ptr<Player>> pool;
-  const Lineup home = buildLabLineup(HOME_TEAM_ID, job.home.rating, pool);
-  const Lineup away = buildLabLineup(AWAY_TEAM_ID, job.away.rating, pool);
+  const auto build = [&](TeamID id, const TeamSetup& side)
+  {
+    return side.uniform ? buildUniformLineup(id, side.rating, config, pool)
+                        : buildLabLineup(id, side.rating, pool);
+  };
+  const Lineup home = build(HOME_TEAM_ID, job.home);
+  const Lineup away = build(AWAY_TEAM_ID, job.away);
   Strategy homeStrategy;
   homeStrategy.setAllSliders(job.home.sliders);
   Strategy awayStrategy;
@@ -301,6 +350,13 @@ MatchSample simulateMatch(const MatchJob& job, const StatsConfig& config)
 
   MatchEngine engine(home, away, homeStrategy, awayStrategy, config, job.seed,
                      job.handshake);
+  // Setting a context redraws the referee, so the default is left alone.
+  if (job.homeAdvantage != 1.0f)
+  {
+    MatchContext context;
+    context.homeAdvantageScale = job.homeAdvantage;
+    engine.setMatchContext(context);
+  }
   engine.setBrain(true, job.home.brain);
   engine.setBrain(false, job.away.brain);
   engine.setBody(true, job.home.body);
@@ -577,6 +633,52 @@ std::map<std::string, Estimate> matchMetrics(
   metrics["sprints_per_outfielder"] = ratioEstimate(
       column([](const MatchSample& s) { return s.full_match_sprints; }),
       fullMatchPlayers);
+  // Movement jitter: the plan's scheduled refreshes, summed over intents.
+  const auto planned = [&](auto field)
+  {
+    return column(
+        [field](const MatchSample& s)
+        {
+          double sum = 0.0;
+          for (const auto& bucket : s.jitter.byIntent)
+            sum += static_cast<double>(bucket.*field);
+          return sum;
+        });
+  };
+  using Bucket = MovementJitterStats::ByIntent;
+  const std::vector<double> refreshes = planned(&Bucket::refreshes);
+  const std::vector<double> targetMoves = planned(&Bucket::moves);
+  const std::vector<double> switches = planned(&Bucket::switchesIn);
+  const std::vector<double> playerMinutes = column(
+      [](const MatchSample& s) { return s.jitter.playerSeconds / 60.0; });
+  metrics["jitter_target_move_m"] =
+      ratioEstimate(planned(&Bucket::targetMoveMetres), refreshes);
+  metrics["jitter_moving_share"] = ratioEstimate(targetMoves, refreshes);
+  metrics["jitter_reversal_share"] =
+      ratioEstimate(planned(&Bucket::reversals), targetMoves);
+  metrics["jitter_reversals_per_minute"] =
+      ratioEstimate(planned(&Bucket::reversals), playerMinutes);
+  metrics["jitter_switches_per_minute"] =
+      ratioEstimate(switches, playerMinutes);
+  metrics["jitter_flip_back_share"] =
+      ratioEstimate(planned(&Bucket::flipBacks), switches);
+  metrics["jitter_event_refreshes_per_minute"] = ratioEstimate(
+      column([](const MatchSample& s)
+             { return static_cast<double>(s.jitter.eventRefreshes); }),
+      playerMinutes);
+  metrics["jitter_event_target_move_m"] = ratioEstimate(
+      column([](const MatchSample& s)
+             { return s.jitter.eventTargetMoveMetres; }),
+      column([](const MatchSample& s)
+             { return static_cast<double>(s.jitter.eventRefreshes); }));
+  metrics["jitter_run_efficiency"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.jitter.netMetres; }),
+      column([](const MatchSample& s) { return s.jitter.pathMetres; }));
+  metrics["jitter_sharp_turn_share"] = ratioEstimate(
+      column([](const MatchSample& s)
+             { return static_cast<double>(s.jitter.sharpTurns); }),
+      column([](const MatchSample& s)
+             { return static_cast<double>(s.jitter.turnSamples); }));
   // Second-half vs first-half distance per minute of those players, pooled
   // over matches (distance / (half length x players)); bootstrap.
   metrics["second_half_distance_change"] = bootstrapEstimate(
@@ -598,6 +700,44 @@ std::map<std::string, Estimate> matchMetrics(
         return (second / secondTime) / (first / firstTime) - 1.0;
       },
       0xD157ULL);
+
+  // Last vs first 15 minutes (clock 75-90+ vs 0-15) per outfield minute on
+  // the pitch, pooled over matches; bootstrap.
+  const auto lateChange = [&](bool highIntensity, std::uint64_t seed)
+  {
+    constexpr std::size_t FIRST = 0;
+    constexpr std::size_t LAST = LoadProfileStats::SPELLS - 1;
+    return bootstrapEstimate(
+        n,
+        [&, highIntensity](std::span<const std::size_t> indices)
+        {
+          double first = 0.0, last = 0.0, firstTime = 0.0, lastTime = 0.0;
+          for (const std::size_t i : indices)
+          {
+            const LoadProfileStats& load = valid[i]->load;
+            const auto& metres =
+                highIntensity ? load.highIntensityMetres : load.metres;
+            first += metres[FIRST];
+            last += metres[LAST];
+            firstTime += load.playerSeconds[FIRST];
+            lastTime += load.playerSeconds[LAST];
+          }
+          if (first <= 0.0 || firstTime <= 0.0 || lastTime <= 0.0)
+            return std::nan("");
+          return (last / lastTime) / (first / firstTime) - 1.0;
+        },
+        seed);
+  };
+  metrics["late_distance_change"] = lateChange(false, 0x15A1ULL);
+  metrics["late_high_intensity_change"] = lateChange(true, 0x15A2ULL);
+  // Fuel (condition) left at full time by the outfield players on the pitch.
+  const std::vector<double> finishers =
+      column([](const MatchSample& s) { return s.finishers; });
+  metrics["end_fuel_mean"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.end_fuel_sum; }), finishers);
+  metrics["end_fuel_floor_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.finishers_at_floor; }),
+      finishers);
 
   // Rate multipliers: goals per team-minute in a state / in the reference
   // state, pooled over matches; bootstrap over matches.
@@ -733,6 +873,73 @@ std::vector<TextTable> matchTables(std::span<const MatchSample> samples)
     timing.rows.push_back({BIN_NAMES[bin], std::to_string(bins[bin]),
                            percent(share(bins[bin], goals))});
   tables.push_back(std::move(timing));
+
+  // Movement jitter by the intent planned (scheduled refreshes).
+  MovementJitterStats jitter;
+  std::uint64_t allRefreshes = 0;
+  for (const MatchSample* sample : valid)
+    for (std::size_t intent = 0; intent < PLAYER_INTENT_COUNT; ++intent)
+    {
+      const auto& from = sample->jitter.byIntent[intent];
+      auto& to = jitter.byIntent[intent];
+      to.refreshes += from.refreshes;
+      to.targetMoveMetres += from.targetMoveMetres;
+      to.moves += from.moves;
+      to.reversals += from.reversals;
+      to.switchesIn += from.switchesIn;
+      to.flipBacks += from.flipBacks;
+      allRefreshes += from.refreshes;
+    }
+  TextTable byIntent{"Movement jitter by intent (scheduled refreshes)",
+                     {"Intent", "Share of refreshes", "Target move (m)",
+                      "Moves > 0.5 m", "Moves reversed",
+                      "Switches in per 100", "Switched back within 1 s"},
+                     {}};
+  for (std::size_t intent = 0; intent < PLAYER_INTENT_COUNT; ++intent)
+  {
+    const auto& bucket = jitter.byIntent[intent];
+    if (bucket.refreshes == 0) continue;
+    const double count = static_cast<double>(bucket.refreshes);
+    byIntent.rows.push_back(
+        {std::string(MatchEngineInternal::intentName(
+             static_cast<PlayerIntent>(intent))),
+         percent(share(bucket.refreshes, allRefreshes)),
+         std::format("{:.2f}", bucket.targetMoveMetres / count),
+         percent(share(bucket.moves, bucket.refreshes)),
+         percent(share(bucket.reversals, bucket.moves)),
+         std::format("{:.1f}", 100.0 * bucket.switchesIn / count),
+         percent(share(bucket.flipBacks, bucket.switchesIn))});
+  }
+  tables.push_back(std::move(byIntent));
+
+  // Derived stats over every player who took part: do the recipes give the
+  // intended spread?
+  std::array<double, DERIVED_STAT_COUNT> derivedSums{};
+  double derivedPlayers = 0.0;
+  for (const MatchSample* sample : valid)
+  {
+    derivedPlayers += sample->derived_players;
+    for (std::size_t index = 0; index < DERIVED_STAT_COUNT; ++index)
+      derivedSums[index] += sample->derived_sum[index];
+  }
+  TextTable derived{"Derived stats (mean over players)",
+                    {"Stat", "Rating", "Physical value"},
+                    {}};
+  for (std::size_t index = 0; index < DERIVED_STAT_COUNT && derivedPlayers > 0;
+       ++index)
+  {
+    const auto stat = static_cast<DerivedStat>(index);
+    const DerivedStatInfo& info = derivedStatInfo(stat);
+    const double rating = derivedSums[index] / derivedPlayers;
+    derived.rows.push_back(
+        {std::string(info.name), std::format("{:.1f}", rating * 100.0),
+         info.unit.empty()
+             ? std::string("-")
+             : std::format("{:.4g} {}",
+                           derivedPhysicalValue(stat, static_cast<float>(rating)),
+                           info.unit)});
+  }
+  tables.push_back(std::move(derived));
   return tables;
 }
 

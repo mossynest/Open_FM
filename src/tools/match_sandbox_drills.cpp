@@ -155,6 +155,8 @@ struct RunnerAttributes
   float pace = 70.0f;
   float physicality = 70.0f;
   float stamina = 70.0f;
+  /** The Agility derived stat; 0 leaves it to its recipe. */
+  float agility = 0.0f;
 
   void addTo(std::vector<DrillParameter>& parameters)
   {
@@ -164,15 +166,26 @@ struct RunnerAttributes
     parameters.push_back(setting("Stamina", &stamina, 1.0f, 100.0f, true,
                           "Endurance: how fast condition and the sprint "
                           "reserve drain and recover."));
+    parameters.push_back(setting("Agility", &agility, 0.0f, 100.0f, true,
+                          "Grip: how sharply he turns at speed (0.9x at 45, "
+                          "1.1x at 85).\n0: from its recipe (mirrors "
+                          "acceleration: Pace and Physicality)."));
   }
   [[nodiscard]] std::map<std::string, float> stats() const
   {
     return {{"Pace", pace}, {"Physicality", physicality}, {"Stamina", stamina}};
   }
+  [[nodiscard]] std::map<DerivedStat, float> derived() const
+  {
+    if (agility <= 0.0f) return {};
+    return {{DerivedStat::AGILITY, agility}};
+  }
   [[nodiscard]] std::string describe() const
   {
-    return std::format("Pace {:.0f} · Physicality {:.0f} · Stamina {:.0f}", pace,
-                       physicality, stamina);
+    std::string text = std::format("Pace {:.0f} · Physicality {:.0f} · Stamina {:.0f}",
+                                   pace, physicality, stamina);
+    if (agility > 0.0f) text += std::format(" · Agility {:.0f}", agility);
+    return text;
   }
 };
 
@@ -195,7 +208,7 @@ class MovementDrill : public Drill
 
   std::vector<DrillPlayerSpec> players() const override
   {
-    return {{"Runner", PlayerRole::CM, true, runner.stats(), 180}};
+    return {{"Runner", PlayerRole::CM, true, runner.stats(), 180, runner.derived()}};
   }
 
   bool humanControl() const override { return pathSetting() == YOU; }

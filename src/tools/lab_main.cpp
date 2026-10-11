@@ -27,6 +27,7 @@
 
 #include "global/logger.h"
 #include "global/thread_pool.h"
+#include "model/match_tuning.h"
 #include "tools/lab_fixtures.h"
 #include "tools/lab_report.h"
 #include "tools/lab_runner.h"
@@ -54,15 +55,19 @@ Usage:
   fm_lab matches [--n N] [--seed S] [--home-rating X --away-rating Y | --spread
                  [--rating-min A --rating-max B]] [--fidelity full|background]
                  [--brains HOME,AWAY] [--bodies HOME,AWAY] [--threads T]
-                 [--handshake H] [--out-dir DIR]
+                 [--handshake H] [--home-advantage X] [--uniform]
+                 [--out-dir DIR]
   fm_lab season  [--leagues all|top|ID,ID...] [--seasons N] [--seed S]
                  [--threads T] [--max-days D] [--reload] [--out-dir DIR]
   fm_lab tactics [--n SEEDS_PER_PAIR] [--seed S] [--rating X] [--threads T]
                  [--fidelity full|background] [--brains HOME,AWAY]
-                 [--bodies HOME,AWAY] [--handshake H] [--out-dir DIR]
+                 [--bodies HOME,AWAY] [--handshake H] [--home-advantage X]
+                 [--out-dir DIR]
 
 matches  isolated matches between synthetic 4-4-2 squads (default 2000 at
-         rating 65 v 65; --spread draws both ratings uniformly per match)
+         rating 65 v 65; --spread draws both ratings uniformly per match;
+         --uniform gives every player every stat at the rating, the match
+         sandbox's "Team N", instead of role-shaped attributes)
 season   whole AI-only world via GameController in a scratch directory
          ("seasons" is accepted too); the soak trend table tracks
          population, ability, finances by tier, competitions, save size and
@@ -83,6 +88,11 @@ touch, goalkeeping), original (default) or new-v1, set the same way.
 
 Handshake: how the inputs become match state (attribute scale, physical
 limits, roles), one for the match: original (default) or new-v1.
+
+Home advantage: the home side's edge on attributes, execution and
+refereeing (MatchContext::homeAdvantageScale), 0 a neutral venue (default)
+to 2; 1 is the game's full edge (the setting of reports made before this
+option existed).
 
 Threads: --threads, else FM_SIM_THREADS, else 4 (max 8); the process lowers
 its own priority. Output: report.md and metrics.json in --out-dir (default a
@@ -119,13 +129,14 @@ class UsageError : public std::runtime_error
 
 Arguments parseArguments(int argc, char** argv)
 {
-  static constexpr std::array<std::string_view, 4> FLAGS = {
-      "--spread", "--reload", "--help", "-h"};
-  static constexpr std::array<std::string_view, 16> OPTIONS = {
+  static constexpr std::array<std::string_view, 5> FLAGS = {
+      "--spread", "--uniform", "--reload", "--help", "-h"};
+  static constexpr std::array<std::string_view, 17> OPTIONS = {
       "--n",       "--seed",       "--home-rating", "--away-rating",
       "--rating",  "--rating-min", "--rating-max",  "--threads",
       "--out-dir", "--leagues",    "--seasons",     "--max-days",
-      "--fidelity", "--brains",    "--bodies",      "--handshake"};
+      "--fidelity", "--brains",    "--bodies",      "--handshake",
+      "--home-advantage"};
   Arguments arguments;
   if (argc < 2) throw UsageError("missing mode");
   arguments.mode = argv[1];
@@ -306,6 +317,13 @@ HandshakeId handshakeOption(const Arguments& arguments)
   return *handshake;
 }
 
+/** --home-advantage X, 0 (a neutral venue, the default) to 2. */
+float homeAdvantageOption(const Arguments& arguments)
+{
+  return parseNumber<float>(arguments, "--home-advantage", 0.0f, 0.0f,
+                            MatchTuning::Context::MAX_HOME_ADVANTAGE_SCALE);
+}
+
 Lab::LabReport runMatchesMode(const Arguments& arguments, unsigned threads)
 {
   const int count =
@@ -329,6 +347,7 @@ Lab::LabReport runMatchesMode(const Arguments& arguments, unsigned threads)
   const std::array<BrainId, 2> brains = brainPair(arguments);
   const std::array<BodyId, 2> bodies = bodyPair(arguments);
   const HandshakeId handshake = handshakeOption(arguments);
+  const float homeAdvantage = homeAdvantageOption(arguments);
 
   std::vector<Lab::MatchJob> jobs(static_cast<std::size_t>(count));
   for (std::size_t i = 0; i < jobs.size(); ++i)
@@ -353,7 +372,14 @@ Lab::LabReport runMatchesMode(const Arguments& arguments, unsigned threads)
     }
   }
   setBrainsAndBodies(jobs, brains, bodies);
-  for (Lab::MatchJob& job : jobs) job.handshake = handshake;
+  const bool uniform = arguments.has("--uniform");
+  for (Lab::MatchJob& job : jobs)
+  {
+    job.handshake = handshake;
+    job.homeAdvantage = homeAdvantage;
+    job.home.uniform = uniform;
+    job.away.uniform = uniform;
+  }
 
   const StatsConfig config = Lab::loadStatsConfig();
   const auto started = std::chrono::steady_clock::now();
@@ -386,6 +412,9 @@ Lab::LabReport runMatchesMode(const Arguments& arguments, unsigned threads)
   report.parameters["brains"] = brainsParameter(brains);
   report.parameters["bodies"] = bodiesParameter(bodies);
   report.parameters["handshake"] = std::string(handshakeName(handshake));
+  report.parameters["home_advantage"] = std::format("{:.2f}", homeAdvantage);
+  report.parameters["squads"] =
+      uniform ? "uniform (every stat at the rating)" : "role-shaped";
   static constexpr std::array SCOPES = {Lab::Scope::Match, Lab::Scope::Engine};
   report.rows = Lab::evaluateTargets(Lab::matchMetrics(samples), SCOPES);
   report.tables = Lab::matchTables(samples);
@@ -414,8 +443,13 @@ Lab::LabReport runTacticsMode(const Arguments& arguments, unsigned threads)
   const std::array<BrainId, 2> brains = brainPair(arguments);
   const std::array<BodyId, 2> bodies = bodyPair(arguments);
   const HandshakeId handshake = handshakeOption(arguments);
+  const float homeAdvantage = homeAdvantageOption(arguments);
   setBrainsAndBodies(jobs, brains, bodies);
-  for (Lab::MatchJob& job : jobs) job.handshake = handshake;
+  for (Lab::MatchJob& job : jobs)
+  {
+    job.handshake = handshake;
+    job.homeAdvantage = homeAdvantage;
+  }
   const StatsConfig config = Lab::loadStatsConfig();
   const auto started = std::chrono::steady_clock::now();
   const std::vector<Lab::MatchSample> samples = Lab::simulateMatches(
@@ -445,6 +479,7 @@ Lab::LabReport runTacticsMode(const Arguments& arguments, unsigned threads)
   report.parameters["brains"] = brainsParameter(brains);
   report.parameters["bodies"] = bodiesParameter(bodies);
   report.parameters["handshake"] = std::string(handshakeName(handshake));
+  report.parameters["home_advantage"] = std::format("{:.2f}", homeAdvantage);
   static constexpr std::array SCOPES = {Lab::Scope::Tactics};
   report.rows = Lab::evaluateTargets(metrics, SCOPES);
   report.notes.push_back(

@@ -29,14 +29,25 @@ class MatchEngine;
 
 /**
  * The brains (home, away) new sandbox matches, checks and drills start with:
- * the sandbox's --brains option, else Original for both sides.
+ * the sandbox's --brains option, else Original for both sides (the window
+ * opens on Original v New v1 instead; see match_sandbox_main.cpp).
  */
 std::array<BrainId, 2>& sandboxBrains();
-/** The same for bodies: the --bodies option, else Original for both. */
+/** The same for bodies: the --bodies option, else Original for both (the
+ * window: Original v New v1). */
 std::array<BodyId, 2>& sandboxBodies();
 /** The handshake new sandbox matches, checks and drills are built with:
  * the --handshake option, else Original. */
 HandshakeId& sandboxHandshake();
+/** The home advantage new sandbox matches, checks and drills are played
+ * with (MatchContext::homeAdvantageScale: 0 a neutral venue, 1 the game's
+ * full home edge on attributes, execution and refereeing, up to 2): the
+ * --home-advantage option, else 0 (--check: 1, to compare with the
+ * inherited engine). */
+float& sandboxHomeAdvantage();
+/** Gives a match not yet kicked off this home advantage. At 1 (the engine's
+ * own default) it leaves the match untouched, random draws included. */
+void applyHomeAdvantage(MatchEngine& engine, float scale);
 
 /**
  * Everything a sandbox match is built from (debugger phase 5): both sides'
@@ -76,6 +87,8 @@ struct MatchSetup
   std::array<BodyId, 2> bodies{BodyId::ORIGINAL, BodyId::ORIGINAL};
   /** The match's handshake (older recordings: Original). */
   HandshakeId handshake = HandshakeId::ORIGINAL;
+  /** The match's home advantage (older recordings: 1, the full edge). */
+  float homeAdvantage = 1.0f;
 
   /**
    * The match about to be played between two clubs of the current world,

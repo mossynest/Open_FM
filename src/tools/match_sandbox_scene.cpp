@@ -39,6 +39,8 @@
 #include "tools/lab_fixtures.h"
 #include "tools/match_sandbox_drill_scene.h"
 #include "tools/match_sandbox_measure_scene.h"
+#include "tools/match_sandbox_pickers.h"
+#include "tools/match_sandbox_test_teams.h"
 #include "tools/match_sandbox_shot_map.h"
 
 namespace
@@ -199,7 +201,14 @@ void MatchSandboxScene::onEnter()
     SDL_free(static_cast<void*>(windows));
   }
 
-  // The first two clubs of the first league start as home and away.
+  // Team 66 and its copy start as home and away; without the test teams,
+  // the first two clubs of the first league.
+  if (const auto& clubs = sandboxDefaultClubs(); clubs[0] != 0 && clubs[1] != 0)
+  {
+    sides[HOME].team = clubs[0];
+    sides[AWAY].team = clubs[1];
+    return;
+  }
   const GameController& controller = guiView->getController();
   const auto& leagues = controller.getLeagues();
   const auto& teams = controller.getTeams();
@@ -448,46 +457,20 @@ void MatchSandboxScene::renderClubPicker(Side& side, bool home)
 
 void MatchSandboxScene::renderBrainPicker(bool home)
 {
-  BrainId& brain = sandboxBrains()[home ? 0 : 1];
   ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted("Brain");
   ImGui::SameLine();
-  ImGui::SetNextItemWidth(160.0f * Theme::scale());
-  if (ImGui::BeginCombo("##brain", brainName(brain).data()))
-  {
-    for (const BrainId option : ALL_BRAINS)
-      if (ImGui::Selectable(brainName(option).data(), option == brain))
-        brain = option;
-    ImGui::EndCombo();
-  }
-  if (ImGui::IsItemHovered())
-    ImGui::SetTooltip(
-        "The decision-making this side plays with: Original is the inherited "
-        "engine, kept as it was; New v1 is the version being developed. "
-        "Physics and rules are the same for both.");
+  SandboxPickers::brain("##brain", sandboxBrains()[home ? 0 : 1],
+                        160.0f * Theme::scale());
 }
 
 void MatchSandboxScene::renderBodyPicker(bool home)
 {
-  BodyId& body = sandboxBodies()[home ? 0 : 1];
   ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted("Body");
   ImGui::SameLine();
-  ImGui::SetNextItemWidth(160.0f * Theme::scale());
-  if (ImGui::BeginCombo("##body", bodyName(body).data()))
-  {
-    for (const BodyId option : ALL_BODIES)
-      if (ImGui::Selectable(bodyName(option).data(), option == body))
-        body = option;
-    ImGui::EndCombo();
-  }
-  if (ImGui::IsItemHovered())
-    ImGui::SetTooltip(
-        "How this side's players' bodies carry out what their brain chose: "
-        "movement, fitness, kicking, first touch, goalkeeping, injuries. "
-        "Original is the inherited engine; New v1 is being developed. "
-        "Contests between players, the ball and the rules are the same for "
-        "both.");
+  SandboxPickers::body("##body", sandboxBodies()[home ? 0 : 1],
+                       160.0f * Theme::scale());
 }
 
 void MatchSandboxScene::renderFormation(Team& team)
@@ -772,6 +755,17 @@ void MatchSandboxScene::renderFooter()
         "acceleration, roles, positions, match context. Original is the "
         "inherited engine; New v1 is being developed.");
   ImGui::SameLine(0.0f, Theme::Space::XL * scale);
+  ImGui::TextUnformatted("Home advantage");
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(110.0f * scale);
+  ImGui::SliderFloat("##home_advantage", &sandboxHomeAdvantage(), 0.0f,
+                     MatchTuning::Context::MAX_HOME_ADVANTAGE_SCALE, "%.2f");
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip(
+        "The home side's edge: a lift on its skill attributes, sharper "
+        "execution and duels, and kinder refereeing. 0 is a neutral venue "
+        "(the sandbox default), 1 the game's full edge, 2 double.");
+  ImGui::SameLine(0.0f, Theme::Space::XL * scale);
   ImGui::Checkbox("Engine debugger", &show_debugger);
   if (ImGui::IsItemHovered())
     ImGui::SetTooltip("Show the debugger window over the match: pause, step "
@@ -1032,8 +1026,9 @@ void MatchSandboxScene::kickOff()
   const std::array<BrainId, 2> brains = match_setup->brains;
   const std::array<BodyId, 2> bodies = match_setup->bodies;
   const HandshakeId handshake = match_setup->handshake;
-  sandbox.on_finish =
-      [this, seed, brains, bodies, handshake](const MatchEngine& engine)
+  const float homeAdvantage = match_setup->homeAdvantage;
+  sandbox.on_finish = [this, seed, brains, bodies, handshake,
+                       homeAdvantage](const MatchEngine& engine)
   {
     const GameController& gameController = guiView->getController();
     const auto home = gameController.getTeamById(sides[HOME].team);
@@ -1046,8 +1041,10 @@ void MatchSandboxScene::kickOff()
       score += std::format(" ({} - {} pens)", engine.getShootoutScore(true),
                            engine.getShootoutScore(false));
     last_result = std::format(
-        "{}  (seed {}; brains {}; bodies {}; handshake {})", score, seed,
-        brainPairName(brains), bodyPairName(bodies), handshakeName(handshake));
+        "{}  (seed {}; brains {}; bodies {}; handshake {}; home advantage "
+        "{:.2f})",
+        score, seed, brainPairName(brains), bodyPairName(bodies),
+        handshakeName(handshake), homeAdvantage);
   };
   guiView->overlayScene(std::make_unique<MatchScene>(
       guiView, sides[HOME].team, sides[AWAY].team, std::move(sandbox)));
