@@ -33,6 +33,12 @@
   HeaderPlay chooseHeaderPlayNewV1(const MatchPlayer& header, bool fromTeammate);
   Challenge chooseChallengeNewV1(const MatchPlayer& carrier, float dt);
   bool touchNowNewV1(const MatchPlayer& player, const TouchMoment& moment) const;
+  bool dribbleTouchNowNewV1(const MatchPlayer& player,
+                            const TouchMoment& moment) const;
+  /** Whether a clearly closer point of the ball's roll, safely in his
+   * reach, is coming before anyone else could play it (touch timing). */
+  bool waitsForCloserNewV1(const MatchPlayer& player,
+                           const TouchMoment& moment) const;
   TouchIntent chooseFirstTouchNewV1(const MatchPlayer& player,
                                     const TouchMoment& moment) const;
   bool choosesToBlockNewV1(const MatchPlayer& player);

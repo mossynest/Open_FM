@@ -196,6 +196,21 @@ bool MatchEngine::touchNow(const MatchPlayer& player, const TouchMoment& moment)
   return true;
 }
 
+bool MatchEngine::dribbleTouchNow(const MatchPlayer& player,
+                                  const TouchMoment& moment)
+{
+  // His own ball, due a touch (dribbleTouchDue). The Original brain has no
+  // touch timing: he plays it the moment it is due.
+  switch (brainOf(player.isHomeTeam))
+  {
+    case BrainId::ORIGINAL:
+      break;
+    case BrainId::NEW_V1:
+      return dribbleTouchNowNewV1(player, moment);
+  }
+  return true;
+}
+
 TouchIntent MatchEngine::chooseFirstTouch(const MatchPlayer& player,
                                           const TouchMoment& moment)
 {

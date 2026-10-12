@@ -470,6 +470,7 @@ bool MatchEngine::updateDribbleOriginal(MatchPlayer& carrier, float dt)
     ball.touchTimer -= dt;
     if (ball.touchTimer <= 0.0f)
     {
+      ++dribbleTouches;
       // A touch pushes the ball ahead along the run; faster runs and poorer
       // dribblers push it further, and pressure risks a heavy touch.
       ball.dribbleDirection = {carrier.velocity.x / speed,

@@ -251,19 +251,29 @@ bool runDrillChecks(const Team& home, const Team& away,
 
   // The drill framework: every drill, run twice to its end through
   // DrillRun, reports the same and its run rewinds exactly, by the AI and
-  // by the bot on the stick (the two movement paths).
+  // by the bot on the stick (the two movement paths), and the movement
+  // drills again with the ball.
   bool framework = true;
   for (const auto& drill : makeDrills())
+  for (const float withBall : {0.0f, 1.0f})
   for (const float path : {0.0f, 1.0f})
   {
     bool hasPath = false;
+    bool hasBall = false;
     for (const DrillParameter& parameter : drill->parameters())
+    {
       if (std::string_view(parameter.name) == "Who runs")
       {
         *parameter.value = path;
         hasPath = true;
       }
-    if (!hasPath && path > 0.0f) continue;
+      if (std::string_view(parameter.name) == "With the ball")
+      {
+        *parameter.value = withBall;
+        hasBall = true;
+      }
+    }
+    if ((!hasPath && path > 0.0f) || (!hasBall && withBall > 0.0f)) continue;
     const auto runToEnd = [&](bool rewind)
     {
       DrillRun run(*drill, config);
@@ -300,9 +310,13 @@ bool runDrillChecks(const Team& home, const Team& away,
       }
     framework = framework && completed;
     std::cout << std::format(
-        "Drill {}{}: {}  ·  same twice and rewinds: {}{}\n", drill->name(),
-        !hasPath ? "" : path > 0.0f ? " (bot)" : " (AI)", result,
-        same ? "yes" : "NO", completed ? "" : "  ·  DID NOT FINISH");
+        "Drill {}{}{}: {}  ·  same twice and rewinds: {}{}\n", drill->name(),
+        !hasPath ? "" : path > 0.0f ? " (bot)" : " (AI)",
+        withBall > 0.0f ? " with the ball" : "", result, same ? "yes" : "NO",
+        completed ? "" : "  ·  DID NOT FINISH");
+    if (hasBall)
+      for (const DrillParameter& parameter : drill->parameters())
+        if (std::string_view(parameter.name) == "With the ball") *parameter.value = 0.0f;
   }
 
   // Measure mode: a sweep gives the same results as running the drill
@@ -564,6 +578,9 @@ bool runFirstTouchChecks(const std::vector<const Team*>& clubs,
     int angleFailed = 0;
     int weightFailed = 0;
     std::uint32_t waitsMissed = 0;
+    std::uint64_t dribbleTouches = 0;
+    double dribbleContactGapSum = 0.0;
+    std::uint64_t dribbleFailed = 0;
     float worstExcess = 0.0f;
     float worstCollectJump = 0.0f;
     /** Attempted, completed, intercepted. */
@@ -602,6 +619,10 @@ bool runFirstTouchChecks(const std::vector<const Team*>& clubs,
                       : 0;
       };
       bool wasInTouch = false;
+      // The whole claim (first touch, then the dribble) for the physics test.
+      bool wasClaimed = false;
+      const Player* claimOwner = nullptr;
+      int claimTouches = 0;
       bool reception = false;
       int ownerTouches = 0;
       float lastPeakGap = 0.0f;
@@ -620,7 +641,10 @@ bool runFirstTouchChecks(const std::vector<const Team*>& clubs,
         const auto stepCount = static_cast<float>(steps - lastSteps);
         lastSteps = steps;
         const MatchBall& ball = engine->getBall();
-        const bool inTouch = ball.inTouch;
+        // A first touch runs from the touch to collection (then he dribbles
+        // the same claimed ball).
+        const bool inTouch = ball.inTouch && !ball.touchCollected;
+        const bool claimed = ball.inTouch;
         const double now = engine->getSimulatedSeconds();
         // The same touch only while its owner has not re-claimed the ball:
         // someone else can play it and he touch it again within one step.
@@ -632,16 +656,20 @@ bool runFirstTouchChecks(const std::vector<const Team*>& clubs,
           ++(setup.outcomes[0].*field);
           if (reception) ++(setup.outcomes[1].*field);
         };
-        if (sameTouch)
+        if (wasClaimed && claimed && ball.possessedBy == claimOwner &&
+            touchesOf(claimOwner) == claimTouches)
         {
-          // Rolling on to him: nothing but the ball's own physics moved it.
+          // Rolling on to him, or dribbled: nothing but the ball's own
+          // physics moved it (a touch changes its velocity, not where it is).
+          // Left out: a step in which someone else played it and he won it
+          // back (several touches in one step).
           const float allowed =
               std::max(lastSpeed, speedOf(ball.velocity)) * DT * stepCount +
               SLACK_METRES;
           setup.worstExcess = std::max(
               setup.worstExcess, metres(lastPosition, ball.position) - allowed);
         }
-        else if (wasInTouch)
+        if (!sameTouch && wasInTouch)
         {
           if (lastPeakGap > HEAVY_GAP_METRES) ++setup.heavy;
           if (engine->getState() != MatchState::PLAYING)
@@ -696,6 +724,9 @@ bool runFirstTouchChecks(const std::vector<const Team*>& clubs,
             ++setup.intoStride;
         }
         wasInTouch = inTouch;
+        wasClaimed = claimed;
+        claimOwner = claimed ? ball.possessedBy : nullptr;
+        claimTouches = touchesOf(claimOwner);
         lastPeakGap = inTouch ? ball.touchPeakGap : 0.0f;
         lastPosition = ball.position;
         lastSpeed = speedOf(ball.velocity);
@@ -704,6 +735,9 @@ bool runFirstTouchChecks(const std::vector<const Team*>& clubs,
                         ball.position.y - holder->position.y};
       }
       setup.waitsMissed += engine->getFirstTouchWaitsMissed();
+      setup.dribbleTouches += engine->getDribbleTouches();
+      setup.dribbleContactGapSum += engine->getDribbleContactGapSum();
+      setup.dribbleFailed += engine->getDribbleFailedTouches();
       const MatchStats& stats = engine->getStats();
       setup.passes[0] += stats.homePassesAttempted + stats.awayPassesAttempted;
       setup.passes[1] += stats.homePassesCompleted + stats.awayPassesCompleted;
@@ -745,9 +779,11 @@ bool runFirstTouchChecks(const std::vector<const Team*>& clubs,
         "his centre on average; into stride {:.0f}%; mean error: angle "
         "{:.1f}°, weight {:.2f} m/s; failed: angle {:.1f}%, weight {:.1f}%; "
         "heavy (ball over 2 m away) {:.1f}%; mean "
-        "time to collect {:.2f} s\n    rolling "
-        "ball moved only under physics: {} (worst excess {:.3f} m); largest "
-        "jump relative to him at collection {:.2f} m; waited and lost it: {}\n",
+        "time to collect {:.2f} s\n    dribble touches {} (met {:.2f} m from his "
+        "centre on average, {:.1f}% went wrong); claimed "
+        "ball (touched, then dribbled) moved only under physics: {} (worst "
+        "excess {:.3f} m); largest jump relative to him at collection {:.2f} "
+        "m; waited and lost it: {}\n",
         describe(all), describe(setup.outcomes[1]),
         setup.contactGapSum / started,
         100.0 * static_cast<double>(setup.intoStride) / started,
@@ -758,6 +794,14 @@ bool runFirstTouchChecks(const std::vector<const Team*>& clubs,
         100.0 * static_cast<double>(setup.heavy) / started,
         all.collected ? setup.collectSeconds / static_cast<double>(all.collected)
                       : 0.0,
+        setup.dribbleTouches,
+        setup.dribbleTouches
+            ? setup.dribbleContactGapSum / static_cast<double>(setup.dribbleTouches)
+            : 0.0,
+        setup.dribbleTouches
+            ? 100.0 * static_cast<double>(setup.dribbleFailed) /
+                  static_cast<double>(setup.dribbleTouches)
+            : 0.0,
         physical ? "yes" : "NO", std::max(setup.worstExcess, 0.0f),
         std::max(setup.worstCollectJump, 0.0f), setup.waitsMissed);
     ok = ok && physical && all.collected > 0 && setup.waitsMissed == 0;

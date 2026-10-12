@@ -598,6 +598,32 @@ bool MatchEngine::updateDribbleNewV1(MatchPlayer& carrier, float dt)
   const bool inHands = carrier.isGoalkeeper &&
                        inPenaltyArea(carrier.position, carrier.isHomeTeam);
   const float speed = length(carrier.velocity);
+  if (!carrier.isGoalkeeper)
+  {
+    // An outfielder's ball is never tethered: however he came by it (a
+    // restart, a tackle, a drill), it is loose at his feet from here, moving
+    // with him, and he plays it on touch by touch (the ball's sweep).
+    const Vector2F ahead =
+        speed > EPSILON
+            ? Vector2F{carrier.velocity.x / speed, carrier.velocity.y / speed}
+            : ball.dribbleDirection;
+    const Vector2F offset = toPitch(
+        {ahead.x * R::FEET_METRES, ahead.y * R::FEET_METRES});
+    ball.position = {std::clamp(carrier.position.x + offset.x, 0.001f, 0.999f),
+                     std::clamp(carrier.position.y + offset.y, 0.001f, 0.999f)};
+    ball.z = 0.0f;
+    ball.velocity = carrier.velocity;
+    ball.inTouch = true;
+    ball.touchCollected = true;
+    ball.touchPasser = nullptr;
+    ball.ownTouchCooldown = 0.0f;
+    ball.dribbleGoal = carrier.tacticalTarget;
+    ball.touchGap = R::FEET_METRES;
+    ball.touchPeakGap = R::FEET_METRES;
+    ball.dribbleExposure = R::FEET_METRES;
+    ball.dribbleTouchLength = R::MAX_TOUCH_METRES;
+    return true;
+  }
   if (inHands)
   {
     ball.dribbleExposure = 0.0f;
@@ -618,6 +644,7 @@ bool MatchEngine::updateDribbleNewV1(MatchPlayer& carrier, float dt)
     ball.touchTimer -= dt;
     if (ball.touchTimer <= 0.0f)
     {
+      ++dribbleTouches;
       // A touch pushes the ball ahead along the run; faster runs and poorer
       // dribblers push it further, and pressure risks a heavy touch.
       ball.dribbleDirection = {carrier.velocity.x / speed,
@@ -673,15 +700,24 @@ bool MatchEngine::updateDribbleNewV1(MatchPlayer& carrier, float dt)
   return true;
 }
 
+TouchResult MatchEngine::dribbleTouchNewV1(const MatchPlayer& player,
+                                           const TouchIntent& intent,
+                                           const TouchMoment& moment)
+{
+  // A dribble touch is a first touch on a ball he already has: the same two
+  // jobs, the same skill (First Touch).
+  return firstTouchNewV1(player, intent, moment, true);
+}
 TouchResult MatchEngine::firstTouchNewV1(const MatchPlayer& player,
                                          const TouchIntent& intent,
-                                         const TouchMoment& moment)
+                                         const TouchMoment& moment, bool ownBall)
 {
   using K = TouchKnob;
   const FirstTouchKnobs& knob = touchKnobs;
   constexpr float RIGHT_ANGLE = std::numbers::pi_v<float> * 0.5f;
   // What he means to do: straight at the target spot, weighted with the
-  // rolling physics to arrive at the intended speed.
+  // rolling physics to arrive at the intended speed. A first touch is no
+  // pass; a dribble touch is no faster than a push ahead of his run.
   const Vector2F gap = toMetres({intent.targetSpot.x - moment.contactPoint.x,
                                  intent.targetSpot.y - moment.contactPoint.y});
   const float metres = length(gap);
@@ -690,10 +726,14 @@ TouchResult MatchEngine::firstTouchNewV1(const MatchPlayer& player,
        std::sin(player.facingAngle) * MatchTuning::Pitch::WIDTH_METRES});
   const Vector2F aim =
       metres > EPSILON ? Vector2F{gap.x / metres, gap.y / metres} : facing;
+  const float maxSpeed =
+      ownBall ? std::max(length(player.velocity), intent.arrivalSpeed) +
+                    MatchTuning::Dribble::LOOSE_MAX_SPEED_OVER_RUN
+              : knob[K::MAX_TOUCH_SPEED];
   const float intendedSpeed =
-      metres > EPSILON ? std::min(groundLaunchSpeed(metres, intent.arrivalSpeed),
-                                  knob[K::MAX_TOUCH_SPEED])
-                       : 0.0f;
+      metres > EPSILON
+          ? std::min(groundLaunchSpeed(metres, intent.arrivalSpeed), maxSpeed)
+          : 0.0f;
 
   // The line it came on: sending it back along it (a cushion) or on along
   // it (taking it on) is no turn; whichever is nearer what he means is the
@@ -717,11 +757,20 @@ TouchResult MatchEngine::firstTouchNewV1(const MatchPlayer& player,
                        line.x * facing.x + line.y * facing.y;
   const float paceChange = intendedSpeed - (moving ? incomingSpeed : 0.0f);
 
-  // How hard each job is: its size, then the conditions (each 0-1).
+  // How hard each job is: its size, then the conditions (each 0-1). How
+  // fast it meets him and where from are read relative to him: a ball
+  // rolling ahead at his own pace is a slow ball met from the front.
   const Vector2F toBall =
       metricDirection(player.position, moment.contactPoint);
-  // Where it comes from: back along its path, or where it lies if still.
-  const Vector2F from = moving ? Vector2F{-incoming.x, -incoming.y} : toBall;
+  const Vector2F relative{ball.velocity.x - player.velocity.x,
+                          ball.velocity.y - player.velocity.y};
+  const float meetingSpeed = length(relative);
+  // Where it comes from: back along its path (relative to him), or where it
+  // lies if it keeps pace with him.
+  const Vector2F from =
+      meetingSpeed > MatchTuning::Ball::STOP_SPEED
+          ? Vector2F{-relative.x / meetingSpeed, -relative.y / meetingSpeed}
+          : toBall;
   // Which side of him it is on (+ his right), for the weaker foot.
   const float side = facing.y * toBall.x - facing.x * toBall.y;
   const bool rightFooted =
@@ -729,9 +778,11 @@ TouchResult MatchEngine::firstTouchNewV1(const MatchPlayer& player,
   const float weakSide = rightFooted ? std::max(-side, 0.0f)
                                      : std::max(side, 0.0f);
   const auto clamp01 = [](float value) { return std::clamp(value, 0.0f, 1.0f); };
+  // His own dribbled ball never surprises him.
   const float surprise =
-      !ball.isPass ? knob[K::LOOSE_BALL_SURPRISE]
-                   : (ball.intendedReceiver == player.player ? 0.0f : 1.0f);
+      ownBall       ? 0.0f
+      : !ball.isPass ? knob[K::LOOSE_BALL_SURPRISE]
+                     : (ball.intendedReceiver == player.player ? 0.0f : 1.0f);
   struct Factor
   {
     const char* name;
@@ -750,7 +801,7 @@ TouchResult MatchEngine::firstTouchNewV1(const MatchPlayer& player,
            (outward ? knob[K::TURN_OUTWARD] : knob[K::TURN_INWARD]),
        0.0f},
       {"incoming pace", TermSource::SITUATION,
-       clamp01(incomingSpeed / knob[K::REFERENCE_SPEED]),
+       clamp01(meetingSpeed / knob[K::REFERENCE_SPEED]),
        knob[K::INCOMING_SPEED_ANGLE], knob[K::INCOMING_SPEED_WEIGHT]},
       {"coming from behind him", TermSource::SITUATION,
        clamp01((1.0f - (from.x * facing.x + from.y * facing.y)) * 0.5f),

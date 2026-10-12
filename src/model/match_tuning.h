@@ -245,8 +245,9 @@ struct MatchTuning final
   /**
    * First touch (New v1 body, feet): the touch plays the ball on under real
    * physics and the player runs onto it. He owns it from the touch (a
-   * claimed ball) until he collects it, an opponent plays it, or he loses
-   * the claim (see Notes and plans/match_engine_first_touch_plan.md).
+   * claimed ball) until an opponent plays it or play stops (see Notes and
+   * plans/match_engine_first_touch_plan.md and
+   * match_engine_dribble_touches_plan.md).
    */
   struct FirstTouch final
   {
@@ -254,10 +255,8 @@ struct MatchTuning final
     static constexpr float SET_OFFSET_METRES = 0.5f;
     /** Collected: within kick reach and moving with him. */
     static constexpr float COLLECT_RELATIVE_SPEED = 1.5f;
-    /** The claim is dropped beyond this gap while it still grows... */
-    static constexpr float RELEASE_METRES = 3.5f;
-    /** ...or when an opponent can get there this much sooner than he can. */
-    static constexpr float RELEASE_RACE_SECONDS = 0.3f;
+    /** A team-mate may play a claimed ball this far from its owner. */
+    static constexpr float TEAMMATE_TAKES_METRES = 3.5f;
     /** Thinking time once the ball is collected (the AI). */
     static constexpr float MIN_DECISION_DELAY = 0.2f;
     static constexpr float MAX_DECISION_DELAY = 0.4f;
@@ -398,6 +397,30 @@ struct MatchTuning final
     /** A beaten defender is wrong-footed: momentum lost, no challenge. */
     static constexpr float BEATEN_SECONDS = 1.1f;
     static constexpr float BEATEN_VELOCITY_RETAINED = 0.25f;
+
+    // The loose dribble (New v1 body): the ball is never tethered; each touch
+    // plays it on under physics and he runs onto it (dribble touches plan).
+    /** A touch into stride puts the ball where he will be this long later
+     * at the pace he wants (less for a better dribbler)... */
+    static constexpr float LOOSE_LEAD_SECONDS = 0.6f;
+    /** ...plus this far, rolling on average at this share of that pace so
+     * he gains on it (a set touch arrives at the arrival share). */
+    static constexpr float LOOSE_LEAD_EXTRA_METRES = 0.4f;
+    static constexpr float LOOSE_MEAN_PACE_SHARE = 0.95f;
+    static constexpr float LOOSE_ARRIVAL_SHARE = 0.85f;
+    /** At least this long between two of his own touches. */
+    static constexpr float LOOSE_TOUCH_INTERVAL = 0.25f;
+    /** He touches a ball heading this far off the way he wants to go... */
+    static constexpr float LOOSE_REDIRECT_RADIANS = 0.5f;
+    /** ...but at pace turns it at most this far off his run per touch, and
+     * takes pace off for a sharper turn still to come (to this share at
+     * most). */
+    static constexpr float LOOSE_MAX_TURN_RADIANS = 0.6f;
+    static constexpr float LOOSE_TURN_MIN_PACE = 0.4f;
+    /** Below this pace he wants (m/s), a ball at rest by him stays there. */
+    static constexpr float LOOSE_START_SPEED = 0.5f;
+    /** A dribble touch is no pass: at most this much faster than his pace. */
+    static constexpr float LOOSE_MAX_SPEED_OVER_RUN = 4.0f;
   };
 
   /** Physical load statistics thresholds (m/s). */

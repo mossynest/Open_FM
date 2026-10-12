@@ -422,8 +422,11 @@ bool MatchEngine::executeCommand(const MatchCommandRecord& command)
       {
         drillTargets.push_back({command.player, *command.target,
                                 command.urgent});
-        // Taken at once, not at the next planner refresh.
+        // Taken at once, not at the next planner refresh (by his touches
+        // too, when he is dribbling).
         player->tacticalTarget = *command.target;
+        if (ball.inTouch && ball.possessedBy == player->player)
+          ball.dribbleGoal = *command.target;
         player->targetVelocity = {0.0f, 0.0f};
         player->urgentMovement = command.urgent;
       }
@@ -433,6 +436,12 @@ bool MatchEngine::executeCommand(const MatchCommandRecord& command)
     case MatchCommandType::FORCE_SHOT:
       if (!drillPlayer(command.player)) return false;
       forcedShooter = command.player;
+      ++inputRevision;
+      return true;
+    case MatchCommandType::KEEP_BALL:
+      if (!drillPlayer(command.player)) return false;
+      std::erase(ballKeepers, command.player);
+      if (command.urgent) ballKeepers.push_back(command.player);
       ++inputRevision;
       return true;
     case MatchCommandType::FEED_BALL:
@@ -1692,6 +1701,11 @@ void MatchEngine::updateMovement(float dt)
     refreshTacticalTargets(dt, false);
     // Drills hold some players' targets over the plan.
     if (!drillTargets.empty()) applyDrillTargets();
+    // Where the owner of a claimed ball means to take it: the chase below
+    // overrides his movement, his touches aim here.
+    if (ball.inTouch)
+      if (const MatchPlayer* owner = findMatchPlayer(ball.possessedBy))
+        ball.dribbleGoal = owner->tacticalTarget;
     for (std::size_t slot = 0; slot < planned; ++slot)
     {
       MatchPlayer& player = players[slot];
@@ -2779,11 +2793,9 @@ void MatchEngine::resolvePossessionAndActions(float dt)
   ball.lastPossessor = carrier->player;
   if (ball.inTouch)
   {
-    // A touched ball rolls free until he collects it (then the dribble
-    // takes over this same step); he can be challenged meanwhile.
-    const bool rolling = updateTouch(*carrier);
-    if (ball.possessedBy != carrier->player) return;
-    if (!rolling && !updateDribble(*carrier, dt)) return;
+    // A claimed ball rolls free: he runs onto it and plays it touch by
+    // touch (in the ball's sweep); he can be challenged meanwhile.
+    updateTouch(*carrier, dt);
   }
   else if (!updateDribble(*carrier, dt))
   {
@@ -2829,8 +2841,9 @@ void MatchEngine::resolvePossessionAndActions(float dt)
     }
   }
 
-  // Nobody plays a ball that is still rolling to him.
-  if (ball.inTouch) return;
+  // Nobody plays a ball that is still rolling to him: he acts once he has
+  // collected it, and only with it at his feet.
+  if (ball.inTouch && !ball.touchCollected) return;
 
   // The AI waits out its decision time after a touch; a controlled player
   // can play the ball as soon as it is under control.
@@ -2842,6 +2855,12 @@ void MatchEngine::resolvePossessionAndActions(float dt)
     if (controlled)
     {
       performControlledAction(*carrier);
+    }
+    else if (!ballKeepers.empty() && carrier->player &&
+             std::ranges::find(ballKeepers, carrier->player->getId()) !=
+                 ballKeepers.end())
+    {
+      // A drill's dribbler: he carries it where the drill sends him.
     }
     else if (forcedShooter != 0 && carrier->player &&
              carrier->player->getId() == forcedShooter)
@@ -2953,6 +2972,20 @@ bool MatchEngine::attemptTakeOn(MatchPlayer& carrier, MatchPlayer& defender)
   ball.dribbleTouchLength = R::TAKE_ON_TOUCH_METRES;
   ball.dribbleExposure = R::TAKE_ON_TOUCH_METRES;
   ball.touchTimer = R::MAX_TOUCH_INTERVAL;
+  if (ball.inTouch)
+  {
+    // A loose ball (New v1 body) is pushed past him for real, into the
+    // space he runs on to.
+    const float speed = length(carrier.velocity);
+    const float push = groundLaunchSpeed(
+        R::TAKE_ON_TOUCH_METRES + speed * R::LOOSE_LEAD_SECONDS,
+        speed * R::LOOSE_ARRIVAL_SHARE);
+    ball.velocity = {ball.dribbleDirection.x * push,
+                     ball.dribbleDirection.y * push};
+    ball.touchAttempts = 0;
+    ball.ownTouchCooldown = R::LOOSE_TOUCH_INTERVAL;
+    ++dribbleTouches;
+  }
   return true;
 }
 
@@ -4006,17 +4039,18 @@ void MatchEngine::creditPassCompletion(MatchPlayer& receiver,
 
 void MatchEngine::resolveLooseBall()
 {
-  // A touched ball is still rolling free: only its owner's opponents can
-  // play it (he collects it himself in updateTouch).
+  // A claimed ball rolls free: its owner plays it on once he has collected
+  // it (until then updateTouch collects it), and opponents can play it.
   if (ball.possessedBy && !ball.inTouch) return;
   const MatchPlayer* touchOwner =
       ball.inTouch ? findMatchPlayer(ball.possessedBy) : nullptr;
   using B = MatchTuning::Ball;
   // While it is still within his own reach it is his: an opponent has to
   // tackle him for it (chooseChallenge), not just touch it away.
-  if (touchOwner &&
-      distance(touchOwner->position, ball.position) <= feetReach(*touchOwner))
-    return;
+  const float ownerGap =
+      touchOwner ? distance(touchOwner->position, ball.position) : 0.0f;
+  const bool ownerHasIt = touchOwner && ownerGap <= feetReach(*touchOwner);
+  if (ownerHasIt && !ball.touchCollected) return;
 
   const float endHeight = ball.z * MatchTuning::Units::BALL_Z_METRES;
   if (!ball.isShot && endHeight > MatchTuning::Aerial::CONTROL_CEILING_METRES)
@@ -4073,7 +4107,21 @@ void MatchEngine::resolveLooseBall()
         position.y < boundMinY || position.y > boundMaxY)
       continue;
     if (!active(player) || player.trapTimer > 0.0f) continue;
-    if (touchOwner && player.isHomeTeam == touchOwner->isHomeTeam) continue;
+    if (touchOwner)
+    {
+      // He plays his own ball once collected; in his reach nobody else
+      // does; a team-mate takes it over only once it is well away from him.
+      if (&player == touchOwner)
+      {
+        if (!ball.touchCollected) continue;
+      }
+      else if (ownerHasIt ||
+               (player.isHomeTeam == touchOwner->isHomeTeam &&
+                ownerGap <= touchKnobs[TouchKnob::TEAMMATE_DISTANCE]))
+      {
+        continue;
+      }
+    }
     if (ball.kickerLockout > 0.0f && ball.kicker == player.player) continue;
     if ((ball.touchAttempts & (1U << slot)) != 0U) continue;
     // Team-mates let a pass run to its receiver, and never block their own
@@ -4160,6 +4208,25 @@ void MatchEngine::resolveLooseBall()
                              ballStepSeconds /
                                  static_cast<float>(substepsPerStep),
                              ballStepSeconds};
+    // His own ball: he plays it on when it is due a touch (letting it come
+    // closer first if his brain reads that it will), or lets it run.
+    if (&player == touchOwner)
+    {
+      const std::uint32_t bit = 1U << contact.slot;
+      if (!dribbleTouchDue(player, moment))
+      {
+        ball.touchWaiting &= ~bit;
+        continue;
+      }
+      if (!dribbleTouchNow(player, moment))
+      {
+        ball.touchWaiting |= bit;
+        continue;
+      }
+      ball.touchWaiting &= ~bit;
+      playDribbleTouch(player, moment);
+      return;
+    }
     // With the new first touch he may let the ball come closer before he
     // plays it; until he does, it is no attempt.
     if (!ball.isShot && playsFirstTouch(player, hands, contact.height) &&
@@ -4465,8 +4532,9 @@ void MatchEngine::clearBall(MatchPlayer& defender)
   const float speed = clearanceSpeed(defender);
   ++statsOf(defender).clearances;
   clearFlightState();
-  launchBall(defender, defender.position, target, speed,
-             loftVerticalSpeed(clearanceMetres, speed, 0.0f, 0.0f), 0.0f);
+  // A loose ball (New v1 body) is struck where it lies.
+  launchBall(defender, ball.inTouch ? ball.position : defender.position, target,
+             speed, loftVerticalSpeed(clearanceMetres, speed, 0.0f, 0.0f), 0.0f);
   if (getRecorder())
   {
     MatchActionRecord action;
@@ -4623,6 +4691,7 @@ void MatchEngine::clearPossession()
 {
   ball.possessedBy = nullptr;
   ball.inTouch = false;
+  ball.touchCollected = false;
   ball.touchPasser = nullptr;
   ball.touchWaiting = 0;
 }
@@ -4631,6 +4700,7 @@ void MatchEngine::handBallTo(const Player* holder)
 {
   ball.possessedBy = holder;
   ball.inTouch = false;
+  ball.touchCollected = false;
   ball.touchPasser = nullptr;
   ball.touchWaiting = 0;
 }
@@ -4696,6 +4766,7 @@ void MatchEngine::playFirstTouch(MatchPlayer& player, const TouchMoment& moment)
   ball.kickerLockout = 0.0f;
   ball.touchAttempts = 0;
   ball.inTouch = true;
+  ball.touchCollected = false;
   ball.touchPasser = receivingPass ? passer : nullptr;
   ball.touchKind = intent.kind;
   ball.touchContactGap = moment.gap;
@@ -4717,65 +4788,197 @@ void MatchEngine::playFirstTouch(MatchPlayer& player, const TouchMoment& moment)
       std::max(gap, MatchTuning::Dribble::MAX_TOUCH_METRES);
 }
 
-bool MatchEngine::updateTouch(MatchPlayer& carrier)
+MatchEngine::DribbleAim MatchEngine::dribbleAim(const MatchPlayer& player) const
 {
-  using F = MatchTuning::FirstTouch;
+  DribbleAim aim;
+  aim.direction = ball.dribbleDirection;
+  if (isControlled(player))
+  {
+    // At the pace the stick asks for, along the aim if he has one (his
+    // touches can go one way while he runs another), else along the stick.
+    const float push = std::hypot(controlInput.moveX, controlInput.moveY);
+    if (push <= EPSILON) return aim;
+    const float aimed = std::hypot(controlInput.aimX, controlInput.aimY);
+    aim.direction = aimed > EPSILON
+                        ? Vector2F{controlInput.aimX / aimed, controlInput.aimY / aimed}
+                        : Vector2F{controlInput.moveX / push, controlInput.moveY / push};
+    aim.speed = currentTopSpeed(player) * std::min(push, 1.0f) *
+                (controlInput.sprint ? 1.0f : MatchTuning::Control::JOG_SPEED_SHARE);
+    return aim;
+  }
+  // Toward his plan's target, at the pace his brain would run there.
+  const Vector2F offset = toMetres({ball.dribbleGoal.x - player.position.x,
+                                    ball.dribbleGoal.y - player.position.y});
+  const float metres = length(offset);
+  aim.metres = metres;
+  if (metres <= MatchTuning::Player::ARRIVAL_DEAD_ZONE_METRES) return aim;
+  aim.direction = {offset.x / metres, offset.y / metres};
+  const MovementStyle& style = movementStyle(player.isHomeTeam);
+  const float share = std::max(
+      style.intentSpeedShares[static_cast<std::size_t>(PlayerIntent::CARRY_BALL)],
+      std::min(style.maxUrgencyShare, metres / style.urgencyDistanceMetres));
+  aim.speed = std::min(currentTopSpeed(player), player.maxSpeed * share);
+  return aim;
+}
+
+bool MatchEngine::dribbleTouchDue(const MatchPlayer& player,
+                                  const TouchMoment& moment) const
+{
+  using R = MatchTuning::Dribble;
+  if (ball.ownTouchCooldown > 0.0f ||
+      moment.height > MatchTuning::Ball::LOW_BALL_METRES)
+    return false;
+  const DribbleAim aim = dribbleAim(player);
+  const Vector2F offset = toMetres({ball.position.x - player.position.x,
+                                    ball.position.y - player.position.y});
+  const Vector2F relative{ball.velocity.x - player.velocity.x,
+                          ball.velocity.y - player.velocity.y};
+  // He is catching it up, or it is coming back to him: play it on.
+  if (offset.x * relative.x + offset.y * relative.y < 0.0f &&
+      length(relative) > MatchTuning::Ball::STOP_SPEED)
+    return true;
+  // A ball by him stays put unless he wants to go somewhere.
+  if (aim.speed < R::LOOSE_START_SPEED) return false;
+  const float ballSpeed = length(ball.velocity);
+  if (ballSpeed <= MatchTuning::Ball::STOP_SPEED) return true;
+  // Heading off the way he wants to go: turn it.
+  const float along = (ball.velocity.x * aim.direction.x +
+                       ball.velocity.y * aim.direction.y) /
+                      ballSpeed;
+  return along < std::cos(R::LOOSE_REDIRECT_RADIANS);
+}
+
+TouchIntent MatchEngine::dribbleTouchIntent(const MatchPlayer& player,
+                                            const TouchMoment& moment) const
+{
+  using R = MatchTuning::Dribble;
+  DribbleAim aim = dribbleAim(player);
+  // At pace he turns the ball only as far as he can follow it: at most
+  // LOOSE_MAX_TURN_RADIANS off his run per touch (later touches carry the
+  // turn on), easing off the more he still has to turn.
+  const float running = length(player.velocity);
+  if (running >= R::CLOSE_CONTROL_SPEED)
+  {
+    const Vector2F run{player.velocity.x / running, player.velocity.y / running};
+    const float wanted = std::atan2(run.x * aim.direction.y - run.y * aim.direction.x,
+                                    run.x * aim.direction.x + run.y * aim.direction.y);
+    const float turn = std::clamp(wanted, -R::LOOSE_MAX_TURN_RADIANS,
+                                  R::LOOSE_MAX_TURN_RADIANS);
+    aim.direction = {run.x * std::cos(turn) - run.y * std::sin(turn),
+                     run.x * std::sin(turn) + run.y * std::cos(turn)};
+    aim.speed *= std::max(R::LOOSE_TURN_MIN_PACE, std::cos(wanted));
+  }
+  TouchIntent intent;
+  float metres = touchKnobs[TouchKnob::SET_OFFSET];
+  if (aim.speed >= R::CLOSE_CONTROL_SPEED)
+  {
+    // Into his stride: where he will be a moment later at the pace he
+    // wants (a better dribbler keeps it closer), arriving a little slower
+    // than him so he gains on it.
+    intent.kind = TouchIntent::Kind::INTO_STRIDE;
+    metres = aim.speed * R::LOOSE_LEAD_SECONDS * (1.3f - player.dribbling) +
+             R::LOOSE_LEAD_EXTRA_METRES;
+  }
+  // Never past where he is going.
+  if (aim.metres)
+    metres = std::min(metres,
+                      std::max(*aim.metres, touchKnobs[TouchKnob::SET_OFFSET]));
+  intent.arrivalSpeed = aim.speed * R::LOOSE_ARRIVAL_SHARE;
+  if (intent.kind == TouchIntent::Kind::INTO_STRIDE)
+  {
+    // He runs at the ball's pace, so it is weighted to roll at about the
+    // pace he wants over the push, however long (a little slower, so he
+    // gains on it): the arrival speed at which launch and arrival average
+    // that pace, under the real rolling physics.
+    const float mean = aim.speed * R::LOOSE_MEAN_PACE_SHARE;
+    float low = 0.0f;
+    float high = mean;
+    for (int iteration = 0; iteration < 16; ++iteration)
+    {
+      const float arrival = 0.5f * (low + high);
+      if ((groundLaunchSpeed(metres, arrival) + arrival) * 0.5f > mean)
+        high = arrival;
+      else
+        low = arrival;
+    }
+    intent.arrivalSpeed = low;
+  }
+  const Vector2F ahead =
+      toPitch({aim.direction.x * metres, aim.direction.y * metres});
+  intent.targetSpot = {
+      std::clamp(moment.contactPoint.x + ahead.x, 0.001f, 0.999f),
+      std::clamp(moment.contactPoint.y + ahead.y, 0.001f, 0.999f)};
+  return intent;
+}
+
+void MatchEngine::playDribbleTouch(MatchPlayer& player, const TouchMoment& moment)
+{
+  // His own ball, played on from where he meets it: no possession change,
+  // just a new roll.
+  const TouchIntent intent = dribbleTouchIntent(player, moment);
+  const TouchResult touch = dribbleTouchNewV1(player, intent, moment);
+  ++dribbleTouches;
+  dribbleContactGapSum += moment.gap;
+  trackTouch(player);
+  ball.position = {std::clamp(moment.contactPoint.x, 0.001f, 0.999f),
+                   std::clamp(moment.contactPoint.y, 0.001f, 0.999f)};
+  ball.velocity = touch.velocity;
+  ball.z = 0.0f;
+  ball.velocityZ = 0.0f;
+  ball.curve = 0.0f;
+  ball.kicker = player.player;
+  ball.kickerLockout = 0.0f;
+  ball.touchAttempts = 0;
+  ball.ownTouchCooldown = MatchTuning::Dribble::LOOSE_TOUCH_INTERVAL;
+  ball.touchKind = intent.kind;
+  ball.touchContactGap = moment.gap;
+  ball.touchContactHeight = moment.height;
+  ball.touchAngleError = touch.angleError;
+  ball.touchWeightError = touch.weightError;
+  ball.touchAngleDifficulty = touch.angleDifficulty;
+  ball.touchWeightDifficulty = touch.weightDifficulty;
+  ball.touchAngleFailed = touch.angleFailed;
+  ball.touchWeightFailed = touch.weightFailed;
+  ball.touchTurn = touch.turn;
+  ball.touchOutward = touch.outward;
+  ball.touchPaceChange = touch.paceChange;
+  if (touch.angleFailed || touch.weightFailed) ++dribbleFailedTouches;
+  const float speed = length(touch.velocity);
+  if (speed > EPSILON)
+    ball.dribbleDirection = {touch.velocity.x / speed, touch.velocity.y / speed};
+  const float gap = distance(player.position, ball.position);
+  ball.touchGap = gap;
+  ball.touchPeakGap = gap;
+  ball.dribbleExposure = gap;
+}
+
+void MatchEngine::updateTouch(MatchPlayer& carrier, float dt)
+{
   using R = MatchTuning::Dribble;
   const float gap = distance(carrier.position, ball.position);
   const Vector2F relative{ball.velocity.x - carrier.velocity.x,
                           ball.velocity.y - carrier.velocity.y};
+  ball.ownTouchCooldown = std::max(0.0f, ball.ownTouchCooldown - dt);
 
-  if (gap <= R::KICK_REACH_METRES &&
+  if (!ball.touchCollected && gap <= R::KICK_REACH_METRES &&
       length(relative) <= touchKnobs[TouchKnob::COLLECT_RELATIVE_SPEED])
   {
-    // Collected: the dribble carries on from where the ball really is, its
-    // next touch due on the usual rhythm rather than at once.
-    const Vector2F toBall = metricDirection(carrier.position, ball.position);
-    if (length(toBall) > EPSILON) ball.dribbleDirection = toBall;
-    ball.dribbleExposure = gap;
-    ball.dribbleTouchLength = std::max(ball.touchPeakGap, R::MAX_TOUCH_METRES);
-    ball.touchTimer = std::clamp(
-        R::TOUCH_INTERVAL_BASE -
-            length(carrier.velocity) * R::TOUCH_INTERVAL_PER_SPEED -
-            carrier.dribbling * R::TOUCH_INTERVAL_DRIBBLING,
-        R::MIN_TOUCH_INTERVAL, R::MAX_TOUCH_INTERVAL);
-    ball.inTouch = false;
+    // Collected: the pass is complete and he can think about his next
+    // action. The ball stays loose: from here he dribbles it, touch by touch.
+    using F = MatchTuning::FirstTouch;
+    ball.touchCollected = true;
     if (ball.touchPasser) creditPassCompletion(carrier, ball.touchPasser);
     ball.touchPasser = nullptr;
     carrier.actionCooldown =
         randomFloat(F::MIN_DECISION_DELAY, F::MAX_DECISION_DELAY);
-    return false;
   }
 
-  // Lost the claim: the ball got away from him, or an opponent will get
-  // there first. It is a loose ball again, his to chase like anyone's.
-  bool lost = gap > touchKnobs[TouchKnob::RELEASE_DISTANCE] &&
-              gap > ball.touchGap;
-  if (!lost)
-  {
-    const float own = gap / std::max(currentTopSpeed(carrier), EPSILON);
-    if (const MatchPlayer* rival =
-            findClosestPlayer(ball.position, !carrier.isHomeTeam, false))
-      lost = distance(rival->position, ball.position) /
-                     std::max(currentTopSpeed(*rival), EPSILON) +
-                 touchKnobs[TouchKnob::RELEASE_RACE] <
-             own;
-  }
-  if (lost)
-  {
-    clearPossession();
-    ball.kicker = carrier.player;
-    ball.kickerLockout = MatchTuning::Ball::FAILED_TOUCH_LOCKOUT;
-    ball.touchAttempts = 0;
-    return false;
-  }
-
-  // Still rolling to him: defenders read how far it is from his foot.
+  // Defenders read how far it is from his foot. He keeps the claim however
+  // far it runs: only an opponent playing it, or play stopping, ends it.
   ball.touchGap = gap;
   ball.touchPeakGap = std::max(ball.touchPeakGap, gap);
   ball.dribbleExposure = gap;
   ball.dribbleTouchLength = std::max(ball.touchPeakGap, R::MAX_TOUCH_METRES);
-  return true;
 }
 
 void MatchEngine::chaseTouchedBall()
@@ -6469,6 +6672,15 @@ void MatchEngine::forceShot(PlayerID playerId)
   MatchCommandRecord command;
   command.type = MatchCommandType::FORCE_SHOT;
   command.player = playerId;
+  recordCommand(command);
+}
+
+void MatchEngine::keepBall(PlayerID playerId, bool keep)
+{
+  MatchCommandRecord command;
+  command.type = MatchCommandType::KEEP_BALL;
+  command.player = playerId;
+  command.urgent = keep;
   recordCommand(command);
 }
 

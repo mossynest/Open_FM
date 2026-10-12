@@ -190,12 +190,124 @@ struct RunnerAttributes
   }
 };
 
+/** Attributes of a runner with the ball (the movement drills' With the ball setting). */
+struct DribblerAttributes
+{
+  float dribbling = 70.0f;
+  float passing = 70.0f;
+  /** The First Touch derived stat; 0 leaves it to its recipe. */
+  float firstTouch = 0.0f;
+
+  void addTo(std::vector<DrillParameter>& parameters)
+  {
+    parameters.push_back(setting("Dribbling", &dribbling, 1.0f, 100.0f, true,
+                          "With the ball: touch length and rhythm, heavy "
+                          "touches; 0.6 of First Touch."));
+    parameters.push_back(setting("Passing", &passing, 1.0f, 100.0f, true,
+                          "With the ball: 0.4 of First Touch."));
+    parameters.push_back(setting("First touch", &firstTouch, 0.0f, 100.0f, true,
+                          "With the ball: control of each touch.\n0: from its "
+                          "recipe (0.6 Dribbling + 0.4 Passing)."));
+  }
+  [[nodiscard]] std::string describe() const
+  {
+    std::string text =
+        std::format("Dribbling {:.0f} · Passing {:.0f}", dribbling, passing);
+    if (firstTouch > 0.0f) text += std::format(" · First touch {:.0f}", firstTouch);
+    return text;
+  }
+};
+
+/**
+ * The ball of a runner who has it: what it does over a run, from outside the
+ * engine (gaps, losses, touches, and any move no physics explains).
+ */
+struct BallWatch
+{
+  /** A step's ball move this much further than its fastest speed over the
+   * step could take it counts as placed, not moved (m). */
+  static constexpr float PLACED_METRES = 0.05f;
+
+  int lost = 0;
+  int placed = 0;
+  float largestPlacement = 0.0f;
+  int stepsWith = 0;
+  int stepsWithout = 0;
+  double gapSum = 0.0;
+  float largestGap = 0.0f;
+  std::uint32_t touches = 0;
+  double contactGapSum = 0.0;
+  /** Touches that went wrong (a loose ball's only). */
+  std::uint32_t failedTouches = 0;
+  /** The ball went out of play (the run ended there). */
+  bool out = false;
+  bool had = true;
+  std::optional<Vector2F> lastAt;
+  Vector2F lastVelocity{};
+
+  void reset() { *this = BallWatch{}; }
+
+  void observe(const MatchEngine& engine, const MatchPlayer& player)
+  {
+    const MatchBall& ball = engine.getBall();
+    const bool has = ball.possessedBy == player.player;
+    if (had && !has) ++lost;
+    had = has;
+    if (has)
+    {
+      ++stepsWith;
+      const float gap = metresBetween(player.position, ball.position);
+      gapSum += gap;
+      largestGap = std::max(largestGap, gap);
+    }
+    else
+    {
+      ++stepsWithout;
+    }
+    // Physics moves the ball no further than its fastest speed over the
+    // step allows (a touch changes the velocity, never the position); any
+    // further and it was put there.
+    if (lastAt)
+    {
+      const float moved = metresBetween(*lastAt, ball.position);
+      const float off =
+          moved - std::max(std::hypot(lastVelocity.x, lastVelocity.y),
+                           std::hypot(ball.velocity.x, ball.velocity.y)) *
+                      STEP;
+      if (off > PLACED_METRES)
+      {
+        ++placed;
+        largestPlacement = std::max(largestPlacement, off);
+      }
+    }
+    lastAt = ball.position;
+    lastVelocity = ball.velocity;
+    touches = engine.getDribbleTouches();
+    contactGapSum = engine.getDribbleContactGapSum();
+    failedTouches = engine.getDribbleFailedTouches();
+  }
+
+  /** How far from his centre he met it at his touches, on average (a
+   * loose ball's only; 0 for the tethered dribble). */
+  [[nodiscard]] double meanContactGap() const
+  {
+    return touches > 0 ? contactGapSum / static_cast<double>(touches) : 0.0;
+  }
+
+  [[nodiscard]] double meanGap() const
+  {
+    return stepsWith > 0 ? gapSum / static_cast<double>(stepsWith) : 0.0;
+  }
+};
+
 // --- Movement drills -------------------------------------------------------
 
 /**
  * A drill with one runner, moved by one of three paths through the engine:
  * the AI (the drill holds his movement target), a scripted bot pushing the
  * stick of the human-control path, or you on the keyboard or a gamepad.
+ * With the ball (the setting) he starts with it at his feet and dribbles the
+ * course; if he loses it, he is sent after it, then back to the course.
  */
 class MovementDrill : public Drill
 {
@@ -209,30 +321,41 @@ class MovementDrill : public Drill
 
   std::vector<DrillPlayerSpec> players() const override
   {
-    return {{"Runner", PlayerRole::CM, true, runner.stats(), 180, runner.derived()}};
+    std::map<std::string, float> stats = runner.stats();
+    std::map<DerivedStat, float> derived = runner.derived();
+    stats["Dribbling"] = dribbler.dribbling;
+    stats["Passing"] = dribbler.passing;
+    if (dribbler.firstTouch > 0.0f)
+      derived[DerivedStat::FIRST_TOUCH] = dribbler.firstTouch;
+    return {{"Runner", PlayerRole::CM, true, stats, 180, derived}};
   }
 
   bool humanControl() const override { return pathSetting() == YOU; }
 
   void beforeStep(MatchEngine& engine) override
   {
-    if (path != BOT || !goal) return;
+    if (path != BOT || (!goal && !looseBall && !ballAhead)) return;
     const MatchPlayer* player = slotOf(engine, id);
     if (!player) return;
+    // A lost ball first: flat out to it; then his own ball when it is away
+    // from his feet; else the course.
+    const Goal aim = looseBall   ? Goal{*looseBall, true, false}
+                     : ballAhead ? Goal{*ballAhead, !goal || goal->urgent, false}
+                                 : *goal;
     const Vector2F offset = toMetres(
-        {goal->at.x - player->position.x, goal->at.y - player->position.y});
+        {aim.at.x - player->position.x, aim.at.y - player->position.y});
     const float metres = std::hypot(offset.x, offset.y);
     MatchPlayerInput input;
     if (metres > MatchTuning::Player::ARRIVAL_DEAD_ZONE_METRES)
     {
       float magnitude = 1.0f;
-      if (goal->stop)
+      if (aim.stop)
       {
         // Ease off to arrive, as the AI does.
         const float runSpeed =
             std::max(0.1f, player->maxSpeed *
-                               (goal->urgent ? 1.0f
-                                             : MatchTuning::Control::JOG_SPEED_SHARE));
+                               (aim.urgent ? 1.0f
+                                           : MatchTuning::Control::JOG_SPEED_SHARE));
         magnitude = std::min(
             1.0f, std::sqrt(2.0f * MatchTuning::Player::ARRIVAL_DECELERATION *
                             metres) /
@@ -240,11 +363,21 @@ class MovementDrill : public Drill
       }
       input.moveX = offset.x / metres * magnitude;
       input.moveY = offset.y / metres * magnitude;
-      input.sprint = goal->urgent;
+      input.sprint = aim.urgent;
+    }
+    // Dribbling, his touches aim along the course while he runs onto the
+    // ball.
+    if (withBall && !looseBall && goal)
+    {
+      const Vector2F course = directionBetween(player->position, goal->at);
+      input.aimX = course.x;
+      input.aimY = course.y;
     }
     // The stick holds until the next input: send changes only.
     const bool same = std::abs(input.moveX - sent.moveX) < 1e-3f &&
                       std::abs(input.moveY - sent.moveY) < 1e-3f &&
+                      std::abs(input.aimX - sent.aimX) < 1e-3f &&
+                      std::abs(input.aimY - sent.aimY) < 1e-3f &&
                       input.sprint == sent.sprint;
     if (!same || !sentAny)
     {
@@ -273,22 +406,37 @@ class MovementDrill : public Drill
                        "(WASD or arrows, Shift to sprint, or a gamepad).");
     who.choices = {PATH_NAMES[0], PATH_NAMES[1], PATH_NAMES[2]};
     parameters.push_back(who);
+    DrillParameter ball = setting("With the ball", &ballChoice, 0.0f, 1.0f, true,
+                         "Yes: he starts with the ball at his feet and "
+                         "dribbles the course. If he loses it, he is sent "
+                         "after it first.");
+    ball.choices = {"No", "Yes"};
+    parameters.push_back(ball);
     runner.addTo(parameters);
+    dribbler.addTo(parameters);
   }
 
-  /** Places the runner (ball out of the way) and hands him to his path. */
+  /** Places the runner (with the ball, or the ball out of the way) and hands
+   * him to his path. */
   void startRunner(MatchEngine& engine, const std::vector<PlayerID>& ids,
                    Vector2F at)
   {
     id = ids.front();
     path = pathSetting();
+    withBall = ballChoice >= 0.5f;
     MatchScenario scenario;
     scenario.players.push_back({id, at, false});
-    scenario.ballPosition = BALL_OUT_OF_THE_WAY;
+    scenario.ballPosition = withBall ? at : BALL_OUT_OF_THE_WAY;
+    if (withBall) scenario.carrierId = id;
     engine.startDrill(scenario);
     if (path != AI) engine.setControlledPlayer(id);
+    // He dribbles, and does nothing else with the ball.
+    if (withBall) engine.keepBall(id, true);
     goal.reset();
     aiGoal.reset();
+    looseBall.reset();
+    ballAhead.reset();
+    ballWatch.reset();
     sent = {};
     sentAny = false;
     trail.clear();
@@ -300,6 +448,7 @@ class MovementDrill : public Drill
   /**
    * Where the runner should go now. `urgent` runs flat out; `stop` arrives
    * there (otherwise he runs at it). You ignore it: you steer yourself.
+   * While he is after a lost ball, the course waits.
    */
   void steerTo(MatchEngine& engine, Vector2F at, bool urgent, bool stop = false)
   {
@@ -308,23 +457,97 @@ class MovementDrill : public Drill
       if (aiGoal && aiGoal->at.x == at.x && aiGoal->at.y == at.y &&
           aiGoal->urgent == urgent)
         return;
-      engine.setDrillTarget(id, at, urgent);
       aiGoal = Goal{at, urgent, stop};
+      if (!looseBall) engine.setDrillTarget(id, at, urgent);
       return;
     }
     goal = Goal{at, urgent, stop};
   }
 
-  /** The runner after a step (nullptr if gone); keeps the trail. */
-  const MatchPlayer* track(const MatchEngine& engine)
+  /** The runner after a step (nullptr if gone, or the ball he dribbles went
+   * out of play); keeps the trail, watches the ball and sends him after it
+   * when he has lost it. */
+  const MatchPlayer* track(MatchEngine& engine)
   {
     const MatchPlayer* player = slotOf(engine, id);
     if (!player) return nullptr;
+    // Nobody takes the restart in a drill: the run ends there.
+    if (withBall && engine.getState() != MatchState::PLAYING)
+    {
+      ballWatch.out = true;
+      return nullptr;
+    }
     distanceRun += metresBetween(lastPosition, player->position);
     lastPosition = player->position;
     if (engine.getSimulatedSteps() % 2 == 0)
       trail.push_back({player->position, speedOf(*player)});
+    if (withBall)
+    {
+      ballWatch.observe(engine, *player);
+      const MatchBall& ball = engine.getBall();
+      if (!ball.possessedBy)
+      {
+        looseBall = ball.position;
+        if (path == AI) engine.setDrillTarget(id, ball.position, true);
+      }
+      else if (looseBall)
+      {
+        // Back on the ball: back to the course.
+        looseBall.reset();
+        if (path == AI && aiGoal)
+          engine.setDrillTarget(id, aiGoal->at, aiGoal->urgent);
+      }
+      // On the stick, he runs onto his own loose ball himself (the AI's
+      // chase is the engine's): to where it is heading while it is away
+      // from his feet, else along the course; his touches aim along the
+      // course either way (beforeStep).
+      ballAhead.reset();
+      if (path == BOT && !looseBall && ball.inTouch &&
+          metresBetween(player->position, ball.position) > BOT_REACH_METRES)
+      {
+        const Vector2F lead = toPitch({ball.velocity.x * BOT_LEAD_SECONDS,
+                                       ball.velocity.y * BOT_LEAD_SECONDS});
+        ballAhead = Vector2F{ball.position.x + lead.x, ball.position.y + lead.y};
+      }
+    }
     return player;
+  }
+
+  /** The ball's lines of a report (none without the ball). */
+  void addBallLines(std::vector<std::string>& lines) const
+  {
+    if (!withBall) return;
+    lines.push_back(std::format(
+        "Ball: {} touches (met {:.2f} m from him) · gap mean {:.2f} m, max "
+        "{:.2f} m · lost {} ({:.1f} s without)",
+        ballWatch.touches, ballWatch.meanContactGap(), ballWatch.meanGap(),
+        ballWatch.largestGap,
+        ballWatch.lost, static_cast<float>(ballWatch.stepsWithout) * STEP));
+    if (ballWatch.failedTouches > 0)
+      lines.push_back(std::format("Touches that went wrong: {}", ballWatch.failedTouches));
+    lines.push_back(std::format("Ball placed, not moved: {} times, largest {:.2f} m",
+                                ballWatch.placed, ballWatch.largestPlacement));
+    if (ballWatch.out) lines.push_back("The ball went out of play: run over.");
+  }
+
+  /** The ball's metrics of a finished run (none without the ball). */
+  void addBallMetrics(std::vector<DrillMetric>& out) const
+  {
+    if (!withBall) return;
+    out.push_back({"Touches", static_cast<double>(ballWatch.touches)});
+    out.push_back({"Metres per touch",
+                   ballWatch.touches > 0
+                       ? distanceRun / static_cast<double>(ballWatch.touches)
+                       : 0.0});
+    out.push_back({"Contact gap (m)", ballWatch.meanContactGap()});
+    out.push_back({"Failed touches", static_cast<double>(ballWatch.failedTouches)});
+    out.push_back({"Mean gap (m)", ballWatch.meanGap()});
+    out.push_back({"Max gap (m)", ballWatch.largestGap});
+    out.push_back({"Ball lost", static_cast<double>(ballWatch.lost)});
+    out.push_back({"Without the ball (s)",
+                   static_cast<double>(ballWatch.stepsWithout) * STEP});
+    out.push_back({"Ball placed", static_cast<double>(ballWatch.placed)});
+    out.push_back({"Largest placement (m)", ballWatch.largestPlacement});
   }
 
   void drawTrail(const IMatchRenderer& renderer, ImDrawList& draw) const
@@ -337,7 +560,17 @@ class MovementDrill : public Drill
 
   [[nodiscard]] std::string runnerLine() const
   {
+    if (withBall)
+      return std::format("{} · with the ball · {} · {}", PATH_NAMES[path],
+                         runner.describe(), dribbler.describe());
     return std::format("{} · {}", PATH_NAMES[path], runner.describe());
+  }
+
+  /** The runner's settings, for keys that tell runs apart. */
+  [[nodiscard]] std::string runnerKey() const
+  {
+    return withBall ? runner.describe() + "|ball|" + dribbler.describe()
+                    : runner.describe();
   }
 
   struct Goal
@@ -353,11 +586,23 @@ class MovementDrill : public Drill
   };
 
   float pathChoice = AI;
+  float ballChoice = 0.0f;
   RunnerAttributes runner;
+  DribblerAttributes dribbler;
 
   PlayerID id = 0;
   /** The path of the current run (the setting applies on restart). */
   Path path = AI;
+  /** The With the ball setting of the current run. */
+  bool withBall = false;
+  BallWatch ballWatch;
+  /** Where the lost ball is, while he is sent after it. */
+  std::optional<Vector2F> looseBall;
+  /** On the stick: where his own ball is heading while it is away from his
+   * feet (the bot runs onto it). */
+  std::optional<Vector2F> ballAhead;
+  static constexpr float BOT_REACH_METRES = 1.0f;
+  static constexpr float BOT_LEAD_SECONDS = 0.3f;
   std::optional<Goal> goal;
   std::optional<Goal> aiGoal;
   MatchPlayerInput sent;
@@ -489,6 +734,7 @@ class SprintDrill final : public MovementDrill
     if (topSpeed > 0.0f)
       lines.push_back(std::format("Top speed {:.2f} m/s ({:.1f} km/h) at {:.0f} m",
                                   topSpeed, topSpeed * 3.6f, topSpeedAt));
+    addBallLines(lines);
     return lines;
   }
 
@@ -502,6 +748,7 @@ class SprintDrill final : public MovementDrill
         out.push_back({std::format("{} m (s)", mark * 10), *crossings[mark] - start});
     out.push_back({"Top speed (m/s)", topSpeed});
     out.push_back({"Top speed at (m)", topSpeedAt});
+    addBallMetrics(out);
     return out;
   }
 
@@ -756,6 +1003,7 @@ class TurnDrill final : public CourseDrill
           lines.push_back("Run 0° with the same settings to see the time lost.");
       }
     }
+    addBallLines(lines);
     return lines;
   }
 
@@ -772,6 +1020,7 @@ class TurnDrill final : public CourseDrill
       out.push_back({"Swings wide (m)", overshoot});
     }
     out.push_back({"Distance run (m)", distanceRun});
+    addBallMetrics(out);
     return out;
   }
 
@@ -780,7 +1029,7 @@ class TurnDrill final : public CourseDrill
   {
     return std::format("{}|{:.0f}|{:.0f}|{:.0f}|{:.2f}|{}", static_cast<int>(path),
                        approachMetres, angle.value_or(degrees), exitMetres, radius,
-                       runner.describe());
+                       runnerKey());
   }
 
   float approach = 20.0f;
@@ -901,15 +1150,18 @@ class SlalomDrill final : public CourseDrill
                                   courseMetres(), distanceRun,
                                   distanceRun / reached.back()));
     }
+    addBallLines(lines);
     return lines;
   }
 
   std::vector<DrillMetric> metrics() const override
   {
     if (!finished || reached.empty()) return {};
-    return {{"Total (s)", reached.back()},
-            {"Distance run (m)", distanceRun},
-            {"Average speed (m/s)", distanceRun / reached.back()}};
+    std::vector<DrillMetric> out{{"Total (s)", reached.back()},
+                                 {"Distance run (m)", distanceRun},
+                                 {"Average speed (m/s)", distanceRun / reached.back()}};
+    addBallMetrics(out);
+    return out;
   }
 
  private:
@@ -1043,6 +1295,7 @@ class RepeatedSprintsDrill final : public MovementDrill
                                 (mean / best - 1.0) * 100.0,
                                 done.back().seconds - done.front().seconds));
     }
+    addBallLines(out);
     return out;
   }
 
@@ -1059,13 +1312,15 @@ class RepeatedSprintsDrill final : public MovementDrill
       total += rep.seconds;
     }
     const double mean = total / static_cast<double>(done.size());
-    return {{"Mean (s)", mean},
+    std::vector<DrillMetric> out{{"Mean (s)", mean},
             {"Best (s)", best},
             {"Worst (s)", worst},
             {"Decrement (%)", (mean / best - 1.0) * 100.0},
             {"Last - first (s)", done.back().seconds - done.front().seconds},
             {"Reserve at last start (%)", done.back().reserve * 100.0},
             {"Condition at last start (%)", done.back().condition * 100.0}};
+    addBallMetrics(out);
+    return out;
   }
 
  private:
@@ -1279,6 +1534,7 @@ class FlagChaseDrill final : public CourseDrill
                                  : std::string("-"));
       lines.push_back(board);
     }
+    addBallLines(lines);
     return lines;
   }
 
@@ -1305,6 +1561,7 @@ class FlagChaseDrill final : public CourseDrill
         out.push_back({std::format("Leg speed {}-{}° (m/s)", bucket * 45,
                                    bucket * 45 + 45),
                        metres[bucket] / seconds[bucket]});
+    addBallMetrics(out);
     return out;
   }
 
@@ -1355,7 +1612,7 @@ class FlagChaseDrill final : public CourseDrill
   {
     return std::format("{}|{}|{:.0f}|{:.0f}|{:.0f}|{:.0f}|{:.0f}|{:.0f}|{:.2f}|{}",
                        seed, flagCount, halfLength, halfWidth, shortest, longest,
-                       leastTurn, mostTurn, radius, runner.describe());
+                       leastTurn, mostTurn, radius, runnerKey());
   }
 
   float flags = 12.0f;
@@ -2004,9 +2261,11 @@ class FirstTouchDrill final : public Drill
         // The old trap (a ball off his feet): the ball is his at once.
         if (!ball.inTouch) outcome = "collected (old trap)";
       }
-      if (touch && ball.inTouch && his)
+      // Rolling to him until he collects it (then he dribbles it on).
+      const bool rolling = ball.inTouch && !ball.touchCollected;
+      if (touch && rolling && his)
         peakGap = std::max(peakGap, ball.touchPeakGap);
-      if (touch && his && !ball.inTouch && outcome.empty())
+      if (touch && his && !rolling && outcome.empty())
         outcome = "collected";
       if (theirs) outcome = touch ? "lost to the defender" : "intercepted";
       if (engine.getState() != MatchState::PLAYING)

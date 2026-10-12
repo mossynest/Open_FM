@@ -298,10 +298,19 @@ struct MatchBall
   float curve = 0.0f;
 
   const Player* possessedBy = nullptr;
-  /** Owned but rolling free: the first touch has played the ball and the
-   * owner has not reached it yet (first-touch plan). Only ever set with an
-   * owner in open play; the possession helpers clear it. */
+  /** Owned but rolling free (a claimed ball): a first touch has played it,
+   * or a New v1 body's outfielder is dribbling it, never tethered (first-
+   * touch and dribble touches plans). Only ever set with an owner in open
+   * play; the possession helpers clear it. */
   bool inTouch = false;
+  /** A claimed ball he has collected (reached and moving with him): from
+   * then on he dribbles it, touch by touch. */
+  bool touchCollected = false;
+  /** While dribbling: where he means to carry it (his plan's target, kept
+   * from the last plan refresh, as the chase overrides his movement), and
+   * the time until he may touch it again (s). */
+  Vector2F dribbleGoal{MatchTuning::Pitch::CENTRE, MatchTuning::Pitch::CENTRE};
+  float ownTouchCooldown = 0.0f;
   /** While in a touch: the team-mate whose pass he is receiving, credited
    * with the completion only once the ball is collected. */
   const Player* touchPasser = nullptr;
@@ -464,7 +473,10 @@ enum class MatchCommandType : std::uint8_t
   /** Drills: the player shoots as soon as he has the ball and can act. */
   FORCE_SHOT,
   /** Drills: the ball is played in (a pass to a player, or loose). */
-  FEED_BALL
+  FEED_BALL,
+  /** Drills: the player keeps the ball, deciding nothing with it (or is
+   * released to decide again). */
+  KEEP_BALL
 };
 
 /**
@@ -492,7 +504,8 @@ struct MatchCommandRecord
   int talkHalf = 1;
   float talkModifier = 0.0f;
   /** DRILL_TARGET: the target (normalised pitch; none releases it) and
-   * whether he runs at it urgently. */
+   * whether he runs at it urgently. KEEP_BALL: `urgent` on keeps it, off
+   * releases him. */
   std::optional<Vector2F> target;
   bool urgent = false;
   /** FEED_BALL: played from `target` with this velocity along the ground
@@ -1015,6 +1028,13 @@ class MatchEngine
   /** First-touch timing: how often a player who let the ball come closer
    * then lost it out of his reach untouched (should stay 0). */
   std::uint32_t getFirstTouchWaitsMissed() const { return firstTouchWaitsMissed; }
+  /** Dribble touches taken so far, heavy ones included (for the drills),
+   * and the sum of how far from his centre he met the ball for the loose
+   * ones (m). */
+  std::uint32_t getDribbleTouches() const { return dribbleTouches; }
+  double getDribbleContactGapSum() const { return dribbleContactGapSum; }
+  /** Loose dribble touches that went wrong (either job). */
+  std::uint32_t getDribbleFailedTouches() const { return dribbleFailedTouches; }
   const std::array<MovementJitterStats, 2>& getMovementJitter() const
   {
     return movementJitter;
@@ -1207,6 +1227,10 @@ class MatchEngine
   /** Drills: the player shoots, through the AI's own shot, as soon as he
    * has the ball and can act. Logged and replayed. */
   void forceShot(PlayerID playerId);
+  /** Drills: while he has the ball, the player only carries it (no pass,
+   * shot, clearance or take-on), so a drill measures his dribbling alone;
+   * `keep` off releases him. Logged and replayed. */
+  void keepBall(PlayerID playerId, bool keep);
   /** Drills: plays the ball in from `from` (normalised) with `velocity`
    * along the ground (m/s) and `lift` upward (m/s): as a pass to
    * `receiverId` (his own pass to receive), or loose for 0. Nobody kicked
@@ -1250,6 +1274,8 @@ class MatchEngine
   std::vector<DrillTarget> drillTargets;
   /** A forced shot waiting for its shooter to be able to act (0: none). */
   PlayerID forcedShooter = 0;
+  /** Players who only carry the ball (keepBall). */
+  std::vector<PlayerID> ballKeepers;
   /** Places the scenario's players and ball; the carrier (null when the
    * ball is loose), or nothing when a player is unknown. */
   std::optional<MatchPlayer*> placeScenario(const MatchScenario& scenario,
@@ -1451,6 +1477,9 @@ class MatchEngine
    * compares with. */
   std::array<MovementJitterStats, 2> movementJitter{};
   std::uint32_t firstTouchWaitsMissed = 0;
+  std::uint32_t dribbleTouches = 0;
+  double dribbleContactGapSum = 0.0;
+  std::uint32_t dribbleFailedTouches = 0;
   FirstTouchKnobs touchKnobs;
   std::array<LoadProfileStats, 2> loadProfile{};
   struct JitterTrack
@@ -1675,6 +1704,9 @@ class MatchEngine
   /** First touch: whether he plays the ball now or lets it come closer
    * (asked every ball sub-step it is in his reach). */
   bool touchNow(const MatchPlayer& player, const TouchMoment& moment);
+  /** Brain: his own ball is due a touch; play it now, or let it come closer
+   * first (false). */
+  bool dribbleTouchNow(const MatchPlayer& player, const TouchMoment& moment);
   /** First touch: what he tries to do with it. */
   TouchIntent chooseFirstTouch(const MatchPlayer& player,
                                const TouchMoment& moment);
@@ -2112,9 +2144,30 @@ class MatchEngine
   TouchIntent defaultTouchIntent(const MatchPlayer& player) const;
   /** Plays the touch where he meets the ball and claims it. */
   void playFirstTouch(MatchPlayer& player, const TouchMoment& moment);
-  /** A claimed ball, each step: collected, released or still rolling to
-   * him. Returns true while the touch goes on. */
-  bool updateTouch(MatchPlayer& carrier);
+  /** Where a dribbler wants to go: the metric direction and the pace he
+   * wants (m/s): the AI toward his plan's target (ball.dribbleGoal) at the
+   * pace his brain would run there, the controlled player along his stick. */
+  struct DribbleAim
+  {
+    Vector2F direction{1.0f, 0.0f};
+    float speed = 0.0f;
+    /** How far his target is (m); none for the stick. */
+    std::optional<float> metres;
+  };
+  DribbleAim dribbleAim(const MatchPlayer& player) const;
+  /** The owner of a collected ball meets it in the sweep: whether it is due
+   * a touch (he is catching it up, it is off his way, or it lies still and
+   * he wants to go) or can run on. */
+  bool dribbleTouchDue(const MatchPlayer& player, const TouchMoment& moment) const;
+  /** What a dribble touch tries: into his stride at the pace he wants, or a
+   * short set touch when he goes slowly. */
+  TouchIntent dribbleTouchIntent(const MatchPlayer& player,
+                                 const TouchMoment& moment) const;
+  /** Plays his own ball on from where he meets it; he keeps the claim. */
+  void playDribbleTouch(MatchPlayer& player, const TouchMoment& moment);
+  /** A claimed ball, each step: collected once he reaches it, and how far
+   * it is from him (for tackles). */
+  void updateTouch(MatchPlayer& carrier, float dt);
   /** The owner of a touched ball runs to meet it (every step, after the
    * brains plan, so the plan never sends him elsewhere). */
   void chaseTouchedBall();

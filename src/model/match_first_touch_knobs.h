@@ -88,10 +88,9 @@ enum class TouchKnob : std::uint8_t
   STRIDE_EXTRA,
   STRIDE_SPEED_SHARE,
   STRIDE_CLEARANCE,
-  // The claim: collecting it, or losing it.
+  // The claim: collecting it, or a team-mate taking it over.
   COLLECT_RELATIVE_SPEED,
-  RELEASE_DISTANCE,
-  RELEASE_RACE,
+  TEAMMATE_DISTANCE,
   COUNT
 };
 inline constexpr std::size_t TOUCH_KNOB_COUNT =
@@ -227,10 +226,8 @@ inline constexpr std::array<TouchKnobInfo, TOUCH_KNOB_COUNT> TOUCH_KNOBS{{
     // Claim
     {"Collect relative speed", "Claim",
      TouchKnobDefaults::F::COLLECT_RELATIVE_SPEED, 0.3f, 4.0f, "m/s"},
-    {"Release distance", "Claim", TouchKnobDefaults::F::RELEASE_METRES, 1.0f,
-     10.0f, "m"},
-    {"Release race", "Claim", TouchKnobDefaults::F::RELEASE_RACE_SECONDS, 0.0f,
-     1.5f, "s"},
+    {"Team-mate distance", "Claim", TouchKnobDefaults::F::TEAMMATE_TAKES_METRES,
+     1.0f, 10.0f, "m"},
 }};
 
 inline const TouchKnobInfo& touchKnobInfo(TouchKnob knob)

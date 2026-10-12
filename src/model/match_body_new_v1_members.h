@@ -37,10 +37,16 @@
    */
   bool updateDribbleNewV1(MatchPlayer& carrier, float dt);
   /** His first touch, trying to carry out `intent` where he meets the ball:
-   * how hard it is decides the spread of its angle and weight errors. */
+   * how hard it is decides the spread of its angle and weight errors.
+   * `ownBall`: a dribble touch on his own claimed ball. */
   TouchResult firstTouchNewV1(const MatchPlayer& player,
                               const TouchIntent& intent,
-                              const TouchMoment& moment);
+                              const TouchMoment& moment, bool ownBall = false);
+  /** His dribble touch, carrying out `intent` where he meets his own ball:
+   * the first touch's two jobs, with First Touch. */
+  TouchResult dribbleTouchNewV1(const MatchPlayer& player,
+                                const TouchIntent& intent,
+                                const TouchMoment& moment);
   /** The passer's strike: execution error, weight, height and curve. */
   Kick kickPassNewV1(const MatchPlayer& passer, const MatchPlayer& receiver,
                 Vector2F target, float passDistance, bool lofted,

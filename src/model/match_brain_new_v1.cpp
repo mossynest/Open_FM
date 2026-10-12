@@ -1709,12 +1709,29 @@ bool MatchEngine::touchNowNewV1(const MatchPlayer& player,
                                 const TouchMoment& moment) const
 {
   // Control is easier the closer the ball is: he lets it come to the
-  // closest comfortable point it will pass, reading its roll and his own
-  // run, unless waiting would risk losing it.
+  // closest comfortable point it will pass, unless waiting would risk
+  // losing it. Nobody waits to steal a ball another player is playing.
+  if (moment.gap <= touchKnobs[TouchKnob::COMFORT_GAP] || ball.inTouch)
+    return true;
+  return !waitsForCloserNewV1(player, moment);
+}
+
+bool MatchEngine::dribbleTouchNowNewV1(const MatchPlayer& player,
+                                       const TouchMoment& moment) const
+{
+  // His own ball, due a touch: the same timing as a first touch, so he
+  // plays it in his close-control zone rather than at full stretch.
+  if (moment.gap <= touchKnobs[TouchKnob::COMFORT_GAP]) return true;
+  return !waitsForCloserNewV1(player, moment);
+}
+
+bool MatchEngine::waitsForCloserNewV1(const MatchPlayer& player,
+                                      const TouchMoment& moment) const
+{
+  // Reads the ball's roll and his own run: whether a clearly closer point,
+  // safely inside his reach, is coming before anything could take it.
   using K = TouchKnob;
   const FirstTouchKnobs& knob = touchKnobs;
-  // Nobody waits to steal a ball another player is already playing.
-  if (moment.gap <= knob[K::COMFORT_GAP] || ball.inTouch) return true;
   constexpr int SUBSTEPS = MatchTuning::Timing::BALL_SUBSTEPS;
   constexpr float STEP =
       MatchTuning::Timing::FIXED_STEP_SECONDS / static_cast<float>(SUBSTEPS);
@@ -1764,7 +1781,7 @@ bool MatchEngine::touchNowNewV1(const MatchPlayer& player,
             (playerStart.y + player.velocity.y * moved)};
     const float gap = length(gapVector);
     // Out of his reach by the next sub-step: this is his last chance.
-    if (step == 1 && gap > moment.reach) return true;
+    if (step == 1 && gap > moment.reach) return false;
     if (step == moment.substepsLeft + 1) gapAfterMove = gap;
     if (gap < bestGap)
     {
@@ -1776,14 +1793,14 @@ bool MatchEngine::touchNowNewV1(const MatchPlayer& player,
   // Only worth waiting for a clearly closer point, safely inside his reach.
   if (bestStep == 0 || bestGap > moment.gap - knob[K::WAIT_GAIN] ||
       bestGap > moment.reach - knob[K::WAIT_MARGIN])
-    return true;
+    return false;
   // A bounce on the way would take it up off his feet first.
-  if (risesAt <= bestStep) return true;
+  if (risesAt <= bestStep) return false;
   // His own next move is the least certain part of the read: wait through
   // it only if the ball is still safely inside his reach just after.
   if (bestStep > moment.substepsLeft &&
       gapAfterMove > moment.reach - knob[K::WAIT_MARGIN])
-    return true;
+    return false;
   // An opponent who can get to the ball's path first would take it: play
   // it now, stretched or not.
   for (const MatchPlayer& opponent : players)
@@ -1800,10 +1817,10 @@ bool MatchEngine::touchNowNewV1(const MatchPlayer& player,
       const Vector2F at = path[static_cast<std::size_t>(step)];
       const float gapX = at.x - (from.x + opponent.velocity.x * elapsed);
       const float gapY = at.y - (from.y + opponent.velocity.y * elapsed);
-      if (gapX * gapX + gapY * gapY <= reach * reach) return true;
+      if (gapX * gapX + gapY * gapY <= reach * reach) return false;
     }
   }
-  return false;
+  return true;
 }
 
 TouchIntent MatchEngine::chooseFirstTouchNewV1(
