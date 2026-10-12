@@ -4704,6 +4704,11 @@ void MatchEngine::playFirstTouch(MatchPlayer& player, const TouchMoment& moment)
   ball.touchWeightError = touch.weightError;
   ball.touchAngleDifficulty = touch.angleDifficulty;
   ball.touchWeightDifficulty = touch.weightDifficulty;
+  ball.touchAngleFailed = touch.angleFailed;
+  ball.touchWeightFailed = touch.weightFailed;
+  ball.touchTurn = touch.turn;
+  ball.touchOutward = touch.outward;
+  ball.touchPaceChange = touch.paceChange;
   const float gap = distance(player.position, ball.position);
   ball.touchGap = gap;
   ball.touchPeakGap = gap;

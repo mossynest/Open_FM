@@ -1979,6 +1979,11 @@ class FirstTouchDrill final : public Drill
         reading.weightError = ball.touchWeightError;
         reading.angleDifficulty = ball.touchAngleDifficulty;
         reading.weightDifficulty = ball.touchWeightDifficulty;
+        reading.angleFailed = ball.touchAngleFailed;
+        reading.weightFailed = ball.touchWeightFailed;
+        reading.turn = ball.touchTurn;
+        reading.outward = ball.touchOutward;
+        reading.paceChange = ball.touchPaceChange;
         reading.intoStride = ball.touchKind == TouchIntent::Kind::INTO_STRIDE;
         reading.point = ball.position;
         if (receiver)
@@ -2054,11 +2059,15 @@ class FirstTouchDrill final : public Drill
                     : std::string()));
     if (touch)
       lines.push_back(std::format(
-          "Touch at {:.2f} s, {:.2f} m from his centre{}: angle {:+.1f} deg, "
-          "weight {:+.0f}% (difficulty {:.2f} / {:.2f}){}",
+          "Touch at {:.2f} s, {:.2f} m from his centre{}: turn {:.0f} deg {} "
+          "{}{:+.1f} deg (difficulty {:.2f}), pace {:+.1f} m/s {}{:+.1f} "
+          "m/s (difficulty {:.2f}){}",
           touch->at, touch->contactGap, touch->intoStride ? ", into stride" : "",
-          touch->angleError * 180.0f / PI, touch->weightError * 100.0f,
-          touch->angleDifficulty, touch->weightDifficulty,
+          touch->turn * 180.0f / PI, touch->outward ? "out" : "in",
+          touch->angleFailed ? "FAILED " : "", touch->angleError * 180.0f / PI,
+          touch->angleDifficulty, touch->paceChange,
+          touch->weightFailed ? "FAILED " : "", touch->weightError,
+          touch->weightDifficulty,
           peakGap > 0.0f ? std::format(", got {:.1f} m away", peakGap)
                          : std::string()));
     if (!outcome.empty()) lines.push_back("OUTCOME  " + outcome);
@@ -2082,10 +2091,15 @@ class FirstTouchDrill final : public Drill
       out.push_back({"Angle error (deg)", touch->angleError * 180.0f / PI});
       out.push_back(
           {"Abs angle error (deg)", std::abs(touch->angleError) * 180.0f / PI});
-      out.push_back({"Weight error (%)", touch->weightError * 100.0f});
-      out.push_back({"Abs weight error (%)", std::abs(touch->weightError) * 100.0f});
+      out.push_back({"Weight error (m/s)", touch->weightError});
+      out.push_back({"Abs weight error (m/s)", std::abs(touch->weightError)});
       out.push_back({"Angle difficulty", touch->angleDifficulty});
       out.push_back({"Weight difficulty", touch->weightDifficulty});
+      out.push_back({"Angle failed", flag(touch->angleFailed)});
+      out.push_back({"Weight failed", flag(touch->weightFailed)});
+      out.push_back({"Turn (deg)", touch->turn * 180.0f / PI});
+      out.push_back({"Turn outward", flag(touch->outward)});
+      out.push_back({"Pace change (m/s)", touch->paceChange});
       out.push_back({"Contact gap (m)", touch->contactGap});
       out.push_back({"Ball height (m)", touch->height});
       out.push_back({"Into stride", flag(touch->intoStride)});
@@ -2108,6 +2122,11 @@ class FirstTouchDrill final : public Drill
     float weightError = 0.0f;
     float angleDifficulty = 0.0f;
     float weightDifficulty = 0.0f;
+    bool angleFailed = false;
+    bool weightFailed = false;
+    float turn = 0.0f;
+    bool outward = false;
+    float paceChange = 0.0f;
     bool intoStride = false;
     float facingVsBall = 0.0f;
     float speed = 0.0f;

@@ -45,7 +45,7 @@ struct Outcome
 constexpr std::array<Outcome, 5> OUTCOMES{{
     {"Lost", "lost", true},
     {"Heavy", "heavy", true},
-    {"Abs weight error (%)", "abs weight error %", false},
+    {"Abs weight error (m/s)", "abs weight error m/s", false},
     {"Abs angle error (deg)", "abs angle error deg", false},
     {"Time to collect (s)", "collect s", false},
 }};
@@ -551,7 +551,7 @@ int runTouchSensitivity(const StatsConfig& config,
       "alone are beside it. Lost and heavy are percentage points; ~ marks a "
       "change within two standard errors of the noise.\n\n"
       "| # | Variable | Group | Low / high | Place: lost | Place: heavy | "
-      "Lost | Heavy | Abs weight error % | Abs angle error deg | Collect s | Largest "
+      "Lost | Heavy | Abs weight error m/s | Abs angle error deg | Collect s | Largest "
       "lost change at | Largest heavy change at |\n"
       "|---|---|---|---|---|---|---|---|---|---|---|---|---|\n";
   for (std::size_t place = 0; place < ranked.size(); ++place)
@@ -576,7 +576,7 @@ int runTouchSensitivity(const StatsConfig& config,
 
   std::cout << std::format("Done in {:.1f} s.\n\n", seconds);
   std::cout << std::format("{:>3}  {:<26} {:>8} {:>8} {:>10} {:>10}\n", "#",
-                           "Variable", "lost pp", "heavy pp", "|weight|%",
+                           "Variable", "lost pp", "heavy pp", "|weight|m/s",
                            "|angle|deg");
   for (std::size_t place = 0; place < ranked.size() && place < 25; ++place)
   {

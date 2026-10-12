@@ -679,6 +679,7 @@ TouchResult MatchEngine::firstTouchNewV1(const MatchPlayer& player,
 {
   using K = TouchKnob;
   const FirstTouchKnobs& knob = touchKnobs;
+  constexpr float RIGHT_ANGLE = std::numbers::pi_v<float> * 0.5f;
   // What he means to do: straight at the target spot, weighted with the
   // rolling physics to arrive at the intended speed.
   const Vector2F gap = toMetres({intent.targetSpot.x - moment.contactPoint.x,
@@ -694,13 +695,29 @@ TouchResult MatchEngine::firstTouchNewV1(const MatchPlayer& player,
                                   knob[K::MAX_TOUCH_SPEED])
                        : 0.0f;
 
-  // How hard that is, factor by factor (each 0-1).
+  // The line it came on: sending it back along it (a cushion) or on along
+  // it (taking it on) is no turn; whichever is nearer what he means is the
+  // reference, so a turn is 0-90 degrees. A still ball has no line.
   const float incomingSpeed = length(ball.velocity);
   const bool moving = incomingSpeed > MatchTuning::Ball::STOP_SPEED;
   const Vector2F incoming =
       moving ? Vector2F{ball.velocity.x / incomingSpeed,
                         ball.velocity.y / incomingSpeed}
              : Vector2F{0.0f, 0.0f};
+  const bool rebound = moving && incoming.x * aim.x + incoming.y * aim.y < 0.0f;
+  const Vector2F line = !moving  ? aim
+                        : rebound ? Vector2F{-incoming.x, -incoming.y}
+                                  : incoming;
+  // The two jobs: the turn off that line (+ anticlockwise), inward when it
+  // brings the ball nearer the line straight out the way he faces; and the
+  // pace change (- taking pace off, + adding it).
+  const float turn = std::atan2(line.x * aim.y - line.y * aim.x,
+                                line.x * aim.x + line.y * aim.y);
+  const bool outward = aim.x * facing.x + aim.y * facing.y <
+                       line.x * facing.x + line.y * facing.y;
+  const float paceChange = intendedSpeed - (moving ? incomingSpeed : 0.0f);
+
+  // How hard each job is: its size, then the conditions (each 0-1).
   const Vector2F toBall =
       metricDirection(player.position, moment.contactPoint);
   // Where it comes from: back along its path, or where it lies if still.
@@ -723,21 +740,18 @@ TouchResult MatchEngine::firstTouchNewV1(const MatchPlayer& player,
     float angleWeight;
     float weightWeight;
   };
-  const std::array<Factor, 11> factors{{
+  const std::array<Factor, 10> factors{{
+      {"pace to take off or add", TermSource::SITUATION,
+       clamp01(std::abs(paceChange) / knob[K::REFERENCE_SPEED]), 0.0f,
+       knob[K::PACE_CHANGE_WEIGHT]},
+      {outward ? "turning it outward" : "turning it inward",
+       TermSource::SITUATION, clamp01(std::abs(turn) / RIGHT_ANGLE),
+       knob[K::TURN_ANGLE] *
+           (outward ? knob[K::TURN_OUTWARD] : knob[K::TURN_INWARD]),
+       0.0f},
       {"incoming pace", TermSource::SITUATION,
        clamp01(incomingSpeed / knob[K::REFERENCE_SPEED]),
        knob[K::INCOMING_SPEED_ANGLE], knob[K::INCOMING_SPEED_WEIGHT]},
-      {"pace to take off or add", TermSource::SITUATION,
-       clamp01(std::abs(incomingSpeed - intendedSpeed) /
-               knob[K::REFERENCE_SPEED]),
-       knob[K::SPEED_CHANGE_ANGLE], knob[K::SPEED_CHANGE_WEIGHT]},
-      {"turning its path", TermSource::SITUATION,
-       moving && intendedSpeed > EPSILON
-           ? std::acos(std::clamp(incoming.x * aim.x + incoming.y * aim.y,
-                                  -1.0f, 1.0f)) /
-                 std::numbers::pi_v<float>
-           : 0.0f,
-       knob[K::REDIRECTION_ANGLE], knob[K::REDIRECTION_WEIGHT]},
       {"coming from behind him", TermSource::SITUATION,
        clamp01((1.0f - (from.x * facing.x + from.y * facing.y)) * 0.5f),
        knob[K::APPROACH_ANGLE], knob[K::APPROACH_WEIGHT]},
@@ -759,9 +773,6 @@ TouchResult MatchEngine::firstTouchNewV1(const MatchPlayer& player,
        clamp01(1.0f -
                nearestOpponentDistance(player) / knob[K::PRESSURE_RADIUS]),
        knob[K::PRESSURE_ANGLE], knob[K::PRESSURE_WEIGHT]},
-      {"playing it on hard", TermSource::SITUATION,
-       clamp01(intendedSpeed / knob[K::MAX_TOUCH_SPEED]),
-       knob[K::AMBITION_ANGLE], knob[K::AMBITION_WEIGHT]},
   }};
   float angleSum = 0.0f;
   float weightSum = 0.0f;
@@ -773,9 +784,10 @@ TouchResult MatchEngine::firstTouchNewV1(const MatchPlayer& player,
   const float angleDifficulty = clamp01(angleSum);
   const float weightDifficulty = clamp01(weightSum);
 
-  // His touch cuts the spread; tiredness, nerves and being shown onto his
-  // weaker foot widen it, as for his passes and shots
-  // (executionErrorScaleNewV1, with the touch's own gains).
+  // His touch cuts the chance of a job going wrong (and a clean touch's
+  // jitter); tiredness, nerves and being shown onto his weaker foot raise
+  // it, as for his passes and shots (executionErrorScaleNewV1, with the
+  // touch's own gains). How badly a job goes wrong is the ball's doing.
   const float skill = player.derivedStat(DerivedStat::FIRST_TOUCH);
   const float fatigue =
       1.0f + (1.0f - player.stamina) * knob[K::FATIGUE_ERROR_GAIN];
@@ -783,40 +795,84 @@ TouchResult MatchEngine::firstTouchNewV1(const MatchPlayer& player,
       fatigue * std::max(0.5f, 1.0f - teamEdge(player.isHomeTeam)) *
       (1.0f + weakFootPressure(player) * knob[K::SHOWN_WEAK_FOOT_GAIN]);
   const float scale = (1.0f - skill * knob[K::SKILL_REDUCTION]) * execution;
-  const float angleSigma = (knob[K::ANGLE_SIGMA_BASE] +
-                            angleDifficulty * knob[K::ANGLE_SIGMA_RANGE]) *
-                           scale;
-  const float weightSigma = (knob[K::WEIGHT_SIGMA_BASE] +
-                             weightDifficulty * knob[K::WEIGHT_SIGMA_RANGE]) *
-                            scale;
-  // Near-normal draws (a sum of three uniforms), bounded at three sigma.
-  const auto draw = [this]
+  const float angleFailChance = clamp01(
+      (knob[K::ANGLE_FAIL_BASE] + angleDifficulty * knob[K::ANGLE_FAIL_RANGE]) *
+      scale);
+  const float weightFailChance = clamp01(
+      (knob[K::WEIGHT_FAIL_BASE] + weightDifficulty * knob[K::WEIGHT_FAIL_RANGE]) *
+      scale);
+
+  // Each job: whether it went wrong, by what share of the job, which way
+  // (the usual way: heavy, under-turned), and a clean touch's jitter. The
+  // same draws every touch, so changing a knob keeps the random stream.
+  struct Job
   {
-    return (randomFloat(0.0f, 1.0f) + randomFloat(0.0f, 1.0f) +
-            randomFloat(0.0f, 1.0f) - 1.5f) *
-           2.0f;
+    bool failed = false;
+    /** Share of the job missed: + the usual way, - the other. */
+    float miss = 0.0f;
+    float jitter = 0.0f;
   };
+  const auto carryOut = [this](float chance, float worstMiss, float usualShare,
+                               float jitterSigma)
+  {
+    const float failRoll = randomFloat(0.0f, 1.0f);
+    const float missRoll = randomFloat(0.0f, 1.0f);
+    const float wayRoll = randomFloat(0.0f, 1.0f);
+    // Near-normal (a sum of three uniforms), bounded at three sigma.
+    const float jitter = (randomFloat(0.0f, 1.0f) + randomFloat(0.0f, 1.0f) +
+                          randomFloat(0.0f, 1.0f) - 1.5f) *
+                         2.0f * jitterSigma;
+    Job job;
+    job.failed = failRoll < chance;
+    if (job.failed)
+      job.miss = std::min(missRoll * worstMiss, 1.0f) *
+                 (wayRoll < usualShare ? 1.0f : -1.0f);
+    job.jitter = jitter;
+    return job;
+  };
+  const Job angleJob = carryOut(
+      angleFailChance,
+      knob[K::ANGLE_MISS_BASE] + angleDifficulty * knob[K::ANGLE_MISS_RANGE],
+      knob[K::UNDER_TURN_SHARE], knob[K::ANGLE_JITTER] * scale);
+  const Job weightJob = carryOut(
+      weightFailChance,
+      knob[K::WEIGHT_MISS_BASE] + weightDifficulty * knob[K::WEIGHT_MISS_RANGE],
+      knob[K::HEAVY_SHARE], knob[K::WEIGHT_JITTER] * scale);
+
+  // What he actually did. The angle: the turn, short by the miss (or past
+  // it), plus the jitter in radians. The weight: heavier than meant by the
+  // miss's share of the pace change (or lighter), plus the jitter's share.
+  const float achievedTurn = turn * (1.0f - angleJob.miss) + angleJob.jitter;
+  float actualSpeed =
+      std::max(intendedSpeed + (weightJob.miss + weightJob.jitter) *
+                                   std::abs(paceChange),
+               0.0f);
+  // Within what a touch can do: back the way it came no faster than a
+  // rebound, on the way it came no faster than it arrived unless he meant
+  // to add pace.
+  if (rebound)
+    actualSpeed = std::min(
+        actualSpeed,
+        std::max(intendedSpeed, incomingSpeed * knob[K::REBOUND_SHARE]));
+  else if (moving && paceChange < 0.0f)
+    actualSpeed = std::min(actualSpeed, incomingSpeed);
+  const float cosine = std::cos(achievedTurn);
+  const float sine = std::sin(achievedTurn);
+  const Vector2F direction{line.x * cosine - line.y * sine,
+                           line.x * sine + line.y * cosine};
+
   TouchResult result;
+  result.velocity = {direction.x * actualSpeed, direction.y * actualSpeed};
+  // Signed along the turn: - short of it, + past it.
+  result.angleError = (achievedTurn - turn) * (turn < 0.0f ? -1.0f : 1.0f);
+  result.weightError = actualSpeed - intendedSpeed;
   result.angleDifficulty = angleDifficulty;
   result.weightDifficulty = weightDifficulty;
-  result.angleError = draw() * angleSigma;
-  result.weightError = draw() * weightSigma;
-
-  // What he actually did: the aim turned by the angle error, the pace off
-  // by the weight error (against the pace in play, so misjudging a fast
-  // ball leaves more on it), within what a touch can do.
-  const float cosine = std::cos(result.angleError);
-  const float sine = std::sin(result.angleError);
-  const Vector2F direction{aim.x * cosine - aim.y * sine,
-                           aim.x * sine + aim.y * cosine};
-  const float reference =
-      std::max(intendedSpeed, incomingSpeed * knob[K::WEIGHT_REFERENCE_SHARE]);
-  // (A minimum above the maximum keeps the maximum.)
-  const float actualSpeed = std::min(
-      std::max(intendedSpeed + result.weightError * reference,
-               incomingSpeed * knob[K::MIN_RETAINED_SHARE]),
-      knob[K::MAX_TOUCH_SPEED]);
-  result.velocity = {direction.x * actualSpeed, direction.y * actualSpeed};
+  result.angleFailed = angleJob.failed;
+  result.weightFailed = weightJob.failed;
+  result.turn = std::abs(turn);
+  result.outward = outward && std::abs(turn) > EPSILON;
+  result.paceChange = paceChange;
 
   if (wantsDetail())
   {
@@ -828,10 +884,12 @@ TouchResult MatchEngine::firstTouchNewV1(const MatchPlayer& player,
     duel.foul.total = weightDifficulty;
     for (const Factor& factor : factors)
     {
-      duel.chance.add(factor.name, factor.source,
-                      factor.value * factor.angleWeight);
-      duel.foul.add(factor.name, factor.source,
-                    factor.value * factor.weightWeight);
+      if (factor.angleWeight != 0.0f)
+        duel.chance.add(factor.name, factor.source,
+                        factor.value * factor.angleWeight);
+      if (factor.weightWeight != 0.0f)
+        duel.foul.add(factor.name, factor.source,
+                      factor.value * factor.weightWeight);
     }
     for (ScoreBreakdown* breakdown : {&duel.chance, &duel.foul})
       if (const float clamp = breakdown->residual(); std::abs(clamp) > 1e-6f)
@@ -839,10 +897,15 @@ TouchResult MatchEngine::firstTouchNewV1(const MatchPlayer& player,
     duel.touchSkill = skill;
     duel.intendedSpeed = intendedSpeed;
     duel.actualSpeed = actualSpeed;
+    duel.turn = result.turn;
+    duel.outward = result.outward;
+    duel.paceChange = paceChange;
     duel.angleError = result.angleError;
-    duel.angleSigma = angleSigma;
+    duel.angleFailChance = angleFailChance;
+    duel.angleFailed = angleJob.failed;
     duel.weightError = result.weightError;
-    duel.weightSigma = weightSigma;
+    duel.weightFailChance = weightFailChance;
+    duel.weightFailed = weightJob.failed;
     if (MatchRecorder* recorder = getRecorder())
       recorder->onDuelDetail(*this, duel);
   }

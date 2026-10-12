@@ -292,15 +292,22 @@ struct MatchDuelDetail
   float foulThreshold = 0.0f;
   std::optional<float> foulRoll;
   /** FIRST_TOUCH: his touch skill; the speed he meant to give the ball and
-   * the speed it got (m/s); the angle error (radians) and the weight error
-   * (share), each with its spread (one sigma). */
+   * the speed it got (m/s); the two jobs (the turn in radians, outward or
+   * not, and the pace change in m/s); each job's chance of going wrong,
+   * whether it did, and its error (angle in radians along the turn, weight
+   * in m/s). The angle difficulty is `chance`, the weight's `foul`. */
   float touchSkill = 0.0f;
   float intendedSpeed = 0.0f;
   float actualSpeed = 0.0f;
+  float turn = 0.0f;
+  bool outward = false;
+  float paceChange = 0.0f;
   float angleError = 0.0f;
-  float angleSigma = 0.0f;
+  float angleFailChance = 0.0f;
+  bool angleFailed = false;
   float weightError = 0.0f;
-  float weightSigma = 0.0f;
+  float weightFailChance = 0.0f;
+  bool weightFailed = false;
 };
 
 /** Receives the engine's observations. Every hook defaults to nothing. */

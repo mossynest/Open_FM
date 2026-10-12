@@ -288,19 +288,28 @@ struct MatchTuning final
     static constexpr float STRIDE_SPEED_SHARE = 0.9f;
     static constexpr float STRIDE_CLEARANCE_METRES = 4.0f;
 
-    // How well he carries it out (New v1 body). Each difficulty factor is
-    // 0-1 and adds to an angle and a weight difficulty with its weights.
+    // How well he carries it out (New v1 body; Notes and plans/
+    // match_engine_first_touch_jobs_plan.md). The touch is two jobs: the
+    // weight (the pace change) and the angle (the turn off the line the
+    // ball came on). Each has its own difficulty, chance of going wrong and
+    // way of going wrong: a weight failure leaves it heavy, an angle failure
+    // under-turns it.
     struct FactorWeights
     {
       float angle;
       float weight;
     };
+    /** The jobs' sizes: the pace change (1 at the reference speed) counts
+     * for the weight, the turn (1 at 90°) for the angle, times the inward
+     * or outward multiplier (towards or away from the line straight out the
+     * way he faces). */
+    static constexpr float PACE_CHANGE_WEIGHT = 0.6f;
+    static constexpr float TURN_ANGLE = 0.6f;
+    static constexpr float TURN_OUTWARD = 1.5f;
+    static constexpr float TURN_INWARD = 0.75f;
+    // Conditions, each 0-1, adding to both difficulties with their weights.
     /** Incoming ball speed (1 at the reference speed). */
-    static constexpr FactorWeights INCOMING_SPEED{0.10f, 0.30f};
-    /** Pace he must take off or add (1 at the reference speed). */
-    static constexpr FactorWeights SPEED_CHANGE{0.00f, 0.25f};
-    /** How far he turns its path (1 straight back). */
-    static constexpr FactorWeights REDIRECTION{0.30f, 0.05f};
+    static constexpr FactorWeights INCOMING_SPEED{0.15f, 0.10f};
     /** Where it comes from against where he faces (1 from behind). */
     static constexpr FactorWeights APPROACH{0.20f, 0.10f};
     /** His own speed against his top speed. */
@@ -318,24 +327,36 @@ struct MatchTuning final
     /** An opponent close by (1 on top of him, 0 at the radius). */
     static constexpr FactorWeights PRESSURE{0.10f, 0.10f};
     static constexpr float PRESSURE_RADIUS_METRES = 3.0f;
-    /** How hard he plays it on (1 at the maximum touch speed). */
-    static constexpr FactorWeights AMBITION{0.00f, 0.15f};
     static constexpr float REFERENCE_SPEED = 25.0f;
 
-    /** Error spreads (one sigma): angle in radians, weight as a share of
-     * the pace in play; a perfect touch skill cuts them by SKILL_REDUCTION. */
-    static constexpr float ANGLE_SIGMA_BASE = 0.035f;
-    static constexpr float ANGLE_SIGMA_RANGE = 0.45f;
-    static constexpr float WEIGHT_SIGMA_BASE = 0.05f;
-    static constexpr float WEIGHT_SIGMA_RANGE = 0.5f;
-    static constexpr float SKILL_REDUCTION = 0.6f;
-    /** The weight error is measured against the larger of the intended
-     * speed and this share of the incoming speed: misjudging a fast ball
-     * leaves more pace on it. */
-    static constexpr float WEIGHT_REFERENCE_SHARE = 0.5f;
-    /** A first touch is not a pass, and cannot kill a ball completely. */
+    /** Chance a job goes wrong: (base + difficulty x range), cut by his
+     * touch skill (a perfect one by SKILL_REDUCTION) and widened by
+     * tiredness and nerves. */
+    static constexpr float ANGLE_FAIL_BASE = 0.03f;
+    static constexpr float ANGLE_FAIL_RANGE = 0.5f;
+    static constexpr float WEIGHT_FAIL_BASE = 0.05f;
+    static constexpr float WEIGHT_FAIL_RANGE = 0.5f;
+    static constexpr float SKILL_REDUCTION = 0.8f;
+    /** How badly a failed job misses: a share of the job, uniform up to
+     * (base + difficulty x range). The skill decides how often; the ball
+     * how badly. */
+    static constexpr float ANGLE_MISS_BASE = 0.2f;
+    static constexpr float ANGLE_MISS_RANGE = 0.6f;
+    static constexpr float WEIGHT_MISS_BASE = 0.2f;
+    static constexpr float WEIGHT_MISS_RANGE = 0.6f;
+    /** Failures that go the usual way (heavy; under-turned); the rest
+     * overshoot (over-cushioned or under-hit; over-turned). */
+    static constexpr float HEAVY_SHARE = 0.85f;
+    static constexpr float UNDER_TURN_SHARE = 0.85f;
+    /** A clean touch's jitter (one sigma, cut by skill as the chance is):
+     * radians for the angle, a share of the pace change for the weight. */
+    static constexpr float ANGLE_JITTER = 0.04f;
+    static constexpr float WEIGHT_JITTER = 0.04f;
+    /** A ball sent back the way it came leaves at most this share of its
+     * incoming pace (as off a wall). */
+    static constexpr float REBOUND_SHARE = 0.6f;
+    /** A first touch is not a pass: the most pace he means to give it. */
     static constexpr float MAX_TOUCH_SPEED = 8.0f;
-    static constexpr float MIN_RETAINED_SHARE = 0.05f;
   };
 
   /**

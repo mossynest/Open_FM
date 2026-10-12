@@ -264,15 +264,24 @@ struct TouchMoment
 };
 
 /** What a first touch actually did: the ball's velocity off it (m/s), and
- * how far it missed the intent (angle in radians, weight as a share). */
+ * how each of its two jobs went (first-touch jobs plan). */
 struct TouchResult
 {
   Vector2F velocity{0.0f, 0.0f};
+  /** The angle error along the turn (radians, - short of it) and the
+   * weight error (m/s, + heavier than meant). */
   float angleError = 0.0f;
   float weightError = 0.0f;
-  /** How hard it was (0-1): the scores behind the two errors' spreads. */
+  /** How hard each job was (0-1), and whether it went wrong. */
   float angleDifficulty = 0.0f;
   float weightDifficulty = 0.0f;
+  bool angleFailed = false;
+  bool weightFailed = false;
+  /** The jobs: the turn off the line it came on (radians, 0-pi/2), whether
+   * away from the line out in front of him, and the pace change (m/s). */
+  float turn = 0.0f;
+  bool outward = false;
+  float paceChange = 0.0f;
 };
 
 /**
@@ -305,11 +314,16 @@ struct MatchBall
   TouchIntent::Kind touchKind = TouchIntent::Kind::SET;
   float touchContactGap = 0.0f;
   float touchContactHeight = 0.0f;
-  /** How far the current touch missed its intent (TouchResult). */
+  /** How the current touch went (TouchResult). */
   float touchAngleError = 0.0f;
   float touchWeightError = 0.0f;
   float touchAngleDifficulty = 0.0f;
   float touchWeightDifficulty = 0.0f;
+  bool touchAngleFailed = false;
+  bool touchWeightFailed = false;
+  float touchTurn = 0.0f;
+  bool touchOutward = false;
+  float touchPaceChange = 0.0f;
   const Player* lastPossessor = nullptr;
   const Player* intendedReceiver = nullptr;
   /** The player who last kicked or deflected the ball. */

@@ -492,22 +492,25 @@ void DebugInspector::renderDuelDetail(const SandboxRecorder& recorder,
     ++shown;
     if (duel.kind == MatchDuelDetail::Kind::FIRST_TOUCH)
     {
-      // No roll: the difficulty sets the spread of two errors, then draws.
+      // Two jobs, each rolled: did it go wrong, and by how much.
       constexpr float DEGREES = 180.0f / std::numbers::pi_v<float>;
       const std::string label = std::format(
-          "{}  First touch  {}  ·  angle off {:+.0f}° (sigma {:.0f}°)  ·  "
-          "weight {:+.0f}% (sigma {:.0f}%)  ·  {:.1f} -> {:.1f} m/s",
+          "{}  First touch  {}  ·  turn {:.0f}° {} {}({:.0f}%) {:+.0f}°  ·  "
+          "pace {:+.1f} m/s {}({:.0f}%) {:+.1f} m/s  ·  {:.1f} -> {:.1f} m/s",
           clock(at->minute), recorder.playerName(duel.player),
-          duel.angleError * DEGREES, duel.angleSigma * DEGREES,
-          duel.weightError * 100.0f, duel.weightSigma * 100.0f,
-          duel.intendedSpeed, duel.actualSpeed);
+          duel.turn * DEGREES, duel.outward ? "out" : "in",
+          duel.angleFailed ? "FAILED " : "", duel.angleFailChance * 100.0f,
+          duel.angleError * DEGREES, duel.paceChange,
+          duel.weightFailed ? "FAILED " : "", duel.weightFailChance * 100.0f,
+          duel.weightError, duel.intendedSpeed, duel.actualSpeed);
       ImGui::PushID(shown);
       if (ImGui::TreeNodeEx("touch", ImGuiTreeNodeFlags_SpanAvailWidth, "%s",
                             label.c_str()))
       {
         ImGui::TextDisabled(
-            "Touch skill %.0f. Each sigma = (base + difficulty x range) x "
-            "(1 - skill x %.1f) x tiredness and nerves.",
+            "Touch skill %.0f. Each job's chance of going wrong = (base + "
+            "difficulty x range) x (1 - skill x %.1f) x tiredness and nerves; "
+            "a failed job misses by a share of it, sized by the difficulty.",
             duel.touchSkill * 100.0f,
             MatchTuning::FirstTouch::SKILL_REDUCTION);
         ImGui::TextDisabled("Angle difficulty:");

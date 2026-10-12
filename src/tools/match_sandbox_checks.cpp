@@ -561,6 +561,8 @@ bool runFirstTouchChecks(const std::vector<const Team*>& clubs,
     /** Sums of the touches' absolute errors (radians, share). */
     double angleErrorSum = 0.0;
     double weightErrorSum = 0.0;
+    int angleFailed = 0;
+    int weightFailed = 0;
     std::uint32_t waitsMissed = 0;
     float worstExcess = 0.0f;
     float worstCollectJump = 0.0f;
@@ -688,6 +690,8 @@ bool runFirstTouchChecks(const std::vector<const Team*>& clubs,
           setup.contactGapSum += ball.touchContactGap;
           setup.angleErrorSum += std::abs(ball.touchAngleError);
           setup.weightErrorSum += std::abs(ball.touchWeightError);
+          if (ball.touchAngleFailed) ++setup.angleFailed;
+          if (ball.touchWeightFailed) ++setup.weightFailed;
           if (ball.touchKind == TouchIntent::Kind::INTO_STRIDE)
             ++setup.intoStride;
         }
@@ -739,7 +743,8 @@ bool runFirstTouchChecks(const std::vector<const Team*>& clubs,
     std::cout << std::format(
         "    all: {}\n    pass receptions: {}\n    met the ball {:.2f} m from "
         "his centre on average; into stride {:.0f}%; mean error: angle "
-        "{:.1f}°, weight {:.0f}%; heavy (ball over 2 m away) {:.1f}%; mean "
+        "{:.1f}°, weight {:.2f} m/s; failed: angle {:.1f}%, weight {:.1f}%; "
+        "heavy (ball over 2 m away) {:.1f}%; mean "
         "time to collect {:.2f} s\n    rolling "
         "ball moved only under physics: {} (worst excess {:.3f} m); largest "
         "jump relative to him at collection {:.2f} m; waited and lost it: {}\n",
@@ -747,7 +752,9 @@ bool runFirstTouchChecks(const std::vector<const Team*>& clubs,
         setup.contactGapSum / started,
         100.0 * static_cast<double>(setup.intoStride) / started,
         setup.angleErrorSum / started * 180.0 / std::numbers::pi,
-        100.0 * setup.weightErrorSum / started,
+        setup.weightErrorSum / started,
+        100.0 * static_cast<double>(setup.angleFailed) / started,
+        100.0 * static_cast<double>(setup.weightFailed) / started,
         100.0 * static_cast<double>(setup.heavy) / started,
         all.collected ? setup.collectSeconds / static_cast<double>(all.collected)
                       : 0.0,
