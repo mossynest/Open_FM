@@ -3608,7 +3608,10 @@ float MatchEngine::strikeShot(MatchPlayer& shooter, float forcedXG, bool header,
   const float goalDistance = distance(origin, goalPoint);
   clearFlightState();
   launchBall(shooter, ball.position, goalPoint, speed,
-             loftVerticalSpeed(goalDistance, speed, startHeight, crossingZ),
+             strike.launchSet
+                 ? strike.verticalSpeed
+                 : loftVerticalSpeed(goalDistance, speed, startHeight,
+                                     crossingZ),
              0.0f);
   ball.z = startHeight / MatchTuning::Units::BALL_Z_METRES;
   ball.isShot = true;
@@ -4538,14 +4541,17 @@ bool MatchEngine::resolveAerialContest()
   return true;
 }
 
-void MatchEngine::clearBehind(MatchPlayer& defender)
+void MatchEngine::clearBehind(MatchPlayer& defender, bool headed)
 {
   // Knock the ball over the own goal line, wide of the posts.
   const Vector2F target = chooseClearBehindTarget(defender);
   const float height = ball.z;
-  launchBall(defender, strikePoint(defender), target,
-             MatchTuning::Aerial::HEADER_CLEARANCE_SPEED,
-             MatchTuning::Aerial::HEADER_LIFT * 0.5f, 0.0f);
+  const Kick kick =
+      strikeAs(defender, headed ? StrikeKind::HEADER : StrikeKind::CLEARANCE,
+               target, MatchTuning::Aerial::HEADER_CLEARANCE_SPEED,
+               MatchTuning::Aerial::HEADER_LIFT * 0.5f);
+  launchBall(defender, strikePoint(defender), kick.target, kick.speed,
+             kick.verticalSpeed, 0.0f);
   ball.z = height;
   lastShooter = nullptr;
 }
@@ -4565,14 +4571,17 @@ void MatchEngine::clearBall(MatchPlayer& defender)
   const float speed = clearanceSpeed(defender);
   ++statsOf(defender).clearances;
   clearFlightState();
-  launchBall(defender, origin, target, speed,
-             loftVerticalSpeed(clearanceMetres, speed, 0.0f, 0.0f), 0.0f);
+  const Kick kick =
+      strikeAs(defender, StrikeKind::CLEARANCE, target, speed,
+               loftVerticalSpeed(clearanceMetres, speed, 0.0f, 0.0f));
+  launchBall(defender, origin, kick.target, kick.speed, kick.verticalSpeed,
+             0.0f);
   if (getRecorder())
   {
     MatchActionRecord action;
     action.kind = MatchActionKind::CLEARANCE;
     action.lofted = true;
-    reportKick(action, defender, target);
+    reportKick(action, defender, kick.target);
   }
   lastShooter = nullptr;
   defender.actionCooldown = recoverySeconds(defender, Recovery::PASS);
@@ -4639,7 +4648,7 @@ void MatchEngine::headBall(MatchPlayer& header)
   if (play.kind == HeaderPlay::Kind::BEHIND)
   {
     ++statsOf(header).clearances;
-    clearBehind(header);
+    clearBehind(header, true);
   }
   else if (play.kind == HeaderPlay::Kind::CLEAR)
   {
@@ -4648,24 +4657,29 @@ void MatchEngine::headBall(MatchPlayer& header)
     // of the box, where the second ball is fought for.
     const float speed = headerClearanceSpeed(header);
     const float height = ball.z;
-    launchBall(header, strikePoint(header), play.aim, speed,
-               MatchTuning::Aerial::HEADER_LIFT, 0.0f);
+    const Kick kick = strikeAs(header, StrikeKind::HEADER, play.aim, speed,
+                               MatchTuning::Aerial::HEADER_LIFT);
+    launchBall(header, strikePoint(header), kick.target, kick.speed,
+               kick.verticalSpeed, 0.0f);
     ball.z = height;
     if (getRecorder())
     {
       MatchActionRecord action;
       action.kind = MatchActionKind::CLEARANCE;
       action.header = true;
-      reportKick(action, header, play.aim);
+      reportKick(action, header, kick.target);
     }
   }
   else
   {
     const Vector2F knockDown = knockDownPoint(header, play.aim);
     const float height = ball.z;
-    launchBall(header, strikePoint(header), knockDown,
-               MatchTuning::Aerial::HEADER_PASS_SPEED,
-               MatchTuning::Aerial::HEADER_LIFT * 0.5f, 0.0f);
+    const Kick kick =
+        strikeAs(header, StrikeKind::HEADER, knockDown,
+                 MatchTuning::Aerial::HEADER_PASS_SPEED,
+                 MatchTuning::Aerial::HEADER_LIFT * 0.5f);
+    launchBall(header, strikePoint(header), kick.target, kick.speed,
+               kick.verticalSpeed, 0.0f);
     ball.z = height;
     if (getRecorder())
     {
@@ -4674,7 +4688,7 @@ void MatchEngine::headBall(MatchPlayer& header)
       action.header = true;
       action.target =
           play.target && play.target->player ? play.target->player->getId() : 0;
-      reportKick(action, header, knockDown);
+      reportKick(action, header, kick.target);
     }
   }
 }
@@ -4770,6 +4784,19 @@ Vector2F MatchEngine::strikePoint(const MatchPlayer& striker) const
   // there; the Aardvark body keeps measuring from his centre.
   return bodyOf(striker.isHomeTeam) == BodyId::BINTURONG ? ball.position
                                                          : striker.position;
+}
+
+MatchEngine::Kick MatchEngine::strikeAs(const MatchPlayer& striker,
+                                        StrikeKind kind, Vector2F target,
+                                        float speed, float lift)
+{
+  if (bodyOf(striker.isHomeTeam) == BodyId::BINTURONG)
+    return strikeContactBinturong(striker, kind, target, speed, lift);
+  Kick kick;
+  kick.target = target;
+  kick.speed = speed;
+  kick.verticalSpeed = lift;
+  return kick;
 }
 
 TouchIntent MatchEngine::defaultTouchIntent(const MatchPlayer& player) const

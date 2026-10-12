@@ -61,10 +61,15 @@
   void recordStrikeBinturong(const MatchPlayer& striker, StrikeKind kind,
                              const ContactAssessment& contact,
                              const ContactOutcome* outcome, float skill);
-  /** Reads a strike as a contact (contact plan step 2) and records it,
-   * without changing it. */
-  void measureStrikeBinturong(const MatchPlayer& striker, StrikeKind kind,
-                              Vector2F aim, float intendedSpeed);
+  /** His skill for a kind of strike (0-1). */
+  float strikeSkillBinturong(const MatchPlayer& striker, StrikeKind kind) const;
+  /** A strike carried out (contact plan step 3): from the ball where it
+   * lies towards `target` at `speed` over the ground and `lift` upward,
+   * with the kind's profile (its angle error times `precision`) and his
+   * skill for it; recorded. The kick's target gives only its direction. */
+  Kick strikeContactBinturong(const MatchPlayer& striker, StrikeKind kind,
+                              Vector2F target, float speed, float lift,
+                              float precision = 1.0f);
   /** Carries an assessed contact out with `skill` (0-1): each job's chance
    * of going wrong, how badly, and the ball off it. */
   ContactOutcome carryOutContactBinturong(const MatchPlayer& player,

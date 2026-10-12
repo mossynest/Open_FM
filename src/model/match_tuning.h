@@ -359,96 +359,6 @@ struct MatchTuning final
   };
 
   /**
-   * Strikes read by the contact model (Binturong body; Notes and plans/
-   * match_engine_contact_plan.md, step 2). Provisional: the strikes are
-   * only measured, so these weights change nothing yet. The levels are on
-   * the touch's condition scale; each condition adds its level to both
-   * jobs.
-   */
-  struct Strike final
-  {
-    static constexpr float LOW = 0.05f;
-    static constexpr float MEDIUM = 0.10f;
-    static constexpr float HIGH = 0.20f;
-    static constexpr float VERY_HIGH = 0.30f;
-    /** The jobs' sizes: power demand (the pace change) by kind, and the
-     * turn off the ball's line. */
-    static constexpr float GROUND_PASS_PACE_CHANGE = 0.2f;
-    static constexpr float LOFTED_PACE_CHANGE = 0.6f;
-    static constexpr float SHOT_PACE_CHANGE = 0.6f;
-    static constexpr float TURN_ANGLE = 0.6f;
-    /** A strike's turn off the ball's line counts in full when the ball
-     * comes at this pace (m/s), in proportion below it: a ball barely
-     * rolling has no line worth the name. */
-    static constexpr float TURN_PACE_REFERENCE = 10.0f;
-
-    /** Ground passes, carried out by the contact model (contact plan step
-     * 3) in place of the old sideways error. Skill: Passing. */
-    struct GroundPass final
-    {
-      /** The turn off a dribbled ball's line counts for less than a
-       * touch's: the ball is barely moving. */
-      static constexpr float TURN_ANGLE = 0.3f;
-      static constexpr float SKILL_REDUCTION = 0.8f;
-      static constexpr float ANGLE_FAIL_BASE = 0.05f;
-      static constexpr float ANGLE_FAIL_RANGE = 0.5f;
-      static constexpr float WEIGHT_FAIL_BASE = 0.05f;
-      static constexpr float WEIGHT_FAIL_RANGE = 0.5f;
-      /** A failed angle: a fixed miss (rad), not a share of the turn (the
-       * turn only makes it likelier). */
-      static constexpr float ANGLE_MISS_BASE = 0.0f;
-      static constexpr float ANGLE_MISS_RANGE = 0.0f;
-      static constexpr float ANGLE_MISS_ABSOLUTE_BASE = 0.04f;
-      static constexpr float ANGLE_MISS_ABSOLUTE_RANGE = 0.2f;
-      /** A failed weight: a share of the pace he puts on it. */
-      static constexpr float WEIGHT_MISS_BASE = 0.15f;
-      static constexpr float WEIGHT_MISS_RANGE = 0.4f;
-      static constexpr float UNDER_TURN_SHARE = 0.85f;
-      /** Failed passes are more often under-hit than over-hit. */
-      static constexpr float HEAVY_SHARE = 0.4f;
-      /** A clean pass's jitter: radians, and a share of the pace. */
-      static constexpr float ANGLE_JITTER = 0.05f;
-      static constexpr float WEIGHT_JITTER = 0.04f;
-    };
-
-    /** Lofted passes and crosses, carried out by the contact model
-     * (contact plan step 3b) in place of the old sideways error and the
-     * cross's random arrival height. Skill: Passing. A share of each angle
-     * miss and jitter goes into the elevation. */
-    struct Lofted final
-    {
-      static constexpr float TURN_ANGLE = 0.3f;
-      /** A lofted ball is struck at 15-25 m/s: the reference for its power
-       * demand, so the usual long ball is not the hardest there is. */
-      static constexpr float REFERENCE_SPEED = 35.0f;
-      static constexpr float SKILL_REDUCTION = 0.8f;
-      static constexpr float ANGLE_FAIL_BASE = 0.05f;
-      static constexpr float ANGLE_FAIL_RANGE = 0.5f;
-      static constexpr float WEIGHT_FAIL_BASE = 0.05f;
-      static constexpr float WEIGHT_FAIL_RANGE = 0.5f;
-      static constexpr float ANGLE_MISS_BASE = 0.0f;
-      static constexpr float ANGLE_MISS_RANGE = 0.0f;
-      static constexpr float ANGLE_MISS_ABSOLUTE_BASE = 0.04f;
-      static constexpr float ANGLE_MISS_ABSOLUTE_RANGE = 0.15f;
-      /** A failed weight: a share of the pace, smaller than a ground
-       * pass's (the pace is two or three times as much). */
-      static constexpr float WEIGHT_MISS_BASE = 0.05f;
-      static constexpr float WEIGHT_MISS_RANGE = 0.15f;
-      static constexpr float UNDER_TURN_SHARE = 0.85f;
-      static constexpr float HEAVY_SHARE = 0.5f;
-      static constexpr float ANGLE_JITTER = 0.04f;
-      static constexpr float WEIGHT_JITTER = 0.03f;
-      /** The share of an angle miss that goes into the elevation, and of
-       * those the share that go up: a long ball as often high as low, a
-       * cross more often over everyone. */
-      static constexpr float VERTICAL_SHARE = 0.4f;
-      static constexpr float UP_SHARE = 0.5f;
-      static constexpr float CROSS_VERTICAL_SHARE = 0.5f;
-      static constexpr float CROSS_UP_SHARE = 0.65f;
-    };
-  };
-
-  /**
    * Dribbling: a carrier on the move pushes the ball 0.6-3 m ahead and
    * catches it up at the next touch, so the ball is exposed between touches
    * and a heavy touch can lose it. Defenders jockey goal-side and time their
@@ -861,6 +771,189 @@ struct MatchTuning final
     static constexpr float MIN_GOAL_PROBABILITY = 0.01f;
     static constexpr float MIN_ACTION_COOLDOWN = 1.5f;
     static constexpr float MAX_ACTION_COOLDOWN = 2.5f;
+  };
+
+  /**
+   * Strikes carried out by the contact model (Binturong body; Notes and
+   * plans/match_engine_contact_plan.md, step 3): each kind's profile, the
+   * defaults of the strike knobs (match_strike_knobs.h). The condition
+   * levels are on the touch's scale; each condition adds its level to both
+   * jobs. Not tuned: ground and lofted passes and crosses are first
+   * guesses; shots and headers start from the old spread's size (§13).
+   */
+  struct Strike final
+  {
+    static constexpr float LOW = 0.05f;
+    static constexpr float MEDIUM = 0.10f;
+    static constexpr float HIGH = 0.20f;
+    static constexpr float VERY_HIGH = 0.30f;
+
+    /** What every kind shares unless it says otherwise. */
+    struct Profile
+    {
+      /** The jobs' sizes: power demand (the pace change against the
+       * reference speed) and the turn off the ball's line. */
+      static constexpr float PACE_CHANGE = 0.2f;
+      static constexpr float REFERENCE_SPEED = 25.0f;
+      static constexpr float TURN_ANGLE = 0.3f;
+      /** The turn counts in full when the ball comes at this pace (m/s),
+       * in proportion below it: a ball barely rolling has no line worth
+       * the name. */
+      static constexpr float TURN_PACE_REFERENCE = 10.0f;
+      // The conditions' levels (both jobs).
+      static constexpr float INCOMING_PACE = MEDIUM;
+      static constexpr float OWN_SPEED = MEDIUM;
+      static constexpr float STRETCH = HIGH;
+      static constexpr float WEAKER_FOOT = HIGH;
+      static constexpr float OFF_GROUND = HIGH;
+      static constexpr float PRESSURE = MEDIUM;
+      static constexpr float PRESSURE_RADIUS_METRES =
+          Passing::PASS_PRESSURE_RADIUS_METRES;
+      // Technique: how often each job goes wrong, and how badly.
+      static constexpr float SKILL_REDUCTION = 0.8f;
+      static constexpr float ANGLE_FAIL_BASE = 0.05f;
+      static constexpr float ANGLE_FAIL_RANGE = 0.5f;
+      static constexpr float WEIGHT_FAIL_BASE = 0.05f;
+      static constexpr float WEIGHT_FAIL_RANGE = 0.5f;
+      /** A failed angle: a fixed miss (rad), not a share of the turn (the
+       * turn only makes it likelier). */
+      static constexpr float ANGLE_MISS_BASE = 0.0f;
+      static constexpr float ANGLE_MISS_RANGE = 0.0f;
+      static constexpr float ANGLE_MISS_ABSOLUTE_BASE = 0.04f;
+      static constexpr float ANGLE_MISS_ABSOLUTE_RANGE = 0.2f;
+      /** A failed weight: a share of the pace he puts on it. */
+      static constexpr float WEIGHT_MISS_BASE = 0.15f;
+      static constexpr float WEIGHT_MISS_RANGE = 0.4f;
+      static constexpr float UNDER_TURN_SHARE = 0.85f;
+      static constexpr float HEAVY_SHARE = 0.4f;
+      /** A clean strike's jitter: radians, and a share of the pace. */
+      static constexpr float ANGLE_JITTER = 0.05f;
+      static constexpr float WEIGHT_JITTER = 0.04f;
+      /** The share of an angle miss and jitter that goes into the
+       * elevation (0: along the ground), and of those the share up. */
+      static constexpr float VERTICAL_SHARE = 0.0f;
+      static constexpr float UP_SHARE = 0.5f;
+    };
+
+    /** Ground passes (step 3a). Skill: Passing. Failed passes are more
+     * often under-hit than over-hit. */
+    struct GroundPass final : Profile
+    {
+      static constexpr float OWN_SPEED = LOW;
+      static constexpr float STRETCH = MEDIUM;
+      static constexpr float WEAKER_FOOT = MEDIUM;
+    };
+
+    /** Lofted passes (step 3b). Skill: Passing. Struck at 15-25 m/s: the
+     * reference for their power demand, so the usual long ball is not the
+     * hardest there is. A failed weight misses by a smaller share (the
+     * pace is two or three times a ground pass's). A long ball as often
+     * high as low. */
+    struct Lofted : Profile
+    {
+      static constexpr float PACE_CHANGE = 0.6f;
+      static constexpr float REFERENCE_SPEED = 35.0f;
+      static constexpr float ANGLE_MISS_ABSOLUTE_RANGE = 0.15f;
+      static constexpr float WEIGHT_MISS_BASE = 0.05f;
+      static constexpr float WEIGHT_MISS_RANGE = 0.15f;
+      static constexpr float HEAVY_SHARE = 0.5f;
+      static constexpr float ANGLE_JITTER = 0.04f;
+      static constexpr float WEIGHT_JITTER = 0.03f;
+      static constexpr float VERTICAL_SHARE = 0.4f;
+      static constexpr float UP_SHARE = 0.5f;
+    };
+
+    /** Crosses (step 3b): a lofted ball, more often over everyone. */
+    struct Cross final : Lofted
+    {
+      static constexpr float VERTICAL_SHARE = 0.5f;
+      static constexpr float UP_SHARE = 0.65f;
+    };
+
+    /** Shots (step 3c). Skill: Shooting. The jitter starts at the old
+     * spread's size: about 0.27 rad sideways (3.45 + 2.4 x (1 - Shooting)
+     * m at 16 m), cut by Shooting as gently (0.41), with 0.6 of it
+     * vertical. On top, failures grow with the conditions: usually skied,
+     * a failed weight scuffed. */
+    struct Shot : Profile
+    {
+      static constexpr float PACE_CHANGE = 0.6f;
+      static constexpr float REFERENCE_SPEED = 40.0f;
+      static constexpr float TURN_ANGLE = 0.6f;
+      static constexpr float INCOMING_PACE = HIGH;
+      static constexpr float OFF_GROUND = VERY_HIGH;
+      static constexpr float PRESSURE = HIGH;
+      static constexpr float PRESSURE_RADIUS_METRES =
+          Shooting::PRESSURE_RADIUS_METRES;
+      static constexpr float SKILL_REDUCTION = 0.41f;
+      static constexpr float ANGLE_FAIL_BASE = 0.0f;
+      static constexpr float ANGLE_FAIL_RANGE = 0.4f;
+      static constexpr float WEIGHT_FAIL_BASE = 0.0f;
+      static constexpr float WEIGHT_FAIL_RANGE = 0.4f;
+      static constexpr float ANGLE_MISS_ABSOLUTE_BASE = 0.05f;
+      static constexpr float ANGLE_MISS_ABSOLUTE_RANGE = 0.3f;
+      static constexpr float WEIGHT_MISS_BASE = 0.1f;
+      static constexpr float WEIGHT_MISS_RANGE = 0.3f;
+      static constexpr float HEAVY_SHARE = 0.3f;
+      static constexpr float ANGLE_JITTER = 0.586f;
+      static constexpr float WEIGHT_JITTER = 0.05f;
+      static constexpr float VERTICAL_SHARE = 0.375f;
+      static constexpr float UP_SHARE = 0.7f;
+      /** The pace he means: the old shot's mean of its 0.88-1 variation
+       * (the weight jitter is the variation now). */
+      static constexpr float MEAN_SPEED_SHARE = 0.94f;
+    };
+
+    /** Headers (step 3c): shots, clearances and knock-downs. Skill:
+     * Shooting 70%, Physicality 30%. A header is off the ground and off
+     * no foot by nature; the ball comes in fast. The old header shot had
+     * the shot's spread. */
+    struct Header final : Shot
+    {
+      static constexpr float PACE_CHANGE = 0.4f;
+      static constexpr float REFERENCE_SPEED = 25.0f;
+      static constexpr float WEAKER_FOOT = 0.0f;
+      static constexpr float OFF_GROUND = 0.0f;
+    };
+
+    /** Clearances (step 3c): precision barely matters, height and distance
+     * do. Skill: Defending. */
+    struct Clearance final : Profile
+    {
+      static constexpr float PACE_CHANGE = 0.3f;
+      static constexpr float REFERENCE_SPEED = 35.0f;
+      static constexpr float WEAKER_FOOT = MEDIUM;
+      static constexpr float OFF_GROUND = MEDIUM;
+      static constexpr float SKILL_REDUCTION = 0.6f;
+      static constexpr float ANGLE_MISS_ABSOLUTE_BASE = 0.1f;
+      static constexpr float ANGLE_MISS_ABSOLUTE_RANGE = 0.3f;
+      static constexpr float WEIGHT_MISS_BASE = 0.1f;
+      static constexpr float WEIGHT_MISS_RANGE = 0.3f;
+      static constexpr float HEAVY_SHARE = 0.3f;
+      static constexpr float ANGLE_JITTER = 0.15f;
+      static constexpr float WEIGHT_JITTER = 0.08f;
+      static constexpr float VERTICAL_SHARE = 0.4f;
+      static constexpr float UP_SHARE = 0.6f;
+    };
+
+    /** Throws (step 3c): throw-ins, and a keeper's ball rolled or thrown
+     * from his hands. Skill: Passing. Two hands and a still ball: no
+     * stretch, weaker foot or ball off the ground. */
+    struct Throw final : Profile
+    {
+      static constexpr float INCOMING_PACE = 0.0f;
+      static constexpr float STRETCH = 0.0f;
+      static constexpr float WEAKER_FOOT = 0.0f;
+      static constexpr float OFF_GROUND = 0.0f;
+      static constexpr float ANGLE_FAIL_BASE = 0.03f;
+      static constexpr float ANGLE_FAIL_RANGE = 0.4f;
+      static constexpr float ANGLE_MISS_ABSOLUTE_RANGE = 0.15f;
+      static constexpr float WEIGHT_MISS_BASE = 0.1f;
+      static constexpr float WEIGHT_MISS_RANGE = 0.3f;
+      static constexpr float HEAVY_SHARE = 0.5f;
+      static constexpr float ANGLE_JITTER = 0.04f;
+      static constexpr float VERTICAL_SHARE = 0.3f;
+    };
   };
 
   struct Defending final

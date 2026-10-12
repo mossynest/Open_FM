@@ -16,7 +16,8 @@
 // <name>", e.g. "Ground pass: Angle fail base".
 //
 // To add a knob: an id in StrikeKnob (before COUNT), a row in STRIKE_KNOBS
-// in the same place, its default in strikeKnobDefault, then read it in
+// in the same place, its default in strikeProfileDefault (and every
+// kind's profile in MatchTuning::Strike), then read it in
 // strikeProfileBinturong.
 
 #include <array>
@@ -29,17 +30,24 @@
 #include "model/match_tuning.h"
 #include "model/tactics.h"
 
-/** The kinds of strike the contact model reads (contact plan §3). */
+/** The kinds of strike the contact model carries out (contact plan §3). */
 enum class StrikeKind : std::uint8_t
 {
   GROUND_PASS,
   LOFTED_PASS,
   CROSS,
   SHOT,
+  /** Shots, clearances and knock-downs with the head. */
+  HEADER,
+  /** A clearance with the foot, or putting it behind. */
+  CLEARANCE,
+  /** Throw-ins, and a keeper rolling or throwing it from his hands. */
+  THROW,
 };
-inline constexpr std::size_t STRIKE_KIND_COUNT = 4;
+inline constexpr std::size_t STRIKE_KIND_COUNT = 7;
 inline constexpr std::array<std::string_view, STRIKE_KIND_COUNT>
-    STRIKE_KIND_NAMES = {"Ground pass", "Lofted pass", "Cross", "Shot"};
+    STRIKE_KIND_NAMES = {"Ground pass", "Lofted pass", "Cross",    "Shot",
+                         "Header",      "Clearance",   "Throw"};
 
 enum class StrikeKnob : std::uint8_t
 {
@@ -135,7 +143,7 @@ inline constexpr std::array<StrikeKnobInfo, STRIKE_KNOB_COUNT> STRIKE_KNOBS{{
     {"Weight miss range", "Technique", 0.0f, 1.0f, "share"},
     {"Under-turn share", "Technique", 0.0f, 1.0f, "share"},
     {"Heavy share", "Technique", 0.0f, 1.0f, "share"},
-    {"Angle jitter", "Technique", 0.0f, 0.2f, "rad"},
+    {"Angle jitter", "Technique", 0.0f, 1.0f, "rad"},
     {"Weight jitter", "Technique", 0.0f, 0.2f, "share"},
     {"Vertical share", "Technique", 0.0f, 1.0f, "share"},
     {"Up share", "Technique", 0.0f, 1.0f, "share"},
@@ -146,103 +154,73 @@ inline const StrikeKnobInfo& strikeKnobInfo(StrikeKnob knob)
   return STRIKE_KNOBS[static_cast<std::size_t>(knob)];
 }
 
-/**
- * A knob's default for a kind of strike. Ground passes (contact plan step
- * 3a), lofted passes and crosses (3b) are carried out; shots are
- * provisional and only measured (§11), their technique a copy of the
- * ground pass's until they are carried out. Coming from behind and across
- * his body read his facing, which follows only his movement: no weight
- * until facing has its own pass.
- */
-constexpr float strikeKnobDefault(StrikeKind kind, StrikeKnob knob)
+/** A knob's default from a kind's profile in MatchTuning::Strike. */
+template <typename P>
+constexpr float strikeProfileDefault(StrikeKnob knob)
 {
-  using S = MatchTuning::Strike;
-  using G = S::GroundPass;
-  using L = S::Lofted;
-  const bool groundPass = kind == StrikeKind::GROUND_PASS;
-  const bool shot = kind == StrikeKind::SHOT;
-  const bool lofted =
-      kind == StrikeKind::LOFTED_PASS || kind == StrikeKind::CROSS;
   switch (knob)
   {
-    case StrikeKnob::PACE_CHANGE_WEIGHT:
-      return groundPass ? S::GROUND_PASS_PACE_CHANGE
-             : shot     ? S::SHOT_PACE_CHANGE
-                        : S::LOFTED_PACE_CHANGE;
-    case StrikeKnob::TURN_ANGLE:
-      return groundPass ? G::TURN_ANGLE : lofted ? L::TURN_ANGLE : S::TURN_ANGLE;
-    case StrikeKnob::TURN_PACE_REFERENCE:
-      return S::TURN_PACE_REFERENCE;
+    case StrikeKnob::PACE_CHANGE_WEIGHT: return P::PACE_CHANGE;
+    case StrikeKnob::TURN_ANGLE: return P::TURN_ANGLE;
+    case StrikeKnob::TURN_PACE_REFERENCE: return P::TURN_PACE_REFERENCE;
     case StrikeKnob::INCOMING_PACE_ANGLE:
-    case StrikeKnob::INCOMING_PACE_WEIGHT:
-      return shot ? S::HIGH : S::MEDIUM;
+    case StrikeKnob::INCOMING_PACE_WEIGHT: return P::INCOMING_PACE;
     case StrikeKnob::OWN_SPEED_ANGLE:
-    case StrikeKnob::OWN_SPEED_WEIGHT:
-      return groundPass ? S::LOW : S::MEDIUM;
+    case StrikeKnob::OWN_SPEED_WEIGHT: return P::OWN_SPEED;
     case StrikeKnob::STRETCH_ANGLE:
-    case StrikeKnob::STRETCH_WEIGHT:
+    case StrikeKnob::STRETCH_WEIGHT: return P::STRETCH;
     case StrikeKnob::WEAK_FOOT_ANGLE:
-    case StrikeKnob::WEAK_FOOT_WEIGHT:
-      return groundPass ? S::MEDIUM : S::HIGH;
+    case StrikeKnob::WEAK_FOOT_WEIGHT: return P::WEAKER_FOOT;
     case StrikeKnob::OFF_GROUND_ANGLE:
-    case StrikeKnob::OFF_GROUND_WEIGHT:
-      return shot ? S::VERY_HIGH : S::HIGH;
+    case StrikeKnob::OFF_GROUND_WEIGHT: return P::OFF_GROUND;
     case StrikeKnob::PRESSURE_ANGLE:
-    case StrikeKnob::PRESSURE_WEIGHT:
-      return shot ? S::HIGH : S::MEDIUM;
+    case StrikeKnob::PRESSURE_WEIGHT: return P::PRESSURE;
+    // Coming from behind and across his body read his facing, which
+    // follows only his movement: no weight until facing has its own pass.
     case StrikeKnob::FROM_BEHIND_ANGLE:
     case StrikeKnob::FROM_BEHIND_WEIGHT:
     case StrikeKnob::ACROSS_BODY_ANGLE:
-    case StrikeKnob::ACROSS_BODY_WEIGHT:
-      return 0.0f;
-    case StrikeKnob::REFERENCE_SPEED:
-      return lofted ? L::REFERENCE_SPEED
-                    : MatchTuning::FirstTouch::REFERENCE_SPEED;
-    case StrikeKnob::PRESSURE_RADIUS:
-      return shot ? MatchTuning::Shooting::PRESSURE_RADIUS_METRES
-                  : MatchTuning::Passing::PASS_PRESSURE_RADIUS_METRES;
-    // Technique: lofted balls and crosses their own, the rest the ground
-    // pass's (shots are only measured so far).
-    case StrikeKnob::SKILL_REDUCTION:
-      return lofted ? L::SKILL_REDUCTION : G::SKILL_REDUCTION;
-    case StrikeKnob::ANGLE_FAIL_BASE:
-      return lofted ? L::ANGLE_FAIL_BASE : G::ANGLE_FAIL_BASE;
-    case StrikeKnob::ANGLE_FAIL_RANGE:
-      return lofted ? L::ANGLE_FAIL_RANGE : G::ANGLE_FAIL_RANGE;
-    case StrikeKnob::WEIGHT_FAIL_BASE:
-      return lofted ? L::WEIGHT_FAIL_BASE : G::WEIGHT_FAIL_BASE;
-    case StrikeKnob::WEIGHT_FAIL_RANGE:
-      return lofted ? L::WEIGHT_FAIL_RANGE : G::WEIGHT_FAIL_RANGE;
-    case StrikeKnob::ANGLE_MISS_BASE:
-      return lofted ? L::ANGLE_MISS_BASE : G::ANGLE_MISS_BASE;
-    case StrikeKnob::ANGLE_MISS_RANGE:
-      return lofted ? L::ANGLE_MISS_RANGE : G::ANGLE_MISS_RANGE;
+    case StrikeKnob::ACROSS_BODY_WEIGHT: return 0.0f;
+    case StrikeKnob::REFERENCE_SPEED: return P::REFERENCE_SPEED;
+    case StrikeKnob::PRESSURE_RADIUS: return P::PRESSURE_RADIUS_METRES;
+    case StrikeKnob::SKILL_REDUCTION: return P::SKILL_REDUCTION;
+    case StrikeKnob::ANGLE_FAIL_BASE: return P::ANGLE_FAIL_BASE;
+    case StrikeKnob::ANGLE_FAIL_RANGE: return P::ANGLE_FAIL_RANGE;
+    case StrikeKnob::WEIGHT_FAIL_BASE: return P::WEIGHT_FAIL_BASE;
+    case StrikeKnob::WEIGHT_FAIL_RANGE: return P::WEIGHT_FAIL_RANGE;
+    case StrikeKnob::ANGLE_MISS_BASE: return P::ANGLE_MISS_BASE;
+    case StrikeKnob::ANGLE_MISS_RANGE: return P::ANGLE_MISS_RANGE;
     case StrikeKnob::ANGLE_MISS_ABSOLUTE_BASE:
-      return lofted ? L::ANGLE_MISS_ABSOLUTE_BASE : G::ANGLE_MISS_ABSOLUTE_BASE;
+      return P::ANGLE_MISS_ABSOLUTE_BASE;
     case StrikeKnob::ANGLE_MISS_ABSOLUTE_RANGE:
-      return lofted ? L::ANGLE_MISS_ABSOLUTE_RANGE
-                    : G::ANGLE_MISS_ABSOLUTE_RANGE;
-    case StrikeKnob::WEIGHT_MISS_BASE:
-      return lofted ? L::WEIGHT_MISS_BASE : G::WEIGHT_MISS_BASE;
-    case StrikeKnob::WEIGHT_MISS_RANGE:
-      return lofted ? L::WEIGHT_MISS_RANGE : G::WEIGHT_MISS_RANGE;
-    case StrikeKnob::UNDER_TURN_SHARE:
-      return lofted ? L::UNDER_TURN_SHARE : G::UNDER_TURN_SHARE;
-    case StrikeKnob::HEAVY_SHARE:
-      return lofted ? L::HEAVY_SHARE : G::HEAVY_SHARE;
-    case StrikeKnob::ANGLE_JITTER:
-      return lofted ? L::ANGLE_JITTER : G::ANGLE_JITTER;
-    case StrikeKnob::WEIGHT_JITTER:
-      return lofted ? L::WEIGHT_JITTER : G::WEIGHT_JITTER;
-    case StrikeKnob::VERTICAL_SHARE:
-      return kind == StrikeKind::CROSS         ? L::CROSS_VERTICAL_SHARE
-             : kind == StrikeKind::LOFTED_PASS ? L::VERTICAL_SHARE
-                                               : 0.0f;
-    case StrikeKnob::UP_SHARE:
-      return kind == StrikeKind::CROSS         ? L::CROSS_UP_SHARE
-             : kind == StrikeKind::LOFTED_PASS ? L::UP_SHARE
-                                               : 0.5f;
+      return P::ANGLE_MISS_ABSOLUTE_RANGE;
+    case StrikeKnob::WEIGHT_MISS_BASE: return P::WEIGHT_MISS_BASE;
+    case StrikeKnob::WEIGHT_MISS_RANGE: return P::WEIGHT_MISS_RANGE;
+    case StrikeKnob::UNDER_TURN_SHARE: return P::UNDER_TURN_SHARE;
+    case StrikeKnob::HEAVY_SHARE: return P::HEAVY_SHARE;
+    case StrikeKnob::ANGLE_JITTER: return P::ANGLE_JITTER;
+    case StrikeKnob::WEIGHT_JITTER: return P::WEIGHT_JITTER;
+    case StrikeKnob::VERTICAL_SHARE: return P::VERTICAL_SHARE;
+    case StrikeKnob::UP_SHARE: return P::UP_SHARE;
     case StrikeKnob::COUNT: break;
+  }
+  return 0.0f;
+}
+
+/** A knob's default for a kind of strike (none of them tuned yet). */
+constexpr float strikeKnobDefault(StrikeKind kind, StrikeKnob knob)
+{
+  using S = MatchTuning::Strike;
+  switch (kind)
+  {
+    case StrikeKind::GROUND_PASS:
+      return strikeProfileDefault<S::GroundPass>(knob);
+    case StrikeKind::LOFTED_PASS: return strikeProfileDefault<S::Lofted>(knob);
+    case StrikeKind::CROSS: return strikeProfileDefault<S::Cross>(knob);
+    case StrikeKind::SHOT: return strikeProfileDefault<S::Shot>(knob);
+    case StrikeKind::HEADER: return strikeProfileDefault<S::Header>(knob);
+    case StrikeKind::CLEARANCE: return strikeProfileDefault<S::Clearance>(knob);
+    case StrikeKind::THROW: return strikeProfileDefault<S::Throw>(knob);
   }
   return 0.0f;
 }

@@ -2065,15 +2065,20 @@ class MatchEngine
     SHOT
   };
   float recoverySeconds(const MatchPlayer& player, Recovery after);
-  /** A shot's execution error (metres, one standard deviation). */
+  /** A shot's execution error: metres, one standard deviation (Aardvark);
+   * a multiplier on the shot contact's angle error (Binturong). */
   float shotSpread(const MatchPlayer& shooter, bool header, bool penalty,
                    bool freeKick, float metres) const;
-  /** Where a shot crosses the goal line (metres) and how hard it is hit. */
+  /** Where a shot crosses the goal line (metres) and how hard it is hit;
+   * with `launchSet`, the upward launch speed too (else it is solved to
+   * cross at that height). */
   struct ShotStrike
   {
     float crossingY = 0.0f;
     float crossingZ = 0.0f;
     float speed = 0.0f;
+    float verticalSpeed = 0.0f;
+    bool launchSet = false;
   };
   /** @param powerScale Play mode's power (1 for the AI). */
   ShotStrike strikeShotBody(const MatchPlayer& shooter, float aimY, float aimZ,
@@ -2185,7 +2190,9 @@ class MatchEngine
   /** A defender's touch in front of his own goal that now and then goes
    * toward it instead (true when it did). */
   bool tryOwnGoalTouch(MatchPlayer& defender);
-  void clearBehind(MatchPlayer& defender);
+  /** Puts the ball over his own goal line, wide of the posts (`headed`:
+   * with his head). */
+  void clearBehind(MatchPlayer& defender, bool headed = false);
   void clearBall(MatchPlayer& defender);
   void parryShot(MatchPlayer& goalkeeper, bool overTheBar);
   /**
@@ -2391,6 +2398,11 @@ class MatchEngine
   /** Where his strike starts: the ball where it lies for a Binturong body,
    * his centre for the Aardvark body. */
   Vector2F strikePoint(const MatchPlayer& striker) const;
+  /** A strike towards `target` at `speed` over the ground and `lift`
+   * upward: carried out by the contact model as `kind` for a Binturong
+   * body (where it really goes), as asked for the Aardvark body. */
+  Kick strikeAs(const MatchPlayer& striker, StrikeKind kind, Vector2F target,
+                float speed, float lift);
   /** The touch when no brain chooses one: set it just ahead of him, toward
    * the goal he attacks. */
   TouchIntent defaultTouchIntent(const MatchPlayer& player) const;
