@@ -50,11 +50,12 @@
   /** A strike's contact profile (provisional, contact plan §3). */
   ContactProfile strikeProfileBinturong(StrikeKind kind) const;
   /** A strike as a contact where the ball lies: `aim` metric unit,
-   * `intendedSpeed` m/s. No random draws. */
+   * `intendedSpeed` m/s (in three dimensions), `elevation` radians above
+   * the ground. No random draws. */
   ContactAssessment assessStrikeBinturong(const MatchPlayer& striker,
                                           const ContactProfile& profile,
-                                          Vector2F aim,
-                                          float intendedSpeed) const;
+                                          Vector2F aim, float intendedSpeed,
+                                          float elevation = 0.0f) const;
   /** Tallies an open-play strike and sends its debugger detail; `outcome`
    * when it was carried out (with `skill`), null when only measured. */
   void recordStrikeBinturong(const MatchPlayer& striker, StrikeKind kind,

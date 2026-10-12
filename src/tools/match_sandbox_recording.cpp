@@ -78,7 +78,8 @@ json toJson(const MatchCommandRecord& command)
                                     : json(nullptr)},
           {"urgent", command.urgent},
           {"feed_velocity", json{command.feedVelocity.x, command.feedVelocity.y}},
-          {"feed_lift", command.feedLift}};
+          {"feed_lift", command.feedLift},
+          {"pass_style", static_cast<int>(command.passStyle)}};
 }
 
 MatchCommandRecord commandFromJson(const json& value)
@@ -105,6 +106,8 @@ MatchCommandRecord commandFromJson(const json& value)
   if (const auto feed = value.find("feed_velocity"); feed != value.end())
     command.feedVelocity = {feed->at(0).get<float>(), feed->at(1).get<float>()};
   command.feedLift = value.value("feed_lift", 0.0f);
+  command.passStyle =
+      static_cast<ForcedPassStyle>(value.value("pass_style", 0));
   return command;
 }
 

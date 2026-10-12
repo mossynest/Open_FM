@@ -373,6 +373,8 @@ MatchSample simulateMatch(const MatchJob& job, const StatsConfig& config)
   engine.setBrain(false, job.away.brain);
   engine.setBody(true, job.home.body);
   engine.setBody(false, job.away.body);
+  engine.setFirstTouchKnobs(job.touchKnobs);
+  engine.setStrikeKnobs(job.strikeKnobs);
   MatchdaySquad::carryCondition(engine, home);
   MatchdaySquad::carryCondition(engine, away);
   runToFullTime(engine, job.seed, job.background);
@@ -994,6 +996,7 @@ std::vector<TextTable> matchTables(std::span<const MatchSample> samples)
       to.weightFailed += from.weightFailed;
       to.angleErrorSum += from.angleErrorSum;
       to.weightErrorSum += from.weightErrorSum;
+      to.elevationErrorSum += from.elevationErrorSum;
       to.angleDifficulty += from.angleDifficulty;
       to.weightDifficulty += from.weightDifficulty;
       for (std::size_t index = 0; index < CONTACT_FACTOR_COUNT; ++index)
@@ -1045,6 +1048,13 @@ std::vector<TextTable> matchTables(std::span<const MatchSample> samples)
                return std::format("{:.2f}", kind.angleErrorSum /
                                                 kind.carriedOut * 180.0 /
                                                 std::numbers::pi);
+             });
+  carriedRow("Mean elevation error (deg, + higher)",
+             [](const StrikeContactStats::ByKind& kind)
+             {
+               return std::format("{:+.2f}", kind.elevationErrorSum /
+                                                 kind.carriedOut * 180.0 /
+                                                 std::numbers::pi);
              });
   carriedRow("Mean weight error (m/s, + harder)",
              [](const StrikeContactStats::ByKind& kind)

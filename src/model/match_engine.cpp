@@ -438,6 +438,12 @@ bool MatchEngine::executeCommand(const MatchCommandRecord& command)
       forcedShooter = command.player;
       ++inputRevision;
       return true;
+    case MatchCommandType::FORCE_PASS:
+      if (!drillPlayer(command.player) || !drillPlayer(command.incoming))
+        return false;
+      forcedPass = {command.player, command.incoming, command.passStyle};
+      ++inputRevision;
+      return true;
     case MatchCommandType::KEEP_BALL:
       if (!drillPlayer(command.player)) return false;
       std::erase(ballKeepers, command.player);
@@ -2868,6 +2874,20 @@ void MatchEngine::resolvePossessionAndActions(float dt)
       // A drill's forced shot: the AI's own shot, from where he stands.
       forcedShooter = 0;
       takeShot(*carrier);
+    }
+    else if (forcedPass.passer != 0 && carrier->player &&
+             carrier->player->getId() == forcedPass.passer)
+    {
+      // A drill's forced pass: the AI's own pass to the team-mate named.
+      const ForcedPass pass = forcedPass;
+      forcedPass = {};
+      if (MatchPlayer* receiver = drillPlayer(pass.receiver);
+          receiver && active(*receiver))
+      {
+        PassOption option = evaluatePassOption(*carrier, *receiver);
+        if (pass.style == ForcedPassStyle::GROUND) option.lofted = false;
+        passBall(*carrier, option, pass.style == ForcedPassStyle::LOFTED);
+      }
     }
     else
     {
@@ -6695,6 +6715,17 @@ void MatchEngine::forceShot(PlayerID playerId)
   MatchCommandRecord command;
   command.type = MatchCommandType::FORCE_SHOT;
   command.player = playerId;
+  recordCommand(command);
+}
+
+void MatchEngine::forcePass(PlayerID playerId, PlayerID receiverId,
+                            ForcedPassStyle style)
+{
+  MatchCommandRecord command;
+  command.type = MatchCommandType::FORCE_PASS;
+  command.player = playerId;
+  command.incoming = receiverId;
+  command.passStyle = style;
   recordCommand(command);
 }
 

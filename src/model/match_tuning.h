@@ -377,6 +377,10 @@ struct MatchTuning final
     static constexpr float LOFTED_PACE_CHANGE = 0.6f;
     static constexpr float SHOT_PACE_CHANGE = 0.6f;
     static constexpr float TURN_ANGLE = 0.6f;
+    /** A strike's turn off the ball's line counts in full when the ball
+     * comes at this pace (m/s), in proportion below it: a ball barely
+     * rolling has no line worth the name. */
+    static constexpr float TURN_PACE_REFERENCE = 10.0f;
 
     /** Ground passes, carried out by the contact model (contact plan step
      * 3) in place of the old sideways error. Skill: Passing. */
@@ -390,9 +394,10 @@ struct MatchTuning final
       static constexpr float ANGLE_FAIL_RANGE = 0.5f;
       static constexpr float WEIGHT_FAIL_BASE = 0.05f;
       static constexpr float WEIGHT_FAIL_RANGE = 0.5f;
-      /** A failed angle: a share of the turn, plus a fixed miss (rad). */
-      static constexpr float ANGLE_MISS_BASE = 0.1f;
-      static constexpr float ANGLE_MISS_RANGE = 0.3f;
+      /** A failed angle: a fixed miss (rad), not a share of the turn (the
+       * turn only makes it likelier). */
+      static constexpr float ANGLE_MISS_BASE = 0.0f;
+      static constexpr float ANGLE_MISS_RANGE = 0.0f;
       static constexpr float ANGLE_MISS_ABSOLUTE_BASE = 0.04f;
       static constexpr float ANGLE_MISS_ABSOLUTE_RANGE = 0.2f;
       /** A failed weight: a share of the pace he puts on it. */
@@ -404,6 +409,42 @@ struct MatchTuning final
       /** A clean pass's jitter: radians, and a share of the pace. */
       static constexpr float ANGLE_JITTER = 0.05f;
       static constexpr float WEIGHT_JITTER = 0.04f;
+    };
+
+    /** Lofted passes and crosses, carried out by the contact model
+     * (contact plan step 3b) in place of the old sideways error and the
+     * cross's random arrival height. Skill: Passing. A share of each angle
+     * miss and jitter goes into the elevation. */
+    struct Lofted final
+    {
+      static constexpr float TURN_ANGLE = 0.3f;
+      /** A lofted ball is struck at 15-25 m/s: the reference for its power
+       * demand, so the usual long ball is not the hardest there is. */
+      static constexpr float REFERENCE_SPEED = 35.0f;
+      static constexpr float SKILL_REDUCTION = 0.8f;
+      static constexpr float ANGLE_FAIL_BASE = 0.05f;
+      static constexpr float ANGLE_FAIL_RANGE = 0.5f;
+      static constexpr float WEIGHT_FAIL_BASE = 0.05f;
+      static constexpr float WEIGHT_FAIL_RANGE = 0.5f;
+      static constexpr float ANGLE_MISS_BASE = 0.0f;
+      static constexpr float ANGLE_MISS_RANGE = 0.0f;
+      static constexpr float ANGLE_MISS_ABSOLUTE_BASE = 0.04f;
+      static constexpr float ANGLE_MISS_ABSOLUTE_RANGE = 0.15f;
+      /** A failed weight: a share of the pace, smaller than a ground
+       * pass's (the pace is two or three times as much). */
+      static constexpr float WEIGHT_MISS_BASE = 0.05f;
+      static constexpr float WEIGHT_MISS_RANGE = 0.15f;
+      static constexpr float UNDER_TURN_SHARE = 0.85f;
+      static constexpr float HEAVY_SHARE = 0.5f;
+      static constexpr float ANGLE_JITTER = 0.04f;
+      static constexpr float WEIGHT_JITTER = 0.03f;
+      /** The share of an angle miss that goes into the elevation, and of
+       * those the share that go up: a long ball as often high as low, a
+       * cross more often over everyone. */
+      static constexpr float VERTICAL_SHARE = 0.4f;
+      static constexpr float UP_SHARE = 0.5f;
+      static constexpr float CROSS_VERTICAL_SHARE = 0.5f;
+      static constexpr float CROSS_UP_SHARE = 0.65f;
     };
   };
 

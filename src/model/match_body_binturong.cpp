@@ -741,60 +741,56 @@ ContactProfile MatchEngine::touchProfileBinturong() const
 
 ContactProfile MatchEngine::strikeProfileBinturong(StrikeKind kind) const
 {
-  // Contact plan §3. Lofted balls and shots are still only measured, with
-  // provisional weights; ground passes are carried out (step 3).
-  using S = MatchTuning::Strike;
-  const auto both = [](float level) { return ContactProfile::Weights{level, level}; };
-  const bool groundPass = kind == StrikeKind::GROUND_PASS;
-  const bool shot = kind == StrikeKind::SHOT;
+  // Contact plan §3, from the strike knobs (match_strike_knobs.h): ground
+  // passes are carried out; lofted balls and shots are still only
+  // measured, with provisional weights.
+  using K = StrikeKnob;
+  const auto knob = [&](StrikeKnob id) { return strikeKnobs.at(kind, id); };
+  const auto weights = [&](StrikeKnob angle, StrikeKnob weight)
+  { return ContactProfile::Weights{knob(angle), knob(weight)}; };
   ContactProfile profile;
-  profile.paceChangeWeight = groundPass ? S::GROUND_PASS_PACE_CHANGE
-                             : shot     ? S::SHOT_PACE_CHANGE
-                                        : S::LOFTED_PACE_CHANGE;
-  profile.turnAngle = groundPass ? S::GroundPass::TURN_ANGLE : S::TURN_ANGLE;
-  profile.incomingPace = both(shot ? S::HIGH : S::MEDIUM);
-  profile.ownSpeed = both(groundPass ? S::LOW : S::MEDIUM);
-  profile.stretch = both(groundPass ? S::MEDIUM : S::HIGH);
-  profile.weakerFoot = both(groundPass ? S::MEDIUM : S::HIGH);
-  profile.offGround = both(shot ? S::VERY_HIGH : S::HIGH);
-  profile.pressure = both(shot ? S::HIGH : S::MEDIUM);
-  // Coming from behind and across his body read his facing, which follows
-  // only his movement: no weight until facing has its own pass.
-  // The touch's measures, but pressure over the passer's or shooter's own
-  // radius (as their old execution errors read it).
-  profile.referenceSpeed = touchKnobs[TouchKnob::REFERENCE_SPEED];
+  profile.paceChangeWeight = knob(K::PACE_CHANGE_WEIGHT);
+  profile.turnAngle = knob(K::TURN_ANGLE);
+  profile.turnPaceReference = knob(K::TURN_PACE_REFERENCE);
+  profile.incomingPace =
+      weights(K::INCOMING_PACE_ANGLE, K::INCOMING_PACE_WEIGHT);
+  profile.ownSpeed = weights(K::OWN_SPEED_ANGLE, K::OWN_SPEED_WEIGHT);
+  profile.stretch = weights(K::STRETCH_ANGLE, K::STRETCH_WEIGHT);
+  profile.weakerFoot = weights(K::WEAK_FOOT_ANGLE, K::WEAK_FOOT_WEIGHT);
+  profile.offGround = weights(K::OFF_GROUND_ANGLE, K::OFF_GROUND_WEIGHT);
+  profile.pressure = weights(K::PRESSURE_ANGLE, K::PRESSURE_WEIGHT);
+  profile.fromBehind = weights(K::FROM_BEHIND_ANGLE, K::FROM_BEHIND_WEIGHT);
+  profile.acrossBody = weights(K::ACROSS_BODY_ANGLE, K::ACROSS_BODY_WEIGHT);
+  profile.referenceSpeed = knob(K::REFERENCE_SPEED);
+  profile.pressureRadius = knob(K::PRESSURE_RADIUS);
+  // Where in his reach he meets it is measured as for the touch.
   profile.comfortGap = touchKnobs[TouchKnob::COMFORT_GAP];
-  profile.pressureRadius =
-      shot ? MatchTuning::Shooting::PRESSURE_RADIUS_METRES
-           : MatchTuning::Passing::PASS_PRESSURE_RADIUS_METRES;
   // Tiredness and being shown onto the weaker foot, as for every strike.
   profile.fatigueErrorGain = MatchTuning::Fatigue::TECHNIQUE_ERROR_GAIN;
   profile.shownWeakFootGain = TacticsTuning::WEAK_FOOT_ERROR_GAIN;
-  if (groundPass)
-  {
-    using G = S::GroundPass;
-    profile.skillReduction = G::SKILL_REDUCTION;
-    profile.angleFailBase = G::ANGLE_FAIL_BASE;
-    profile.angleFailRange = G::ANGLE_FAIL_RANGE;
-    profile.weightFailBase = G::WEIGHT_FAIL_BASE;
-    profile.weightFailRange = G::WEIGHT_FAIL_RANGE;
-    profile.angleMissBase = G::ANGLE_MISS_BASE;
-    profile.angleMissRange = G::ANGLE_MISS_RANGE;
-    profile.angleMissAbsoluteBase = G::ANGLE_MISS_ABSOLUTE_BASE;
-    profile.angleMissAbsoluteRange = G::ANGLE_MISS_ABSOLUTE_RANGE;
-    profile.weightMissBase = G::WEIGHT_MISS_BASE;
-    profile.weightMissRange = G::WEIGHT_MISS_RANGE;
-    profile.underTurnShare = G::UNDER_TURN_SHARE;
-    profile.heavyShare = G::HEAVY_SHARE;
-    profile.angleJitter = G::ANGLE_JITTER;
-    profile.weightJitter = G::WEIGHT_JITTER;
-  }
+  profile.skillReduction = knob(K::SKILL_REDUCTION);
+  profile.angleFailBase = knob(K::ANGLE_FAIL_BASE);
+  profile.angleFailRange = knob(K::ANGLE_FAIL_RANGE);
+  profile.weightFailBase = knob(K::WEIGHT_FAIL_BASE);
+  profile.weightFailRange = knob(K::WEIGHT_FAIL_RANGE);
+  profile.angleMissBase = knob(K::ANGLE_MISS_BASE);
+  profile.angleMissRange = knob(K::ANGLE_MISS_RANGE);
+  profile.angleMissAbsoluteBase = knob(K::ANGLE_MISS_ABSOLUTE_BASE);
+  profile.angleMissAbsoluteRange = knob(K::ANGLE_MISS_ABSOLUTE_RANGE);
+  profile.weightMissBase = knob(K::WEIGHT_MISS_BASE);
+  profile.weightMissRange = knob(K::WEIGHT_MISS_RANGE);
+  profile.underTurnShare = knob(K::UNDER_TURN_SHARE);
+  profile.heavyShare = knob(K::HEAVY_SHARE);
+  profile.angleJitter = knob(K::ANGLE_JITTER);
+  profile.weightJitter = knob(K::WEIGHT_JITTER);
+  profile.verticalShare = knob(K::VERTICAL_SHARE);
+  profile.upShare = knob(K::UP_SHARE);
   return profile;
 }
 
 ContactAssessment MatchEngine::assessStrikeBinturong(
     const MatchPlayer& striker, const ContactProfile& profile, Vector2F aim,
-    float intendedSpeed) const
+    float intendedSpeed, float elevation) const
 {
   // The ball where it lies, how far from his centre against the 0.9 m in
   // which he may strike it, and its height; he chose to strike it.
@@ -803,8 +799,10 @@ ContactAssessment MatchEngine::assessStrikeBinturong(
   moment.gap = distance(striker.position, ball.position);
   moment.reach = MatchTuning::Dribble::KICK_REACH_METRES;
   moment.height = ball.z * MatchTuning::Units::BALL_Z_METRES;
-  return assessContactBinturong(striker, profile, aim, intendedSpeed, moment,
-                                true);
+  ContactAssessment contact = assessContactBinturong(
+      striker, profile, aim, intendedSpeed, moment, true);
+  contact.intendedElevation = elevation;
+  return contact;
 }
 
 void MatchEngine::recordStrikeBinturong(const MatchPlayer& striker,
@@ -834,6 +832,8 @@ void MatchEngine::recordStrikeBinturong(const MatchPlayer& striker,
       if (outcome->weightFailed) ++tally.weightFailed;
       tally.angleErrorSum += std::abs(outcome->achievedTurn - contact.turn);
       tally.weightErrorSum += outcome->actualSpeed - contact.intendedSpeed;
+      tally.elevationErrorSum +=
+          outcome->achievedElevation - contact.intendedElevation;
     }
   }
 
@@ -961,7 +961,11 @@ ContactAssessment MatchEngine::assessContactBinturong(
        clamp01(std::abs(paceChange) / profile.referenceSpeed), 0.0f,
        profile.paceChangeWeight},
       {outward ? "turning it outward" : "turning it inward",
-       TermSource::SITUATION, clamp01(std::abs(turn) / RIGHT_ANGLE),
+       TermSource::SITUATION,
+       profile.turnPaceReference > 0.0f
+           ? clamp01(std::abs(turn) / RIGHT_ANGLE) *
+                 clamp01(incomingSpeed / profile.turnPaceReference)
+           : clamp01(std::abs(turn) / RIGHT_ANGLE),
        profile.turnAngle *
            (outward ? profile.turnOutward : profile.turnInward),
        0.0f},
@@ -1102,11 +1106,35 @@ ContactOutcome MatchEngine::carryOutContactBinturong(
     }
   }
 
+  // A ball struck into the air: the profile's vertical share of the fixed
+  // miss and of the jitter goes into the elevation (up or down, the usual
+  // way up), the rest stays sideways. Only such a profile draws these, so a
+  // ground contact's draws are unchanged.
+  float elevation = contact.intendedElevation;
+  float sideways = 1.0f;
+  if (profile.verticalShare > 0.0f)
+  {
+    const float upRoll = randomFloat(0.0f, 1.0f);
+    const float jitter = (randomFloat(0.0f, 1.0f) + randomFloat(0.0f, 1.0f) +
+                          randomFloat(0.0f, 1.0f) - 1.5f) *
+                         2.0f * profile.angleJitter * scale;
+    const float share = profile.verticalShare;
+    sideways = 1.0f - share;
+    elevation += share * jitter;
+    if (angleJob.failed)
+      elevation += share * std::abs(absoluteMiss) *
+                   (upRoll < profile.upShare ? 1.0f : -1.0f);
+    elevation = std::clamp(elevation, 0.0f, 1.4f);
+  }
+
   // What he actually did. The angle: the turn, short by the miss (or past
   // it), plus the jitter in radians. The weight: heavier than meant by the
   // miss's share of the pace change (or lighter), plus the jitter's share.
-  float achievedTurn = contact.turn * (1.0f - angleJob.miss) + angleJob.jitter;
-  if (absoluteMiss != 0.0f) achievedTurn += absoluteMiss;
+  float achievedTurn =
+      sideways == 1.0f
+          ? contact.turn * (1.0f - angleJob.miss) + angleJob.jitter
+          : contact.turn * (1.0f - angleJob.miss) + angleJob.jitter * sideways;
+  if (absoluteMiss != 0.0f) achievedTurn += absoluteMiss * sideways;
   float actualSpeed =
       std::max(contact.intendedSpeed + (weightJob.miss + weightJob.jitter) *
                                            std::abs(contact.paceChange),
@@ -1124,7 +1152,19 @@ ContactOutcome MatchEngine::carryOutContactBinturong(
   const float sine = std::sin(achievedTurn);
   const Vector2F direction{contact.line.x * cosine - contact.line.y * sine,
                            contact.line.x * sine + contact.line.y * cosine};
-  outcome.velocity = {direction.x * actualSpeed, direction.y * actualSpeed};
+  if (elevation == 0.0f)
+  {
+    outcome.velocity = {direction.x * actualSpeed, direction.y * actualSpeed};
+  }
+  else
+  {
+    // The pace is the strike's, in three dimensions: split by the
+    // elevation he achieved.
+    const float along = actualSpeed * std::cos(elevation);
+    outcome.velocity = {direction.x * along, direction.y * along};
+    outcome.verticalSpeed = actualSpeed * std::sin(elevation);
+  }
+  outcome.achievedElevation = elevation;
   outcome.achievedTurn = achievedTurn;
   outcome.actualSpeed = actualSpeed;
   return outcome;
@@ -1239,7 +1279,44 @@ MatchEngine::Kick MatchEngine::kickPassBinturong(const MatchPlayer& passer,
                                 : delivery ? StrikeKind::CROSS
                                            : StrikeKind::LOFTED_PASS;
   Kick kick;
-  if (kicked && !lofted)
+  if (kicked && lofted)
+  {
+    // A lofted pass or a cross is a contact too (contact plan step 3b):
+    // launched to drop at the target, long passes at chest height to be
+    // controlled, crosses at head height to be attacked, then struck with
+    // its profile and his Passing. A share of the angle goes into the
+    // elevation, so it can be skied or kept too low.
+    const float passDistance = distance(origin, target);
+    const float arrivalMetres =
+        delivery ? MatchTuning::Aerial::ARRIVAL_HEIGHT_METRES
+                 : MatchTuning::Passing::LOFTED_ARRIVAL_HEIGHT_METRES;
+    const float along =
+        std::min(MatchTuning::Passing::LOFTED_BASE_SPEED +
+                     passDistance * MatchTuning::Passing::LOFTED_SPEED_PER_METRE,
+                 MatchTuning::Passing::MAX_LOFTED_SPEED);
+    const float up = loftVerticalSpeed(passDistance, along, 0.0f, arrivalMetres);
+    const ContactProfile profile = strikeProfileBinturong(strikeKind);
+    const ContactAssessment contact =
+        assessStrikeBinturong(passer, profile, direct, std::hypot(along, up),
+                              std::atan2(up, along));
+    const ContactOutcome outcome =
+        carryOutContactBinturong(passer, profile, contact, passer.passing);
+    recordStrikeBinturong(passer, strikeKind, contact, &outcome,
+                          passer.passing);
+    const float speed = length(outcome.velocity);
+    const Vector2F heading =
+        speed > EPSILON
+            ? Vector2F{outcome.velocity.x / speed, outcome.velocity.y / speed}
+            : direct;
+    const Vector2F reach =
+        toPitch({heading.x * passDistance, heading.y * passDistance});
+    kick.target = {std::clamp(origin.x + reach.x, 0.0f, 1.0f),
+                   std::clamp(origin.y + reach.y, 0.0f, 1.0f)};
+    kick.speed = speed;
+    kick.verticalSpeed = outcome.verticalSpeed;
+    return kick;
+  }
+  if (kicked)
   {
     // A ground pass is a contact (contact plan step 3): weighted to arrive
     // at a controllable pace (longer passes and better passers zip it in
@@ -1283,10 +1360,9 @@ MatchEngine::Kick MatchEngine::kickPassBinturong(const MatchPlayer& passer,
                   nearestOpponentDistance(passer)) /
                      MatchTuning::Passing::PASS_PRESSURE_RADIUS_METRES,
                  0.0f, 1.0f);
-  // Lofted balls (still to move to the contact model), throw-ins and a
-  // keeper's ball from his hands: a lateral execution error (metres) that
-  // grows with poor technique, pressure, distance, fatigue and away nerves.
-  // Passes back to the own keeper are played safely.
+  // Throw-ins and a keeper's ball from his hands: a lateral execution error
+  // (metres) that grows with poor technique, pressure, distance, fatigue
+  // and away nerves. Passes back to the own keeper are played safely.
   const float passDistance = distance(origin, target);
   const float care = receiver.isGoalkeeper
                          ? MatchTuning::Passing::BACK_PASS_ERROR_SCALE
@@ -1316,9 +1392,6 @@ MatchEngine::Kick MatchEngine::kickPassBinturong(const MatchPlayer& passer,
                  MatchTuning::Passing::MAX_LOFTED_SPEED);
     kick.verticalSpeed =
         loftVerticalSpeed(travel, kick.speed, 0.0f, arrivalMetres);
-    if (kicked)
-      measureStrikeBinturong(passer, strikeKind, direct,
-                             std::hypot(kick.speed, kick.verticalSpeed));
     return kick;
   }
   // Ground passes are weighted to arrive at a controllable pace; longer

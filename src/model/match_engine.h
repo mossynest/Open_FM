@@ -27,6 +27,7 @@
 #include "model/match_context.h"
 #include "model/match_derived_stats.h"
 #include "model/match_first_touch_knobs.h"
+#include "model/match_strike_knobs.h"
 #include "model/match_events.h"
 #include "model/match_rules.h"
 #include "model/match_scenario.h"
@@ -304,6 +305,9 @@ struct ContactProfile
   float turnAngle = 0.0f;
   float turnOutward = 1.0f;
   float turnInward = 1.0f;
+  /** The turn counts in full when the ball comes at this pace (m/s), in
+   * proportion below it; 0 (the touch): always in full. */
+  float turnPaceReference = 0.0f;
   Weights incomingPace;
   Weights fromBehind;
   Weights ownSpeed;
@@ -340,6 +344,11 @@ struct ContactProfile
   /** Failures that go the usual way (under-turned; heavy). */
   float underTurnShare = 1.0f;
   float heavyShare = 1.0f;
+  /** The share of an angle miss and jitter that goes into the elevation
+   * (0 for a ball played along the ground), and of those vertical misses
+   * the share that go up. */
+  float verticalShare = 0.0f;
+  float upShare = 0.5f;
   float angleJitter = 0.0f;
   float weightJitter = 0.0f;
   /** A ball sent back the way it came leaves at most this share of its
@@ -375,9 +384,11 @@ struct ContactFactor
  * difficulty. Reading it draws nothing at random. */
 struct ContactAssessment
 {
-  /** What he means to do: the direction (metric, unit) and pace (m/s). */
+  /** What he means to do: the direction (metric, unit), pace (m/s, in
+   * three dimensions) and elevation (radians above the ground). */
   Vector2F aim{0.0f, 0.0f};
   float intendedSpeed = 0.0f;
+  float intendedElevation = 0.0f;
   /** The ball's pace as it reaches him, whether it is moving, and whether
    * he sends it back the way it came. */
   float incomingSpeed = 0.0f;
@@ -395,24 +406,9 @@ struct ContactAssessment
   float weightDifficulty = 0.0f;
 };
 
-/** How a contact came off: the ball's velocity off it (m/s), each job's
- * chance of going wrong, whether it did, and the result against the
- * intent. */
-/** The kinds of strike the contact model measures (contact plan §3). */
-enum class StrikeKind : std::uint8_t
-{
-  GROUND_PASS,
-  LOFTED_PASS,
-  CROSS,
-  SHOT,
-};
-inline constexpr std::size_t STRIKE_KIND_COUNT = 4;
-inline constexpr std::array<std::string_view, STRIKE_KIND_COUNT>
-    STRIKE_KIND_NAMES = {"Ground pass", "Lofted pass", "Cross", "Shot"};
-
-/** Open-play strikes read by the contact model without changing them
- * (contact plan step 2), by kind: how many, and sums of each job's
- * difficulty and of each condition. */
+/** Open-play strikes read by the contact model (contact plan steps 2 and
+ * 3), by kind: how many, and sums of each job's difficulty and of each
+ * condition. */
 struct StrikeContactStats
 {
   struct ByKind
@@ -431,13 +427,22 @@ struct StrikeContactStats
     std::uint32_t weightFailed = 0;
     double angleErrorSum = 0.0;
     double weightErrorSum = 0.0;
+    /** Sum of the elevation error (rad, + higher than meant). */
+    double elevationErrorSum = 0.0;
   };
   std::array<ByKind, STRIKE_KIND_COUNT> byKind{};
 };
 
+/** How a contact came off: the ball's velocity off it (m/s), each job's
+ * chance of going wrong, whether it did, and the result against the
+ * intent. */
 struct ContactOutcome
 {
+  /** Along the ground (m/s), and upward (m/s; 0 off a ground contact). */
   Vector2F velocity{0.0f, 0.0f};
+  float verticalSpeed = 0.0f;
+  /** The elevation he achieved (radians). */
+  float achievedElevation = 0.0f;
   float angleFailChance = 0.0f;
   float weightFailChance = 0.0f;
   bool angleFailed = false;
@@ -655,7 +660,19 @@ enum class MatchCommandType : std::uint8_t
   FEED_BALL,
   /** Drills: the player keeps the ball, deciding nothing with it (or is
    * released to decide again). */
-  KEEP_BALL
+  KEEP_BALL,
+  /** Drills: the player passes to a team-mate as soon as he has the ball
+   * and can act. */
+  FORCE_PASS
+};
+
+/** How a drill's forced pass is played: as the AI would (ground or lofted
+ * by its length), or always along the ground, or always lofted. */
+enum class ForcedPassStyle : std::uint8_t
+{
+  AS_CHOSEN,
+  GROUND,
+  LOFTED,
 };
 
 /**
@@ -691,6 +708,8 @@ struct MatchCommandRecord
    * (m/s) and this upward speed (m/s), to `player` (0: loose). */
   Vector2F feedVelocity{0.0f, 0.0f};
   float feedLift = 0.0f;
+  /** FORCE_PASS: `player` passes to `incoming`, played this way. */
+  ForcedPassStyle passStyle = ForcedPassStyle::AS_CHOSEN;
 };
 
 /** One-shot action requested by an external controller (play mode). */
@@ -1409,6 +1428,11 @@ class MatchEngine
   /** Drills: the player shoots, through the AI's own shot, as soon as he
    * has the ball and can act. Logged and replayed. */
   void forceShot(PlayerID playerId);
+  /** Drills: the player passes to `receiverId`, through the AI's own pass
+   * (its target, lead and weight), as soon as he has the ball and can act;
+   * `style` can force it along the ground or lofted. Logged and replayed. */
+  void forcePass(PlayerID playerId, PlayerID receiverId,
+                 ForcedPassStyle style);
   /** Drills: while he has the ball, the player only carries it (no pass,
    * shot, clearance or take-on), so a drill measures his dribbling alone;
    * `keep` off releases him. Logged and replayed. */
@@ -1426,6 +1450,10 @@ class MatchEngine
    * recording does not keep them: it replays with the defaults. */
   void setFirstTouchKnobs(const FirstTouchKnobs& knobs) { touchKnobs = knobs; }
   const FirstTouchKnobs& getFirstTouchKnobs() const { return touchKnobs; }
+  /** Drills and the lab: the strike knobs (match_strike_knobs.h), the same
+   * way. */
+  void setStrikeKnobs(const StrikeKnobs& knobs) { strikeKnobs = knobs; }
+  const StrikeKnobs& getStrikeKnobs() const { return strikeKnobs; }
   MatchRecorder* getRecorder() const { return recorderLink.target; }
 
  private:
@@ -1456,6 +1484,15 @@ class MatchEngine
   std::vector<DrillTarget> drillTargets;
   /** A forced shot waiting for its shooter to be able to act (0: none). */
   PlayerID forcedShooter = 0;
+  /** A forced pass waiting for its passer to be able to act (passer 0:
+   * none). */
+  struct ForcedPass
+  {
+    PlayerID passer = 0;
+    PlayerID receiver = 0;
+    ForcedPassStyle style = ForcedPassStyle::AS_CHOSEN;
+  };
+  ForcedPass forcedPass;
   /** Players who only carry the ball (keepBall). */
   std::vector<PlayerID> ballKeepers;
   /** Places the scenario's players and ball; the carrier (null when the
@@ -1665,6 +1702,7 @@ class MatchEngine
   /** Open-play strikes read by the contact model (observed only). */
   StrikeContactStats strikeContacts;
   FirstTouchKnobs touchKnobs;
+  StrikeKnobs strikeKnobs;
   std::array<LoadProfileStats, 2> loadProfile{};
   struct JitterTrack
   {

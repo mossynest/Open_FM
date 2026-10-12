@@ -173,6 +173,9 @@ struct MatchJob
   /** MatchContext::homeAdvantageScale: 0 a neutral venue, 1 the engine's
    * default (the game's full home edge), up to 2. */
   float homeAdvantage = 1.0f;
+  /** Tuning knobs for the match (defaults: the tuned constants). */
+  FirstTouchKnobs touchKnobs;
+  StrikeKnobs strikeKnobs;
 };
 
 /** A match that did not reach full time or produced invalid numbers. */

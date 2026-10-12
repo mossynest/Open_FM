@@ -59,7 +59,7 @@ Usage:
                  [--rating-min A --rating-max B]] [--fidelity full|background]
                  [--brains HOME,AWAY] [--bodies HOME,AWAY] [--threads T]
                  [--handshake H] [--home-advantage X] [--uniform]
-                 [--out-dir DIR]
+                 [--knobs "Name=value;Name=value"] [--out-dir DIR]
   fm_lab season  [--leagues all|top|ID,ID...] [--seasons N] [--seed S]
                  [--threads T] [--max-days D] [--reload] [--out-dir DIR]
   fm_lab tactics [--n SEEDS_PER_PAIR] [--seed S] [--rating X] [--threads T]
@@ -121,6 +121,11 @@ refereeing (MatchContext::homeAdvantageScale), 0 a neutral venue (default)
 to 2; 1 is the game's full edge (the setting of reports made before this
 option existed).
 
+Knobs (matches): tuning knobs set for every match, by their registry names,
+separated by semicolons: first-touch knobs ("Angle fail base") and strike
+knobs by kind ("Ground pass: Angle fail base"); the rest keep their tuned
+values. Example: --knobs "Ground pass: Angle jitter=0.08;Comfort gap=0.4".
+
 Threads: --threads, else FM_SIM_THREADS, else 4 (max 8); the process lowers
 its own priority. Output: report.md and metrics.json in --out-dir (default a
 fresh /tmp/fm-lab-* directory). Saves go to a scratch runtime root under /tmp
@@ -158,12 +163,12 @@ Arguments parseArguments(int argc, char** argv)
 {
   static constexpr std::array<std::string_view, 5> FLAGS = {
       "--spread", "--uniform", "--reload", "--help", "-h"};
-  static constexpr std::array<std::string_view, 17> OPTIONS = {
+  static constexpr std::array<std::string_view, 18> OPTIONS = {
       "--n",       "--seed",       "--home-rating", "--away-rating",
       "--rating",  "--rating-min", "--rating-max",  "--threads",
       "--out-dir", "--leagues",    "--seasons",     "--max-days",
       "--fidelity", "--brains",    "--bodies",      "--handshake",
-      "--home-advantage"};
+      "--home-advantage", "--knobs"};
   Arguments arguments;
   if (argc < 2) throw UsageError("missing mode");
   arguments.mode = argv[1];
@@ -321,6 +326,54 @@ void setBrainsAndBodies(std::vector<Lab::MatchJob>& jobs,
   }
 }
 
+/** --knobs "Name=value;Name=value": first-touch and strike knobs by name. */
+struct KnobSettings
+{
+  FirstTouchKnobs touch;
+  StrikeKnobs strike;
+  std::string text;
+};
+
+KnobSettings knobsOption(const Arguments& arguments)
+{
+  KnobSettings settings;
+  const std::optional<std::string> text = arguments.value("--knobs");
+  if (!text) return settings;
+  settings.text = *text;
+  std::string_view rest = *text;
+  while (!rest.empty())
+  {
+    const std::size_t end = rest.find(';');
+    const std::string_view item = rest.substr(0, end);
+    rest = end == std::string_view::npos ? std::string_view{}
+                                         : rest.substr(end + 1);
+    if (item.empty()) continue;
+    const std::size_t equals = item.rfind('=');
+    if (equals == std::string_view::npos)
+      throw UsageError(std::format("--knobs: '{}' is not Name=value", item));
+    const std::string name(item.substr(0, equals));
+    const std::string number(item.substr(equals + 1));
+    float value = 0.0f;
+    try
+    {
+      std::size_t used = 0;
+      value = std::stof(number, &used);
+      if (used != number.size()) throw std::invalid_argument(number);
+    }
+    catch (const std::exception&)
+    {
+      throw UsageError(std::format("--knobs: '{}' is not a number", number));
+    }
+    if (const auto knob = touchKnobByName(name))
+      settings.touch[*knob] = value;
+    else if (float* strike = settings.strike.find(name))
+      *strike = value;
+    else
+      throw UsageError(std::format("--knobs: no knob named '{}'", name));
+  }
+  return settings;
+}
+
 std::string brainsParameter(std::array<BrainId, 2> brains)
 {
   return std::format("home {}, away {}", brainName(brains[0]),
@@ -398,12 +451,15 @@ Lab::LabReport runMatchesMode(const Arguments& arguments, unsigned threads)
   }
   setBrainsAndBodies(jobs, brains, bodies);
   const bool uniform = arguments.has("--uniform");
+  const KnobSettings knobs = knobsOption(arguments);
   for (Lab::MatchJob& job : jobs)
   {
     job.handshake = handshake;
     job.homeAdvantage = homeAdvantage;
     job.home.uniform = uniform;
     job.away.uniform = uniform;
+    job.touchKnobs = knobs.touch;
+    job.strikeKnobs = knobs.strike;
   }
 
   const StatsConfig config = Lab::loadStatsConfig();
@@ -440,6 +496,7 @@ Lab::LabReport runMatchesMode(const Arguments& arguments, unsigned threads)
   report.parameters["home_advantage"] = std::format("{:.2f}", homeAdvantage);
   report.parameters["squads"] =
       uniform ? "uniform (every stat at the rating)" : "role-shaped";
+  if (!knobs.text.empty()) report.parameters["knobs"] = knobs.text;
   static constexpr std::array SCOPES = {Lab::Scope::Match, Lab::Scope::Engine};
   report.rows = Lab::evaluateTargets(Lab::matchMetrics(samples), SCOPES);
   report.tables = Lab::matchTables(samples);
