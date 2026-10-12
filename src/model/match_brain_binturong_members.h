@@ -78,6 +78,10 @@
   /** Multiplier of a defender's rate of engaging the carrier. */
   float engageBoostBinturong(const MatchPlayer& defender,
                     const MatchPlayer& carrier) const;
+  /** Chance an opponent cuts out a pass along the straight lane: a man
+   * already in it close to the passer is the likeliest to block it. */
+  float passingLaneRiskBinturong(const MatchPlayer& passer,
+                                 const MatchPlayer& receiver) const;
   /** Pass utility added by the passer's and the receiver's roles. */
   float passingRoleBiasBinturong(const MatchPlayer& passer, const MatchPlayer& receiver,
                         float progression, float completion) const;

@@ -713,6 +713,16 @@ struct MatchTuning final
     static constexpr float PACE_INTERCEPTION_METRES = 0.7f;
     static constexpr float BASE_INTERCEPTION_RISK = 0.55f;
     static constexpr float LATE_LANE_RISK = 0.35f;
+    /** Binturong brain: a man already standing in the lane close to the
+     * passer blocks the pass without having to react to it. There the lane
+     * is only as wide as his reach (a leg and the ball), and a ball into it
+     * is almost always stopped. Further on the ball takes longer to reach
+     * him: over the ramp (about a reaction plus a stride or two at pass
+     * speed) the lane widens to the full interception radius and the risk
+     * eases to the base and late weights above. */
+    static constexpr float NEAR_LANE_REACH_METRES = 1.1f;
+    static constexpr float NEAR_LANE_RISK = 0.9f;
+    static constexpr float LANE_REACH_RAMP_METRES = 8.0f;
     static constexpr float OFFSIDE_MARGIN = 0.004f;
   };
 

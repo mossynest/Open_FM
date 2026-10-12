@@ -2379,6 +2379,61 @@ MatchEngine::BallAction MatchEngine::chooseBallActionBinturong(
   return action;
 }
 
+float MatchEngine::passingLaneRiskBinturong(const MatchPlayer& passer,
+                                            const MatchPlayer& receiver) const
+{
+  // Each opponent ahead of the passer along the straight lane threatens it
+  // by how close he stands to the line, against how far he could reach by
+  // the time the ball gets there. A man already in the lane next to the
+  // passer is the surest block of all: the ball runs into him.
+  using P = MatchTuning::Passing;
+  const Vector2F segment = toMetres({receiver.position.x - passer.position.x,
+                                     receiver.position.y - passer.position.y});
+  const float segmentLengthSquared =
+      segment.x * segment.x + segment.y * segment.y;
+  if (segmentLengthSquared <= EPSILON) return 1.0f;
+  const float segmentLength = std::sqrt(segmentLengthSquared);
+
+  float combinedSafety = 1.0f;
+  for (const auto& opponent : players)
+  {
+    if (!active(opponent) || opponent.isHomeTeam == passer.isHomeTeam) continue;
+    const Vector2F fromPasser =
+        toMetres({opponent.position.x - passer.position.x,
+                  opponent.position.y - passer.position.y});
+    // Level with or behind the passer he cannot get in front of the ball;
+    // at the far end he is contesting the reception, not the lane.
+    const float projection =
+        (fromPasser.x * segment.x + fromPasser.y * segment.y) /
+        segmentLengthSquared;
+    if (projection <= 0.0f || projection > P::LANE_END_MARGIN) continue;
+
+    const float laneDistance = length({fromPasser.x - segment.x * projection,
+                                       fromPasser.y - segment.y * projection});
+    // How far along the ball has to travel to reach him decides how much
+    // time he has: none close to the passer, the full radius past the ramp.
+    const float ramp = std::min(
+        1.0f, projection * segmentLength / P::LANE_REACH_RAMP_METRES);
+    const float fullRadius = P::BASE_INTERCEPTION_RADIUS_METRES +
+                             opponent.defending *
+                                 P::DEFENDING_INTERCEPTION_METRES +
+                             opponent.pace * P::PACE_INTERCEPTION_METRES;
+    const float interceptionRadius =
+        P::NEAR_LANE_REACH_METRES +
+        (fullRadius - P::NEAR_LANE_REACH_METRES) * ramp;
+    const float individualRisk =
+        std::clamp(1.0f - laneDistance / std::max(interceptionRadius, EPSILON),
+                   0.0f, 1.0f);
+    const float laneWeight =
+        P::NEAR_LANE_RISK +
+        (P::BASE_INTERCEPTION_RISK + projection * P::LATE_LANE_RISK -
+         P::NEAR_LANE_RISK) *
+            ramp;
+    combinedSafety *= 1.0f - individualRisk * laneWeight;
+  }
+  return std::clamp(1.0f - combinedSafety, 0.0f, 1.0f);
+}
+
 MatchEngine::PassOption MatchEngine::evaluatePassOptionBinturong(
     MatchPlayer& passer, MatchPlayer& receiver,
     PassCandidateDetail* detail) const
@@ -2396,7 +2451,7 @@ MatchEngine::PassOption MatchEngine::evaluatePassOptionBinturong(
       std::clamp(nearestOpponentDistance(receiver) /
                      MatchTuning::Passing::OPENNESS_RADIUS_METRES,
                  0.0f, 1.0f);
-  const float laneRisk = passingLaneRisk(passer, receiver);
+  const float laneRisk = passingLaneRiskBinturong(passer, receiver);
   const float pressure =
       std::clamp((MatchTuning::Decision::PRESSURE_RADIUS_METRES -
                   nearestOpponentDistance(passer)) /
