@@ -3545,8 +3545,8 @@ float MatchEngine::strikeShot(MatchPlayer& shooter, float forcedXG, bool header,
                               bool penalty, bool freeKick)
 {
   const float goalX = shooter.isHomeTeam ? 1.0f : 0.0f;
-  const float metres =
-      distance(shooter.position, {goalX, MatchTuning::Pitch::CENTRE});
+  const Vector2F origin = strikePoint(shooter);
+  const float metres = distance(origin, {goalX, MatchTuning::Pitch::CENTRE});
   float xg = forcedXG >= 0.0f ? forcedXG : estimateShotXG(shooter);
   if (header && forcedXG < 0.0f) xg *= MatchTuning::Shooting::HEADER_XG_FACTOR;
   xg = std::clamp(xg, MatchTuning::Shooting::MIN_GOAL_PROBABILITY,
@@ -3585,7 +3585,7 @@ float MatchEngine::strikeShot(MatchPlayer& shooter, float forcedXG, bool header,
   const float startHeight = header
                                 ? ball.z * MatchTuning::Units::BALL_Z_METRES
                                 : MatchTuning::Shooting::RELEASE_HEIGHT_METRES;
-  const float goalDistance = distance(shooter.position, goalPoint);
+  const float goalDistance = distance(origin, goalPoint);
   clearFlightState();
   launchBall(shooter, ball.position, goalPoint, speed,
              loftVerticalSpeed(goalDistance, speed, startHeight, crossingZ),
@@ -4523,7 +4523,7 @@ void MatchEngine::clearBehind(MatchPlayer& defender)
   // Knock the ball over the own goal line, wide of the posts.
   const Vector2F target = chooseClearBehindTarget(defender);
   const float height = ball.z;
-  launchBall(defender, defender.position, target,
+  launchBall(defender, strikePoint(defender), target,
              MatchTuning::Aerial::HEADER_CLEARANCE_SPEED,
              MatchTuning::Aerial::HEADER_LIFT * 0.5f, 0.0f);
   ball.z = height;
@@ -4534,14 +4534,19 @@ void MatchEngine::clearBall(MatchPlayer& defender)
 {
   trackTouch(defender);
   const ClearanceAim aim = chooseClearanceAim(defender);
-  const float clearanceMetres = aim.metres;
   const Vector2F target = aim.target;
+  // A loose ball, and any ball for a Binturong body, is struck where it
+  // lies; a Binturong body lofts it over the distance it really travels.
+  const Vector2F origin = ball.inTouch ? ball.position : strikePoint(defender);
+  const float clearanceMetres =
+      bodyOf(defender.isHomeTeam) == BodyId::BINTURONG
+          ? distance(origin, target)
+          : aim.metres;
   const float speed = clearanceSpeed(defender);
   ++statsOf(defender).clearances;
   clearFlightState();
-  // A loose ball (Binturong body) is struck where it lies.
-  launchBall(defender, ball.inTouch ? ball.position : defender.position, target,
-             speed, loftVerticalSpeed(clearanceMetres, speed, 0.0f, 0.0f), 0.0f);
+  launchBall(defender, origin, target, speed,
+             loftVerticalSpeed(clearanceMetres, speed, 0.0f, 0.0f), 0.0f);
   if (getRecorder())
   {
     MatchActionRecord action;
@@ -4586,7 +4591,9 @@ void MatchEngine::headBall(MatchPlayer& header)
     {
       shotAssistCandidate = nullptr;
     }
-    ball.position = header.position;
+    // The Aardvark body heads it from his centre; a Binturong body meets it
+    // where it is.
+    ball.position = strikePoint(header);
     takeShot(header, -1.0f, true);
     return;
   }
@@ -4606,7 +4613,7 @@ void MatchEngine::headBall(MatchPlayer& header)
   clearFlightState();
   ball.lastPossessor = header.player;
   lastShooter = nullptr;
-  ball.position = header.position;
+  ball.position = strikePoint(header);
   if (!fromTeammate && tryOwnGoalTouch(header)) return;
   const HeaderPlay play = chooseHeaderPlay(header, fromTeammate);
   if (play.kind == HeaderPlay::Kind::BEHIND)
@@ -4621,7 +4628,7 @@ void MatchEngine::headBall(MatchPlayer& header)
     // of the box, where the second ball is fought for.
     const float speed = headerClearanceSpeed(header);
     const float height = ball.z;
-    launchBall(header, header.position, play.aim, speed,
+    launchBall(header, strikePoint(header), play.aim, speed,
                MatchTuning::Aerial::HEADER_LIFT, 0.0f);
     ball.z = height;
     if (getRecorder())
@@ -4636,7 +4643,7 @@ void MatchEngine::headBall(MatchPlayer& header)
   {
     const Vector2F knockDown = knockDownPoint(header, play.aim);
     const float height = ball.z;
-    launchBall(header, header.position, knockDown,
+    launchBall(header, strikePoint(header), knockDown,
                MatchTuning::Aerial::HEADER_PASS_SPEED,
                MatchTuning::Aerial::HEADER_LIFT * 0.5f, 0.0f);
     ball.z = height;
@@ -4735,6 +4742,14 @@ float MatchEngine::feetReach(const MatchPlayer& player) const
   return bodyOf(player.isHomeTeam) == BodyId::BINTURONG && !player.isGoalkeeper
              ? touchKnobs[TouchKnob::FEET_REACH]
              : MatchTuning::Ball::OUTFIELD_CONTROL_RADIUS_METRES;
+}
+
+Vector2F MatchEngine::strikePoint(const MatchPlayer& striker) const
+{
+  // A Binturong body meets the ball anywhere in his reach and strikes it
+  // there; the Aardvark body keeps measuring from his centre.
+  return bodyOf(striker.isHomeTeam) == BodyId::BINTURONG ? ball.position
+                                                         : striker.position;
 }
 
 TouchIntent MatchEngine::defaultTouchIntent(const MatchPlayer& player) const

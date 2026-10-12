@@ -2183,6 +2183,9 @@ class MatchEngine
   /** How far from his centre he can play a ball at his feet (the feet-reach
    * knob for Binturong outfielders). */
   float feetReach(const MatchPlayer& player) const;
+  /** Where his strike starts: the ball where it lies for a Binturong body,
+   * his centre for the Aardvark body. */
+  Vector2F strikePoint(const MatchPlayer& striker) const;
   /** The touch when no brain chooses one: set it just ahead of him, toward
    * the goal he attacks. */
   TouchIntent defaultTouchIntent(const MatchPlayer& player) const;

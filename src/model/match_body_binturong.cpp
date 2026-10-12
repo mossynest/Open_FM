@@ -957,9 +957,13 @@ TouchResult MatchEngine::firstTouchBinturong(const MatchPlayer& player,
 MatchEngine::Kick MatchEngine::kickPassBinturong(const MatchPlayer& passer,
                                                  const MatchPlayer& receiver,
                                                  Vector2F target,
-                                                 float passDistance,
+                                                 float /*passDistance*/,
                                                  bool lofted, bool delivery)
 {
+  // The pass is struck where the ball lies, so its line, length and flight
+  // are measured from there. Pressure is on the passer: an opponent closing
+  // him down hurries his body, wherever the ball sits in his reach.
+  const Vector2F origin = ball.position;
   const float pressure =
       std::clamp((MatchTuning::Passing::PASS_PRESSURE_RADIUS_METRES -
                   nearestOpponentDistance(passer)) /
@@ -968,7 +972,8 @@ MatchEngine::Kick MatchEngine::kickPassBinturong(const MatchPlayer& passer,
   // Lateral execution error (metres) grows with poor technique, pressure,
   // distance, fatigue and away nerves. Passes back to the own keeper are
   // played safely.
-  const Vector2F direct = metricDirection(passer.position, target);
+  const Vector2F direct = metricDirection(origin, target);
+  const float passDistance = distance(origin, target);
   const float care = receiver.isGoalkeeper
                          ? MatchTuning::Passing::BACK_PASS_ERROR_SCALE
                          : 1.0f;
@@ -981,7 +986,7 @@ MatchEngine::Kick MatchEngine::kickPassBinturong(const MatchPlayer& passer,
   Kick kick;
   kick.target = {std::clamp(target.x + miss.x, 0.0f, 1.0f),
                  std::clamp(target.y + miss.y, 0.0f, 1.0f)};
-  const float travel = distance(passer.position, kick.target);
+  const float travel = distance(origin, kick.target);
   if (lofted)
   {
     // Lofted balls are launched so they drop at the target: long passes at
