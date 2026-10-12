@@ -115,21 +115,41 @@ struct FoulContext
 
 FoulSanction decideFoulSanction(const FoulContext& context);
 
+// A ground challenge on a dribbler is two halves, one per player's body,
+// settled by the rules. Each half is in probability points on one scale:
+// what the player adds to (tackler) or takes from (carrier) the chance that
+// the challenge reaches the ball. For two average players (0.5) the make is
+// about 0.27 and the resist about 0.20.
+
+/** What the tackler's Defending and Physicality are worth. */
+float tackleMake(float defending, float physicality);
+
+/** What the carrier's Dribbling and Physicality are worth; shielding (at
+ * walking pace) lets his Physicality count again. */
+float tackleResist(float dribbling, float physicality, bool shielding);
+
+/** How clumsy the tackler is: foul propensity points (0 for a perfect
+ * Defending of 1). */
+float tackleTechnique(float defending);
+
 /** Everything that decides a ground challenge on a dribbler. */
 struct TackleContext
 {
-  float defending = 0.5f;
-  float dribbling = 0.5f;
-  float defenderPhysicality = 0.5f;
-  float carrierPhysicality = 0.5f;
+  /** The two bodies' halves (see tackleMake, tackleResist). */
+  float make = tackleMake(0.5f, 0.5f);
+  float resist = tackleResist(0.5f, 0.5f, false);
+  /** The tackler's foul points (see tackleTechnique). */
+  float technique = tackleTechnique(0.5f);
+  /** Team edge of each side (home, numbers, talk) in attribute units:
+   * MatchEngine::teamEdge x DUEL_EDGE_WEIGHT. */
+  float defenderEdge = 0.0f;
+  float carrierEdge = 0.0f;
   /** Team pressing instruction in [0, 1]. */
   float pressing = 0.5f;
   /** Team risk-taking instruction in [0, 1]. */
   float riskTaking = 0.5f;
   /** Share of the touch the ball is still away from the carrier's foot. */
   float exposure = 0.0f;
-  /** The carrier is shielding the ball at walking pace. */
-  bool shielding = false;
   bool sliding = false;
   bool fromBehind = false;
   bool inPenaltyArea = false;

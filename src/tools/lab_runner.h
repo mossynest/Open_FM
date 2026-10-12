@@ -113,6 +113,18 @@ struct MatchSample
   int key_passes = 0;
   int saves = 0;
   int touches = 0;
+  /** Contests by side (home, away): attempts and successes of the side
+   * named (the carrier for take-ons, the tackler, the keeper), for
+   * comparing bodies (engine only). */
+  std::array<int, 2> take_ons{};
+  std::array<int, 2> take_ons_won{};
+  std::array<int, 2> tackle_duels{};
+  std::array<int, 2> tackle_duels_won{};
+  std::array<int, 2> keeper_claim_attempts{};
+  std::array<int, 2> keeper_claims{};
+  /** Aerial duels with both sides involved, and those the home side won. */
+  int aerial_contested = 0;
+  int aerial_home_won = 0;
   /** High-intensity and sprint running of the full-match outfield starters
    * (the same players as full_match_distance). */
   double full_match_high_intensity = 0.0;
@@ -154,7 +166,7 @@ struct MatchJob
   /** Played with MatchFidelity::BACKGROUND (as unwatched fixtures are). */
   bool background = false;
   /** How the inputs become match state (one per match). */
-  HandshakeId handshake = HandshakeId::AARDVARK;
+  HandshakeId handshake = HandshakeId::BINTURONG;
   /** MatchContext::homeAdvantageScale: 0 a neutral venue, 1 the engine's
    * default (the game's full home edge), up to 2. */
   float homeAdvantage = 1.0f;

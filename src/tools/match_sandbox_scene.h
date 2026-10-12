@@ -112,7 +112,7 @@ class MatchSandboxScene : public GUIScene
    * window. */
   std::array<BrainId, 2> replay_brains{BrainId::BINTURONG, BrainId::BINTURONG};
   std::array<BodyId, 2> replay_bodies{BodyId::AARDVARK, BodyId::AARDVARK};
-  HandshakeId replay_handshake = HandshakeId::AARDVARK;
+  HandshakeId replay_handshake = HandshakeId::BINTURONG;
 
   /** What the current (or last) match was built from. */
   std::optional<MatchSetup> match_setup;

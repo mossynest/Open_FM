@@ -125,6 +125,15 @@ constexpr std::array TARGETS = {
   TargetSpec{"LAB-HI", "high_intensity_per_outfielder_km", "High-intensity distance per outfielder (km)", "", NO_BAND, Info, "behaviour", Number, Engine, "full-match outfield starters"},
   TargetSpec{"LAB-SPR", "sprint_per_outfielder_km", "Sprint distance per outfielder (km)", "", NO_BAND, Info, "behaviour", Number, Engine, "full-match outfield starters"},
   TargetSpec{"LAB-SPRN", "sprints_per_outfielder", "Sprints per outfielder", "", NO_BAND, Info, "behaviour", Number, Engine, "full-match outfield starters"},
+  // ---- Contests by side INFO (body comparisons; --bodies HOME,AWAY) --------
+  TargetSpec{"CON-TO", "take_ons_per_team", "Take-ons per team", "", NO_BAND, Info, "contests", Number, Engine, ""},
+  TargetSpec{"CON-TOH", "take_on_success_home", "Take-on success, home carrier", "", NO_BAND, Info, "contests", Percent, Engine, "defender beaten"},
+  TargetSpec{"CON-TOA", "take_on_success_away", "Take-on success, away carrier", "", NO_BAND, Info, "contests", Percent, Engine, "defender beaten"},
+  TargetSpec{"CON-TKH", "tackle_duel_success_home", "Tackle duel won, home tackler", "", NO_BAND, Info, "contests", Percent, Engine, "the duel roll, fouls included"},
+  TargetSpec{"CON-TKA", "tackle_duel_success_away", "Tackle duel won, away tackler", "", NO_BAND, Info, "contests", Percent, Engine, "the duel roll, fouls included"},
+  TargetSpec{"CON-AERH", "aerial_home_share", "Contested aerial duels won by home", "", NO_BAND, Info, "contests", Percent, Engine, "both sides within reach"},
+  TargetSpec{"CON-CLMH", "keeper_claim_success_home", "Keeper claims held, home keeper", "", NO_BAND, Info, "contests", Percent, Engine, "the rest punched clear"},
+  TargetSpec{"CON-CLMA", "keeper_claim_success_away", "Keeper claims held, away keeper", "", NO_BAND, Info, "contests", Percent, Engine, "the rest punched clear"},
   // ---- Movement jitter INFO (outfield players, open play) -------------------
   TargetSpec{"JIT-MOVE", "jitter_target_move_m", "Target move per scheduled refresh (m)", "", NO_BAND, Info, "jitter", Number, Engine, "every 0.2 s"},
   TargetSpec{"JIT-MOVS", "jitter_moving_share", "Scheduled refreshes moving the target > 0.5 m", "", NO_BAND, Info, "jitter", Percent, Engine, ""},

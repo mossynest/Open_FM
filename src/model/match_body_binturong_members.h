@@ -94,4 +94,14 @@
   /** Acceleration, braking, lateral limit, position and facing update. */
   void stepKinematicsBinturong(MatchPlayer& player, Vector2F desired, float desiredSpeed,
                       float topSpeed, float fatigue, float dt);
+  // Contest halves (see takeOnMake and the others in match_engine.h).
+  float takeOnMakeBinturong(const MatchPlayer& carrier, ScoreBreakdown* terms) const;
+  float takeOnResistBinturong(const MatchPlayer& defender, ScoreBreakdown* terms) const;
+  float tackleMakeBinturong(const MatchPlayer& tackler, ScoreBreakdown* terms) const;
+  float tackleResistBinturong(const MatchPlayer& carrier, bool shielding,
+                              ScoreBreakdown* terms) const;
+  float tackleTechniqueBinturong(const MatchPlayer& tackler, ScoreBreakdown* terms) const;
+  float aerialStrengthBinturong(const MatchPlayer& player, float ballHeightMetres) const;
+  float claimChanceBinturong(const MatchPlayer& keeper, int crowding) const;
+  void recoverFromTakeOnBinturong(MatchPlayer& defender);
 // clang-format on

@@ -114,7 +114,7 @@ Bodies: each side's players' bodies (movement, fitness, kicking, first
 touch, goalkeeping), aardvark (default) or binturong, set the same way.
 
 Handshake: how the inputs become match state (attribute scale, physical
-limits, roles), one for the match: aardvark (default) or binturong.
+limits, roles), one for the match: binturong (default) or aardvark.
 
 Home advantage: the home side's edge on attributes, execution and
 refereeing (MatchContext::homeAdvantageScale), 0 a neutral venue (default)
@@ -333,10 +333,10 @@ std::string bodiesParameter(std::array<BodyId, 2> bodies)
                      bodyName(bodies[1]));
 }
 
-/** --handshake aardvark|binturong (one for the match); default aardvark. */
+/** --handshake aardvark|binturong (one for the match); default binturong. */
 HandshakeId handshakeOption(const Arguments& arguments)
 {
-  const std::string text = arguments.value("--handshake").value_or("aardvark");
+  const std::string text = arguments.value("--handshake").value_or("binturong");
   const auto handshake = handshakeFromKey(text);
   if (!handshake) throw UsageError("--handshake must be aardvark or binturong");
   return *handshake;

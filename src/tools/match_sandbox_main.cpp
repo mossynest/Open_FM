@@ -94,6 +94,7 @@ int main(int argc, char* argv[])
   bool brainsGiven = false;
   bool bodiesGiven = false;
   bool homeAdvantageGiven = false;
+  bool handshakeGiven = false;
   for (int index = 1; index < argc; ++index)
   {
     const std::string_view argument(argv[index]);
@@ -127,6 +128,7 @@ int main(int argc, char* argv[])
       if (const auto handshake = handshakeFromKey(argv[++index]))
       {
         sandboxHandshake() = *handshake;
+        handshakeGiven = true;
         continue;
       }
     }
@@ -205,6 +207,8 @@ int main(int argc, char* argv[])
            "for both; before --measure or --shot-map)\n"
            "  (--home-advantage: 0 neutral venue (default) to 2, 1 the "
            "game's full home edge; --check defaults to 1)\n"
+           "  (--handshake: binturong (default) or aardvark; --check "
+           "defaults to aardvark)\n"
            "  [--measure DRILL --sweep \"Pace=40:95:12\" [--by \"Who runs\"]\n"
            "   [--set NAME=VALUE]... [--repeats N] [--seed N] [--csv [PATH]]]\n"
            "  [--shot-map [--line A:B:N] [--side A:B:N] [--repeats N]\n"
@@ -214,8 +218,11 @@ int main(int argc, char* argv[])
   }
 
   // The checks compare with the inherited engine, which had the full home
-  // edge; everything else plays at a neutral venue unless asked.
+  // edge and the Aardvark handshake; everything else plays at a neutral
+  // venue with the Binturong handshake unless asked.
   if (checkMatches && !homeAdvantageGiven) sandboxHomeAdvantage() = 1.0f;
+  if (checkMatches && !handshakeGiven)
+    sandboxHandshake() = HandshakeId::AARDVARK;
 
   // Before anything resolves a runtime path (logs, settings, saves).
   useOwnRuntimeRoot();

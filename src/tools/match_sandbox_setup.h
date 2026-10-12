@@ -37,7 +37,7 @@ std::array<BrainId, 2>& sandboxBrains();
  * window: Aardvark v Binturong). */
 std::array<BodyId, 2>& sandboxBodies();
 /** The handshake new sandbox matches, checks and drills are built with:
- * the --handshake option, else Aardvark. */
+ * the --handshake option, else Binturong (--check: Aardvark). */
 HandshakeId& sandboxHandshake();
 /** The home advantage new sandbox matches, checks and drills are played
  * with (MatchContext::homeAdvantageScale: 0 a neutral venue, 1 the game's

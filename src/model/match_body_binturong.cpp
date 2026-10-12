@@ -8,16 +8,18 @@
 
 // The Binturong body: how one player's body carries out his brain's choices
 // and what it costs him (movement, fitness, kicking, dribbling, first touch,
-// goalkeeping, non-contact injuries), the version being developed (see
-// match_body.h). It started as an exact copy of the Aardvark body
-// (match_body_aardvark.cpp). Every function here is a MatchEngine member
-// with the "Binturong" suffix, declared in match_body_binturong_members.h; the
-// engine reaches them through the dispatchers in match_body_dispatch.cpp.
+// goalkeeping, non-contact injuries, and his half of each contest with an
+// opponent), the version being developed (see match_body.h). It started as
+// an exact copy of the Aardvark body (match_body_aardvark.cpp). Every
+// function here is a MatchEngine member with the "Binturong" suffix, declared
+// in match_body_binturong_members.h; the engine reaches them through the
+// dispatchers in match_body_dispatch.cpp.
 //
 // Change behaviour freely here. A helper shared with the rest of the engine
-// (contests, the ball's flight, rules) is shared by every body: copy it into
-// this body (with the Binturong suffix) before changing it. To keep this
-// version for comparison, freeze it and copy it to a new version the same way.
+// (settling a contest, the ball's flight, rules such as
+// MatchRules::tackleMake) is shared by every body: copy it into this body
+// (with the Binturong suffix) before changing it. To keep this version for
+// comparison, freeze it and copy it to a new version the same way.
 
 #include <algorithm>
 #include <array>
@@ -1403,4 +1405,110 @@ float MatchEngine::injuryChanceBinturong(const MatchPlayer& player) const
        tiredness * tiredness * MatchTuning::Injury::FATIGUE_HAZARD_MULTIPLIER) *
       (1.0f + speedRatio * MatchTuning::Injury::INTENSITY_HAZARD_MULTIPLIER);
   return 1.0f - std::exp(-hazard * MatchTuning::Injury::CHECK_INTERVAL_MINUTES);
+}
+
+// ---------------------------------------------------------------------------
+// Contest halves: what this player's body is worth in a duel with a player of
+// the other side (whose own body gives the other half). Each is in the
+// duel's own units, on the scale the Aardvark halves set (see
+// match_engine_contests_plan.md, section 3). They started as exact copies
+// of the Aardvark halves; a change here must keep to that scale (the mirror
+// test, section 6).
+// ---------------------------------------------------------------------------
+
+float MatchEngine::takeOnMakeBinturong(const MatchPlayer& carrier,
+                                       ScoreBreakdown* terms) const
+{
+  using R = MatchTuning::Dribble;
+  const float skill = carrier.dribbling * R::TAKE_ON_SKILL;
+  const float pace = carrier.pace * R::TAKE_ON_PACE;
+  if (terms)
+  {
+    terms->add("his Dribbling", TermSource::ATTRIBUTE, skill);
+    terms->add("his Pace", TermSource::ATTRIBUTE, pace);
+  }
+  return skill + pace;
+}
+
+float MatchEngine::takeOnResistBinturong(const MatchPlayer& defender,
+                                         ScoreBreakdown* terms) const
+{
+  using R = MatchTuning::Dribble;
+  const float skill = defender.defending * R::TAKE_ON_SKILL;
+  const float pace = defender.pace * R::TAKE_ON_PACE;
+  if (terms)
+  {
+    terms->add("defender's Defending", TermSource::ATTRIBUTE, skill);
+    terms->add("defender's Pace", TermSource::ATTRIBUTE, pace);
+  }
+  return skill + pace;
+}
+
+float MatchEngine::tackleMakeBinturong(const MatchPlayer& tackler,
+                                       ScoreBreakdown* terms) const
+{
+  using D = MatchTuning::Defending;
+  if (terms)
+  {
+    terms->add("his Defending", TermSource::ATTRIBUTE,
+               tackler.defending * D::DEFENDING_WIN_BONUS);
+    terms->add("his Physicality", TermSource::ATTRIBUTE,
+               tackler.physicality * D::PHYSICALITY_DUEL_WEIGHT);
+  }
+  return MatchRules::tackleMake(tackler.defending, tackler.physicality);
+}
+
+float MatchEngine::tackleResistBinturong(const MatchPlayer& carrier,
+                                         bool shielding,
+                                         ScoreBreakdown* terms) const
+{
+  using D = MatchTuning::Defending;
+  if (terms)
+  {
+    terms->add("carrier's Dribbling", TermSource::ATTRIBUTE,
+               carrier.dribbling * D::DRIBBLING_WIN_PENALTY);
+    terms->add("carrier's Physicality", TermSource::ATTRIBUTE,
+               carrier.physicality * D::PHYSICALITY_DUEL_WEIGHT);
+    terms->add("carrier shielding (his Physicality)", TermSource::ATTRIBUTE,
+               shielding ? carrier.physicality * D::SHIELD_PHYSICALITY_PENALTY
+                         : 0.0f);
+  }
+  return MatchRules::tackleResist(carrier.dribbling, carrier.physicality,
+                                  shielding);
+}
+
+float MatchEngine::tackleTechniqueBinturong(const MatchPlayer& tackler,
+                                            ScoreBreakdown* terms) const
+{
+  const float technique = MatchRules::tackleTechnique(tackler.defending);
+  if (terms)
+    terms->add("tackling technique (Defending)", TermSource::ATTRIBUTE,
+               technique);
+  return technique;
+}
+
+float MatchEngine::aerialStrengthBinturong(const MatchPlayer& player,
+                                           float ballHeightMetres) const
+{
+  return MatchRules::aerialDuelStrength(player.heightMetres,
+                                        player.physicality, ballHeightMetres);
+}
+
+float MatchEngine::claimChanceBinturong(const MatchPlayer& keeper,
+                                        int crowding) const
+{
+  using A = MatchTuning::Aerial;
+  return std::clamp(A::BASE_CLAIM_CHANCE +
+                        keeper.goalkeeping * A::SKILL_CLAIM_BONUS -
+                        static_cast<float>(crowding) * A::CROWDING_PENALTY,
+                    0.05f, 0.97f);
+}
+
+void MatchEngine::recoverFromTakeOnBinturong(MatchPlayer& defender)
+{
+  using R = MatchTuning::Dribble;
+  defender.tackleCooldown =
+      std::max(defender.tackleCooldown, R::BEATEN_SECONDS);
+  defender.velocity.x *= R::BEATEN_VELOCITY_RETAINED;
+  defender.velocity.y *= R::BEATEN_VELOCITY_RETAINED;
 }

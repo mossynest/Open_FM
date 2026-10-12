@@ -369,3 +369,109 @@ MatchEngine::Spill MatchEngine::parrySpill(const MatchPlayer& keeper,
   }
   return parrySpillAardvark(keeper, speed);
 }
+
+// Contest halves: each goes to the body of the player it describes, so a
+// duel between two sides can meet two different bodies.
+
+float MatchEngine::takeOnMake(const MatchPlayer& carrier,
+                              ScoreBreakdown* terms) const
+{
+  switch (bodyOf(carrier.isHomeTeam))
+  {
+    case BodyId::AARDVARK:
+      break;
+    case BodyId::BINTURONG:
+      return takeOnMakeBinturong(carrier, terms);
+  }
+  return takeOnMakeAardvark(carrier, terms);
+}
+
+float MatchEngine::takeOnResist(const MatchPlayer& defender,
+                                ScoreBreakdown* terms) const
+{
+  switch (bodyOf(defender.isHomeTeam))
+  {
+    case BodyId::AARDVARK:
+      break;
+    case BodyId::BINTURONG:
+      return takeOnResistBinturong(defender, terms);
+  }
+  return takeOnResistAardvark(defender, terms);
+}
+
+float MatchEngine::tackleMake(const MatchPlayer& tackler,
+                              ScoreBreakdown* terms) const
+{
+  switch (bodyOf(tackler.isHomeTeam))
+  {
+    case BodyId::AARDVARK:
+      break;
+    case BodyId::BINTURONG:
+      return tackleMakeBinturong(tackler, terms);
+  }
+  return tackleMakeAardvark(tackler, terms);
+}
+
+float MatchEngine::tackleResist(const MatchPlayer& carrier, bool shielding,
+                                ScoreBreakdown* terms) const
+{
+  switch (bodyOf(carrier.isHomeTeam))
+  {
+    case BodyId::AARDVARK:
+      break;
+    case BodyId::BINTURONG:
+      return tackleResistBinturong(carrier, shielding, terms);
+  }
+  return tackleResistAardvark(carrier, shielding, terms);
+}
+
+float MatchEngine::tackleTechnique(const MatchPlayer& tackler,
+                                   ScoreBreakdown* terms) const
+{
+  switch (bodyOf(tackler.isHomeTeam))
+  {
+    case BodyId::AARDVARK:
+      break;
+    case BodyId::BINTURONG:
+      return tackleTechniqueBinturong(tackler, terms);
+  }
+  return tackleTechniqueAardvark(tackler, terms);
+}
+
+float MatchEngine::aerialStrength(const MatchPlayer& player,
+                                  float ballHeightMetres) const
+{
+  switch (bodyOf(player.isHomeTeam))
+  {
+    case BodyId::AARDVARK:
+      break;
+    case BodyId::BINTURONG:
+      return aerialStrengthBinturong(player, ballHeightMetres);
+  }
+  return aerialStrengthAardvark(player, ballHeightMetres);
+}
+
+float MatchEngine::claimChance(const MatchPlayer& keeper, int crowding) const
+{
+  switch (bodyOf(keeper.isHomeTeam))
+  {
+    case BodyId::AARDVARK:
+      break;
+    case BodyId::BINTURONG:
+      return claimChanceBinturong(keeper, crowding);
+  }
+  return claimChanceAardvark(keeper, crowding);
+}
+
+void MatchEngine::recoverFromTakeOn(MatchPlayer& defender)
+{
+  switch (bodyOf(defender.isHomeTeam))
+  {
+    case BodyId::AARDVARK:
+      break;
+    case BodyId::BINTURONG:
+      recoverFromTakeOnBinturong(defender);
+      return;
+  }
+  recoverFromTakeOnAardvark(defender);
+}

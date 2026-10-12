@@ -184,18 +184,28 @@ TEST(MatchRulesTest, ChallengeTimingAndAngleDecideTackles)
 
   // Skill and strength matter, and a strong player shielding is hard to rob.
   MatchRules::TackleContext skilledDefender = closeControl;
-  skilledDefender.defending = 0.9f;
-  skilledDefender.dribbling = 0.3f;
+  skilledDefender.make = MatchRules::tackleMake(0.9f, 0.5f);
+  skilledDefender.resist = MatchRules::tackleResist(0.3f, 0.5f, false);
   MatchRules::TackleContext skilledDribbler = closeControl;
-  skilledDribbler.defending = 0.3f;
-  skilledDribbler.dribbling = 0.9f;
+  skilledDribbler.make = MatchRules::tackleMake(0.3f, 0.5f);
+  skilledDribbler.resist = MatchRules::tackleResist(0.9f, 0.5f, false);
   EXPECT_GT(MatchRules::tackleWinChance(skilledDefender),
             MatchRules::tackleWinChance(skilledDribbler));
   MatchRules::TackleContext shielding = closeControl;
-  shielding.shielding = true;
-  shielding.carrierPhysicality = 0.9f;
+  shielding.resist = MatchRules::tackleResist(0.5f, 0.9f, true);
   EXPECT_LT(MatchRules::tackleWinChance(shielding),
             MatchRules::tackleWinChance(closeControl));
+  // A clumsy tackler fouls more; the home side's edge helps both ways.
+  MatchRules::TackleContext clumsy = closeControl;
+  clumsy.technique = MatchRules::tackleTechnique(0.2f);
+  EXPECT_GT(MatchRules::tackleFoulPropensity(clumsy),
+            MatchRules::tackleFoulPropensity(closeControl));
+  MatchRules::TackleContext edged = closeControl;
+  edged.defenderEdge = 0.1f;
+  EXPECT_GT(MatchRules::tackleWinChance(edged),
+            MatchRules::tackleWinChance(closeControl));
+  EXPECT_LT(MatchRules::tackleFoulPropensity(edged),
+            MatchRules::tackleFoulPropensity(closeControl));
 
   // A careful defender in his own box or on a booking fouls far less.
   MatchRules::TackleContext inBox = closeControl;

@@ -101,6 +101,7 @@ enum class PassIntent
 class MatchRecorder;
 struct MatchActionRecord;
 struct PassCandidateDetail;
+struct ScoreBreakdown;
 
 struct PassDecision
 {
@@ -420,6 +421,22 @@ struct MatchStats
   int awaySubstitutions = 0;
   int homeAerialDuelsWon = 0;
   int awayAerialDuelsWon = 0;
+  /** Aerial duels with both sides involved (each won by one side above). */
+  int aerialDuelsContested = 0;
+  /** Take-ons by the carrier's side, and those that beat the defender. */
+  int homeTakeOns = 0;
+  int awayTakeOns = 0;
+  int homeTakeOnsWon = 0;
+  int awayTakeOnsWon = 0;
+  /** Tackles by the tackler's side that won the duel roll, fouls included
+   * (homeTackles counts only the clean ones). */
+  int homeTackleDuelsWon = 0;
+  int awayTackleDuelsWon = 0;
+  /** A keeper coming for a high ball in his box, and catching it. */
+  int homeKeeperClaimAttempts = 0;
+  int awayKeeperClaimAttempts = 0;
+  int homeKeeperClaims = 0;
+  int awayKeeperClaims = 0;
   int homeHeadedShots = 0;
   int awayHeadedShots = 0;
   int homeSetPieceShots = 0;
@@ -2065,6 +2082,33 @@ class MatchEngine
   float dribbleExposureShare() const;
   /** Tries to beat a jockeying defender; true if the carrier kept the ball. */
   bool attemptTakeOn(MatchPlayer& carrier, MatchPlayer& defender);
+  // Contest halves: what one player's body is worth in a duel, in the
+  // duel's own units (see match_engine_contests_plan.md); the contest adds
+  // them up, rolls once and plays the outcome. `terms`, when given, receives
+  // the half's named parts, each counted positive.
+  /** Take-on, carrier: success chance points from his Dribbling and Pace. */
+  float takeOnMake(const MatchPlayer& carrier, ScoreBreakdown* terms) const;
+  /** Take-on, defender: success chance points he takes away. */
+  float takeOnResist(const MatchPlayer& defender, ScoreBreakdown* terms) const;
+  /** Tackle, tackler: win chance points (MatchRules::tackleMake). */
+  float tackleMake(const MatchPlayer& tackler, ScoreBreakdown* terms) const;
+  /** Tackle, carrier: win chance points he takes away
+   * (MatchRules::tackleResist). */
+  float tackleResist(const MatchPlayer& carrier, bool shielding,
+                     ScoreBreakdown* terms) const;
+  /** Tackle, tackler: foul propensity points from his technique
+   * (MatchRules::tackleTechnique). */
+  float tackleTechnique(const MatchPlayer& tackler,
+                        ScoreBreakdown* terms) const;
+  /** Aerial duel: a candidate's strength for a ball at this height (0 when
+   * he cannot reach it); the winner is drawn in proportion. */
+  float aerialStrength(const MatchPlayer& player, float ballHeightMetres) const;
+  /** A keeper coming for a high ball in his box: chance he holds it, with
+   * `crowding` opponents around the ball. */
+  float claimChance(const MatchPlayer& keeper, int crowding) const;
+  /** A defender beaten by a take-on is wrong-footed: the momentum he loses
+   * and how long before he can challenge again. */
+  void recoverFromTakeOn(MatchPlayer& defender);
   /** Swept first-touch resolution over the last ball sub-step. */
   void resolveLooseBall();
   void attemptTackle(MatchPlayer& carrier, MatchPlayer& defender, bool sliding);

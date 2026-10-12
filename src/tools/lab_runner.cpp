@@ -174,6 +174,16 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
   sample.penalties = stats.homePenalties + stats.awayPenalties;
   sample.substitutions = stats.homeSubstitutions + stats.awaySubstitutions;
   sample.injuries = stats.homeInjuries + stats.awayInjuries;
+  sample.take_ons = {stats.homeTakeOns, stats.awayTakeOns};
+  sample.take_ons_won = {stats.homeTakeOnsWon, stats.awayTakeOnsWon};
+  sample.tackle_duels = {stats.homeTackleAttempts, stats.awayTackleAttempts};
+  sample.tackle_duels_won = {stats.homeTackleDuelsWon,
+                             stats.awayTackleDuelsWon};
+  sample.keeper_claim_attempts = {stats.homeKeeperClaimAttempts,
+                                  stats.awayKeeperClaimAttempts};
+  sample.keeper_claims = {stats.homeKeeperClaims, stats.awayKeeperClaims};
+  sample.aerial_contested = stats.aerialDuelsContested;
+  sample.aerial_home_won = stats.homeAerialDuelsWon;
   sample.added_minutes = engine.getAddedMinutes(1) + engine.getAddedMinutes(2);
   sample.ball_in_play = static_cast<double>(stats.ballInPlayMinutes);
   sample.match_length = static_cast<double>(engine.getElapsedMatchMinutes());
@@ -623,6 +633,33 @@ std::map<std::string, Estimate> matchMetrics(
       perTeam([](const MatchSample& s) { return s.saves; });
   metrics["touches_per_team"] =
       perTeam([](const MatchSample& s) { return s.touches; });
+  // Contests by side: with different bodies home and away, each side's
+  // success rate shows how its body fares against the other's.
+  const auto bySide = [&](const char* name, auto successes, auto attempts)
+  {
+    for (const std::size_t side : {std::size_t{0}, std::size_t{1}})
+      metrics[std::string(name) + (side == 0 ? "_home" : "_away")] =
+          ratioEstimate(
+              column([&](const MatchSample& s) { return successes(s)[side]; }),
+              column([&](const MatchSample& s) { return attempts(s)[side]; }));
+  };
+  metrics["take_ons_per_team"] = perTeam(
+      [](const MatchSample& s) { return s.take_ons[0] + s.take_ons[1]; });
+  bySide(
+      "take_on_success",
+      [](const MatchSample& s) { return s.take_ons_won; },
+      [](const MatchSample& s) { return s.take_ons; });
+  bySide(
+      "tackle_duel_success",
+      [](const MatchSample& s) { return s.tackle_duels_won; },
+      [](const MatchSample& s) { return s.tackle_duels; });
+  metrics["aerial_home_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.aerial_home_won; }),
+      column([](const MatchSample& s) { return s.aerial_contested; }));
+  bySide(
+      "keeper_claim_success",
+      [](const MatchSample& s) { return s.keeper_claims; },
+      [](const MatchSample& s) { return s.keeper_claim_attempts; });
   metrics["high_intensity_per_outfielder_km"] = ratioEstimate(
       column([](const MatchSample& s)
              { return s.full_match_high_intensity / 1000.0; }),

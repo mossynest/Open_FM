@@ -2885,27 +2885,49 @@ float MatchEngine::dribbleExposureShare() const
                     1.0f);
 }
 
+// ---------------------------------------------------------------------------
+// Contests: each player's body gives its half (takeOnMake, tackleResist, ...
+// in the bodies); the contest settles them, rolls once and plays it out.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+/** Appends a half's terms to a duel's breakdown, negated for the half that
+ * counts against the chance. */
+void addHalf(ScoreBreakdown& into, const ScoreBreakdown& half, float sign)
+{
+  for (const ScoreTerm& term : half.terms)
+    into.add(term.name, term.source, sign * term.value);
+}
+}  // namespace
+
 bool MatchEngine::attemptTakeOn(MatchPlayer& carrier, MatchPlayer& defender)
 {
   using R = MatchTuning::Dribble;
   // A feint, a change of direction or a burst of pace against a jockeying
-  // defender: skill and pace against his defending decide it.
-  const float success = std::clamp(
-      R::TAKE_ON_BASE +
-          (carrier.dribbling - defender.defending +
-           (teamEdge(carrier.isHomeTeam) - teamEdge(defender.isHomeTeam)) *
-               MatchTuning::Rules::DUEL_EDGE_WEIGHT) *
-              R::TAKE_ON_SKILL +
-          (carrier.pace - defender.pace) * R::TAKE_ON_PACE -
-          // Play mode: a human defender jockeying is harder to beat.
-          (controlInput.jockey && isControlled(defender)
-               ? MatchTuning::Control::JOCKEY_TAKE_ON_PENALTY
-               : 0.0f) -
-          doubleUpPenalty(carrier, defender),
-      R::MIN_TAKE_ON, R::MAX_TAKE_ON);
+  // defender: the carrier's body against the defender's, plus the team edge,
+  // a human defender jockeying (Play mode) and a second man doubling up.
+  ScoreBreakdown makeTerms;
+  ScoreBreakdown resistTerms;
+  const bool detail = wantsDetail();
+  const float make = takeOnMake(carrier, detail ? &makeTerms : nullptr);
+  const float resist = takeOnResist(defender, detail ? &resistTerms : nullptr);
+  const float edge =
+      (teamEdge(carrier.isHomeTeam) - teamEdge(defender.isHomeTeam)) *
+      MatchTuning::Rules::DUEL_EDGE_WEIGHT * R::TAKE_ON_SKILL;
+  const float jockey = controlInput.jockey && isControlled(defender)
+                           ? MatchTuning::Control::JOCKEY_TAKE_ON_PENALTY
+                           : 0.0f;
+  const float doubleUp = doubleUpPenalty(carrier, defender);
+  const float success =
+      std::clamp(R::TAKE_ON_BASE + make - resist + edge - jockey - doubleUp,
+                 R::MIN_TAKE_ON, R::MAX_TAKE_ON);
   const float takeOnRoll = randomFloat(0.0f, 1.0f);
   const bool beaten = takeOnRoll < success;
-  if (wantsDetail())
+  ++(carrier.isHomeTeam ? stats.homeTakeOns : stats.awayTakeOns);
+  if (beaten)
+    ++(carrier.isHomeTeam ? stats.homeTakeOnsWon : stats.awayTakeOnsWon);
+  if (detail)
   {
     MatchDuelDetail duel;
     duel.kind = MatchDuelDetail::Kind::TAKE_ON;
@@ -2916,22 +2938,14 @@ bool MatchEngine::attemptTakeOn(MatchPlayer& carrier, MatchPlayer& defender)
     duel.probability = success;
     duel.roll = takeOnRoll;
     duel.chance.add("base", TermSource::SITUATION, R::TAKE_ON_BASE);
-    duel.chance.add("his Dribbling", TermSource::ATTRIBUTE,
-                    carrier.dribbling * R::TAKE_ON_SKILL);
-    duel.chance.add("defender's Defending", TermSource::ATTRIBUTE,
-                    -defender.defending * R::TAKE_ON_SKILL);
+    addHalf(duel.chance, makeTerms, 1.0f);
+    addHalf(duel.chance, resistTerms, -1.0f);
     duel.chance.add("team edge (home, numbers, talk)", TermSource::SITUATION,
-                    (teamEdge(carrier.isHomeTeam) -
-                     teamEdge(defender.isHomeTeam)) *
-                        MatchTuning::Rules::DUEL_EDGE_WEIGHT * R::TAKE_ON_SKILL);
-    duel.chance.add("Pace difference", TermSource::ATTRIBUTE,
-                    (carrier.pace - defender.pace) * R::TAKE_ON_PACE);
+                    edge);
     duel.chance.add("human defender jockeying", TermSource::SITUATION,
-                    controlInput.jockey && isControlled(defender)
-                        ? -MatchTuning::Control::JOCKEY_TAKE_ON_PENALTY
-                        : 0.0f);
+                    -jockey);
     duel.chance.add("doubled up on (order)", TermSource::INSTRUCTION,
-                    -doubleUpPenalty(carrier, defender));
+                    -doubleUp);
     if (const float clamp = duel.chance.residual(); std::abs(clamp) > 1e-6f)
       duel.chance.add("clamped to its range", TermSource::SITUATION, clamp);
     if (MatchRecorder* recorder = getRecorder())
@@ -2956,11 +2970,9 @@ bool MatchEngine::attemptTakeOn(MatchPlayer& carrier, MatchPlayer& defender)
     attemptTackle(carrier, defender, false);
     return ball.possessedBy == carrier.player;
   }
-  // Beaten: the defender is wrong-footed and the ball is pushed past him.
-  defender.tackleCooldown =
-      std::max(defender.tackleCooldown, R::BEATEN_SECONDS);
-  defender.velocity.x *= R::BEATEN_VELOCITY_RETAINED;
-  defender.velocity.y *= R::BEATEN_VELOCITY_RETAINED;
+  // Beaten: the defender is wrong-footed (his body) and the ball is pushed
+  // past him.
+  recoverFromTakeOn(defender);
   const Vector2F forward{carrier.isHomeTeam ? 1.0f : -1.0f, 0.0f};
   const Vector2F toDefender =
       metricDirection(carrier.position, defender.position);
@@ -3023,19 +3035,24 @@ void MatchEngine::attemptTackle(MatchPlayer& carrier, MatchPlayer& defender,
     ++stats.awayTackleAttempts;
   ++statsOf(defender).tacklesAttempted;
 
+  // The tackler's body against the carrier's; the rules settle the rest.
+  ScoreBreakdown makeTerms;
+  ScoreBreakdown resistTerms;
+  ScoreBreakdown techniqueTerms;
+  const bool detail = wantsDetail();
   MatchRules::TackleContext context;
-  context.defending =
-      defender.defending +
+  context.make = tackleMake(defender, detail ? &makeTerms : nullptr);
+  context.resist =
+      tackleResist(carrier, shielding, detail ? &resistTerms : nullptr);
+  context.technique =
+      tackleTechnique(defender, detail ? &techniqueTerms : nullptr);
+  context.defenderEdge =
       teamEdge(defender.isHomeTeam) * MatchTuning::Rules::DUEL_EDGE_WEIGHT;
-  context.dribbling =
-      carrier.dribbling +
+  context.carrierEdge =
       teamEdge(carrier.isHomeTeam) * MatchTuning::Rules::DUEL_EDGE_WEIGHT;
-  context.defenderPhysicality = defender.physicality;
-  context.carrierPhysicality = carrier.physicality;
   context.pressing = defenderStrategy.pressing;
   context.riskTaking = defenderStrategy.riskTaking;
   context.exposure = exposure;
-  context.shielding = shielding;
   context.sliding = sliding;
   context.fromBehind = fromBehind;
   context.inPenaltyArea = inPenaltyArea(carrier.position, defender.isHomeTeam);
@@ -3063,7 +3080,7 @@ void MatchEngine::attemptTackle(MatchPlayer& carrier, MatchPlayer& defender,
   const auto reportDetail = [&](float winRoll, float foulRoll,
                                 float foulThreshold)
   {
-    if (!wantsDetail()) return;
+    if (!detail) return;
     using D = MatchTuning::Defending;
     MatchDuelDetail duel;
     duel.kind = MatchDuelDetail::Kind::TACKLE;
@@ -3074,30 +3091,18 @@ void MatchEngine::attemptTackle(MatchPlayer& carrier, MatchPlayer& defender,
     duel.roll = winRoll;
     duel.foulThreshold = foulThreshold;
     duel.foulRoll = foulRoll;
-    const float defenderEdge =
-        teamEdge(defender.isHomeTeam) * MatchTuning::Rules::DUEL_EDGE_WEIGHT;
-    const float carrierEdge =
-        teamEdge(carrier.isHomeTeam) * MatchTuning::Rules::DUEL_EDGE_WEIGHT;
     ScoreBreakdown& win = duel.chance;
     win.total = winChance;
     win.add("base", TermSource::SITUATION, D::BASE_WIN_CHANCE);
-    win.add("his Defending", TermSource::ATTRIBUTE,
-            defender.defending * D::DEFENDING_WIN_BONUS);
-    win.add("carrier's Dribbling", TermSource::ATTRIBUTE,
-            -carrier.dribbling * D::DRIBBLING_WIN_PENALTY);
+    addHalf(win, makeTerms, 1.0f);
+    addHalf(win, resistTerms, -1.0f);
     win.add("team edge (home, numbers, talk)", TermSource::SITUATION,
-            defenderEdge * D::DEFENDING_WIN_BONUS -
-                carrierEdge * D::DRIBBLING_WIN_PENALTY);
-    win.add("Physicality difference", TermSource::ATTRIBUTE,
-            (defender.physicality - carrier.physicality) *
-                D::PHYSICALITY_DUEL_WEIGHT);
+            context.defenderEdge * D::DEFENDING_WIN_BONUS -
+                context.carrierEdge * D::DRIBBLING_WIN_PENALTY);
     win.add("pressing instruction", TermSource::INSTRUCTION,
             context.pressing * D::PRESSING_WIN_EFFECT);
     win.add("ball away from his feet", TermSource::SITUATION,
             std::clamp(exposure, 0.0f, 1.0f) * D::EXPOSURE_WIN_BONUS);
-    win.add("carrier shielding (his Physicality)", TermSource::ATTRIBUTE,
-            shielding ? -carrier.physicality * D::SHIELD_PHYSICALITY_PENALTY
-                      : 0.0f);
     win.add("sliding", TermSource::SITUATION,
             sliding ? -D::SLIDE_WIN_PENALTY : 0.0f);
     win.add("from behind", TermSource::SITUATION,
@@ -3120,8 +3125,10 @@ void MatchEngine::attemptTackle(MatchPlayer& carrier, MatchPlayer& defender,
          context.riskTaking * D::RISK_FOUL_BONUS);
     part("pressing instruction", TermSource::INSTRUCTION,
          context.pressing * D::PRESSING_FOUL_BONUS);
-    part("tackling technique (Defending)", TermSource::ATTRIBUTE,
-         (1.0f - context.defending) * D::TECHNIQUE_FOUL_BONUS);
+    for (const ScoreTerm& term : techniqueTerms.terms)
+      part(term.name, term.source, term.value);
+    part("team edge (home, numbers, talk)", TermSource::SITUATION,
+         -context.defenderEdge * D::TECHNIQUE_FOUL_BONUS);
     const auto factor = [&](const char* name, TermSource source, float by)
     {
       foul.add(name, source, product * (by - 1.0f));
@@ -3149,6 +3156,8 @@ void MatchEngine::attemptTackle(MatchPlayer& carrier, MatchPlayer& defender,
   const float winRoll = randomFloat(0.0f, 1.0f);
   if (winRoll < winChance)
   {
+    ++(defender.isHomeTeam ? stats.homeTackleDuelsWon
+                           : stats.awayTackleDuelsWon);
     // Even a challenge that reaches the ball can be late or through the man.
     const float foulRoll = incidentRoll();
     reportDetail(winRoll, foulRoll,
@@ -4382,17 +4391,15 @@ bool MatchEngine::resolveAerialContest()
         ++crowding;
       }
     }
-    const float claimChance = std::clamp(
-        MatchTuning::Aerial::BASE_CLAIM_CHANCE +
-            player.goalkeeping * MatchTuning::Aerial::SKILL_CLAIM_BONUS -
-            static_cast<float>(crowding) *
-                MatchTuning::Aerial::CROWDING_PENALTY,
-        0.05f, 0.97f);
+    const float holdChance = claimChance(player, crowding);
     GoalkeeperControl& control = keepers[player.isHomeTeam ? 0 : 1];
     control.state = GoalkeeperState::CLAIM;
     control.timer = 0.0f;
-    if (randomFloat(0.0f, 1.0f) < claimChance)
+    ++(player.isHomeTeam ? stats.homeKeeperClaimAttempts
+                         : stats.awayKeeperClaimAttempts);
+    if (randomFloat(0.0f, 1.0f) < holdChance)
     {
+      ++(player.isHomeTeam ? stats.homeKeeperClaims : stats.awayKeeperClaims);
       recordPassCompletion(player);
       setPossession(player);
       player.actionCooldown =
@@ -4436,8 +4443,7 @@ bool MatchEngine::resolveAerialContest()
     const bool defendingDelivery =
         ball.isPass && ball.passByHome != player.isHomeTeam;
     const float strength =
-        MatchRules::aerialDuelStrength(player.heightMetres, player.physicality,
-                                       heightMetres) *
+        aerialStrength(player, heightMetres) *
         (defendingDelivery ? MatchTuning::Aerial::DEFENDER_DUEL_ADVANTAGE
                            : 1.0f);
     if (strength <= 0.0f) continue;
@@ -4472,6 +4478,7 @@ bool MatchEngine::resolveAerialContest()
       else if (candidate.isHomeTeam != winner.isHomeTeam)
         ++statsOf(candidate).aerialDuelsLost;
     }
+    ++stats.aerialDuelsContested;
     if (winner.isHomeTeam)
       ++stats.homeAerialDuelsWon;
     else

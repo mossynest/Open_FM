@@ -36,7 +36,7 @@ std::array<BodyId, 2>& sandboxBodies()
 
 HandshakeId& sandboxHandshake()
 {
-  static HandshakeId handshake = HandshakeId::AARDVARK;
+  static HandshakeId handshake = HandshakeId::BINTURONG;
   return handshake;
 }
 

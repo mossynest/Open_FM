@@ -83,4 +83,14 @@
   /** Acceleration, braking, lateral limit, position and facing update. */
   void stepKinematicsAardvark(MatchPlayer& player, Vector2F desired, float desiredSpeed,
                       float topSpeed, float fatigue, float dt);
+  // Contest halves (see takeOnMake and the others in match_engine.h).
+  float takeOnMakeAardvark(const MatchPlayer& carrier, ScoreBreakdown* terms) const;
+  float takeOnResistAardvark(const MatchPlayer& defender, ScoreBreakdown* terms) const;
+  float tackleMakeAardvark(const MatchPlayer& tackler, ScoreBreakdown* terms) const;
+  float tackleResistAardvark(const MatchPlayer& carrier, bool shielding,
+                             ScoreBreakdown* terms) const;
+  float tackleTechniqueAardvark(const MatchPlayer& tackler, ScoreBreakdown* terms) const;
+  float aerialStrengthAardvark(const MatchPlayer& player, float ballHeightMetres) const;
+  float claimChanceAardvark(const MatchPlayer& keeper, int crowding) const;
+  void recoverFromTakeOnAardvark(MatchPlayer& defender);
 // clang-format on
