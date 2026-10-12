@@ -286,6 +286,113 @@ struct TouchResult
 };
 
 /**
+ * Everything that differs between kinds of contact with the ball (contact
+ * plan §3): the jobs' sizes, what each condition adds to each job's
+ * difficulty, and how each job goes wrong. A first touch and a dribble
+ * touch share the touch profile (the touch knobs).
+ */
+struct ContactProfile
+{
+  /** A condition's weights: what it adds to the angle and weight jobs. */
+  struct Weights
+  {
+    float angle = 0.0f;
+    float weight = 0.0f;
+  };
+  // Difficulty: the jobs' sizes, then the conditions.
+  float paceChangeWeight = 0.0f;
+  float turnAngle = 0.0f;
+  float turnOutward = 1.0f;
+  float turnInward = 1.0f;
+  Weights incomingPace;
+  Weights fromBehind;
+  Weights ownSpeed;
+  Weights stretch;
+  Weights weakerFoot;
+  Weights offGround;
+  Weights surprise;
+  Weights pressure;
+  // How the conditions are measured.
+  float referenceSpeed = 25.0f;
+  float pressureRadius = 3.0f;
+  float looseBallSurprise = 0.0f;
+  float comfortGap = 0.0f;
+  // Technique: how often each job goes wrong, and how badly.
+  float skillReduction = 0.0f;
+  float fatigueErrorGain = 0.0f;
+  float shownWeakFootGain = 0.0f;
+  float angleFailBase = 0.0f;
+  float angleFailRange = 0.0f;
+  float weightFailBase = 0.0f;
+  float weightFailRange = 0.0f;
+  float angleMissBase = 0.0f;
+  float angleMissRange = 0.0f;
+  float weightMissBase = 0.0f;
+  float weightMissRange = 0.0f;
+  /** Failures that go the usual way (under-turned; heavy). */
+  float underTurnShare = 1.0f;
+  float heavyShare = 1.0f;
+  float angleJitter = 0.0f;
+  float weightJitter = 0.0f;
+  /** A ball sent back the way it came leaves at most this share of its
+   * incoming pace. */
+  float reboundShare = 1.0f;
+};
+
+enum class TermSource : std::uint8_t;
+
+/** One condition of a contact: its value (0-1) and what it adds to each
+ * job's difficulty (value x weight). */
+struct ContactFactor
+{
+  const char* name = "";
+  TermSource source{};
+  float value = 0.0f;
+  float angleWeight = 0.0f;
+  float weightWeight = 0.0f;
+};
+
+/** How hard a contact is, before it is carried out (contact plan §2): the
+ * line it came on, the two jobs, the conditions and each job's
+ * difficulty. Reading it draws nothing at random. */
+struct ContactAssessment
+{
+  /** What he means to do: the direction (metric, unit) and pace (m/s). */
+  Vector2F aim{0.0f, 0.0f};
+  float intendedSpeed = 0.0f;
+  /** The ball's pace as it reaches him, whether it is moving, and whether
+   * he sends it back the way it came. */
+  float incomingSpeed = 0.0f;
+  bool moving = false;
+  bool rebound = false;
+  /** The reference line (metric, unit). */
+  Vector2F line{0.0f, 0.0f};
+  /** The jobs: the turn off the line (radians, + anticlockwise), whether
+   * outward, and the pace change (m/s). */
+  float turn = 0.0f;
+  bool outward = false;
+  float paceChange = 0.0f;
+  std::array<ContactFactor, 10> factors{};
+  float angleDifficulty = 0.0f;
+  float weightDifficulty = 0.0f;
+};
+
+/** How a contact came off: the ball's velocity off it (m/s), each job's
+ * chance of going wrong, whether it did, and the result against the
+ * intent. */
+struct ContactOutcome
+{
+  Vector2F velocity{0.0f, 0.0f};
+  float angleFailChance = 0.0f;
+  float weightFailChance = 0.0f;
+  bool angleFailed = false;
+  bool weightFailed = false;
+  /** The turn he achieved (radians) and the pace (m/s). */
+  float achievedTurn = 0.0f;
+  float actualSpeed = 0.0f;
+};
+
+/**
  * The ball.`position` is normalised; `z` is the height in length units
  * (z * MatchTuning::Units::BALL_Z_METRES = metres) for renderers. Velocities
  * are in m/s and `curve` is the heading rotation rate in rad/s.

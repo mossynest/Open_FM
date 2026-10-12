@@ -36,6 +36,23 @@
   /** Moves the dribbled ball with its carrier; false if a heavy touch lost it.
    */
   bool updateDribbleBinturong(MatchPlayer& carrier, float dt);
+  /** The touch knobs as a contact profile (first and dribble touches). */
+  ContactProfile touchProfileBinturong() const;
+  /** How hard a contact is (contact plan §2): meeting the ball at `moment`
+   * to send it along `aim` (metric, unit) at `intendedSpeed`. `ownBall`: a
+   * ball he expected (his own, or one he chose to strike). No random draws,
+   * so the brain can read it too. */
+  ContactAssessment assessContactBinturong(const MatchPlayer& player,
+                                           const ContactProfile& profile,
+                                           Vector2F aim, float intendedSpeed,
+                                           const TouchMoment& moment,
+                                           bool ownBall) const;
+  /** Carries an assessed contact out with `skill` (0-1): each job's chance
+   * of going wrong, how badly, and the ball off it. */
+  ContactOutcome carryOutContactBinturong(const MatchPlayer& player,
+                                          const ContactProfile& profile,
+                                          const ContactAssessment& assessment,
+                                          float skill);
   /** His first touch, trying to carry out `intent` where he meets the ball:
    * how hard it is decides the spread of its angle and weight errors.
    * `ownBall`: a dribble touch on his own claimed ball. */
