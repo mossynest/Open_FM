@@ -522,6 +522,34 @@ void DebugInspector::renderDuelDetail(const SandboxRecorder& recorder,
       ImGui::PopID();
       continue;
     }
+    if (duel.kind == MatchDuelDetail::Kind::STRIKE)
+    {
+      // Measured only (contact plan step 2): the difficulties, no roll.
+      constexpr float DEGREES = 180.0f / std::numbers::pi_v<float>;
+      const std::string label = std::format(
+          "{}  {}  {}  ·  turn {:.0f}° {}  ·  pace {:+.1f} m/s  ·  "
+          "difficulty angle {:.2f}, weight {:.2f} (measured)",
+          clock(at->minute),
+          STRIKE_KIND_NAMES[static_cast<std::size_t>(duel.strike)],
+          recorder.playerName(duel.player), duel.turn * DEGREES,
+          duel.outward ? "out" : "in", duel.paceChange, duel.chance.total,
+          duel.foul.total);
+      ImGui::PushID(shown);
+      if (ImGui::TreeNodeEx("strike", ImGuiTreeNodeFlags_SpanAvailWidth, "%s",
+                            label.c_str()))
+      {
+        ImGui::TextDisabled(
+            "The contact model reads this strike but does not carry it out "
+            "yet: provisional weights, no effect on the ball.");
+        ImGui::TextDisabled("Angle difficulty:");
+        renderBreakdown(duel.chance, "angle");
+        ImGui::TextDisabled("Weight difficulty:");
+        renderBreakdown(duel.foul, "weight");
+        ImGui::TreePop();
+      }
+      ImGui::PopID();
+      continue;
+    }
     const char* kind = duel.kind == MatchDuelDetail::Kind::ENGAGE ? "Goes in"
                        : duel.kind == MatchDuelDetail::Kind::TAKE_ON
                            ? "Take-on"

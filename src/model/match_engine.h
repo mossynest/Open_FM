@@ -312,6 +312,9 @@ struct ContactProfile
   Weights offGround;
   Weights surprise;
   Weights pressure;
+  /** Sending it across or behind his body (0 for the touch, whose outward
+   * turn covers it). */
+  Weights acrossBody;
   // How the conditions are measured.
   float referenceSpeed = 25.0f;
   float pressureRadius = 3.0f;
@@ -340,6 +343,16 @@ struct ContactProfile
 };
 
 enum class TermSource : std::uint8_t;
+
+/** A contact's conditions, in ContactAssessment::factors order, with short
+ * labels for tables. */
+inline constexpr std::size_t CONTACT_FACTOR_COUNT = 11;
+inline constexpr std::array<std::string_view, CONTACT_FACTOR_COUNT>
+    CONTACT_FACTOR_LABELS = {
+        "Pace change",     "Turn off its line",  "Incoming pace",
+        "From behind him", "His own speed",      "Stretching",
+        "Weaker foot",     "Off the ground",     "Surprise",
+        "Pressure",        "Across or behind his body"};
 
 /** One condition of a contact: its value (0-1) and what it adds to each
  * job's difficulty (value x weight). */
@@ -372,7 +385,7 @@ struct ContactAssessment
   float turn = 0.0f;
   bool outward = false;
   float paceChange = 0.0f;
-  std::array<ContactFactor, 10> factors{};
+  std::array<ContactFactor, CONTACT_FACTOR_COUNT> factors{};
   float angleDifficulty = 0.0f;
   float weightDifficulty = 0.0f;
 };
@@ -380,6 +393,35 @@ struct ContactAssessment
 /** How a contact came off: the ball's velocity off it (m/s), each job's
  * chance of going wrong, whether it did, and the result against the
  * intent. */
+/** The kinds of strike the contact model measures (contact plan §3). */
+enum class StrikeKind : std::uint8_t
+{
+  GROUND_PASS,
+  LOFTED_PASS,
+  CROSS,
+  SHOT,
+};
+inline constexpr std::size_t STRIKE_KIND_COUNT = 4;
+inline constexpr std::array<std::string_view, STRIKE_KIND_COUNT>
+    STRIKE_KIND_NAMES = {"Ground pass", "Lofted pass", "Cross", "Shot"};
+
+/** Open-play strikes read by the contact model without changing them
+ * (contact plan step 2), by kind: how many, and sums of each job's
+ * difficulty and of each condition. */
+struct StrikeContactStats
+{
+  struct ByKind
+  {
+    std::uint32_t strikes = 0;
+    double angleDifficulty = 0.0;
+    double weightDifficulty = 0.0;
+    std::array<double, CONTACT_FACTOR_COUNT> factorSum{};
+    /** Strikes with the condition at half or more. */
+    std::array<std::uint32_t, CONTACT_FACTOR_COUNT> factorMarked{};
+  };
+  std::array<ByKind, STRIKE_KIND_COUNT> byKind{};
+};
+
 struct ContactOutcome
 {
   Vector2F velocity{0.0f, 0.0f};
@@ -1163,6 +1205,9 @@ class MatchEngine
   {
     return movementJitter;
   }
+  /** Open-play strikes by Binturong bodies as the contact model reads them
+   * (contact plan step 2; no effect on the strikes). */
+  const StrikeContactStats& getStrikeContacts() const { return strikeContacts; }
   const PlayerMatchStats* findPlayerStats(PlayerID playerId) const;
   /**
    * Touch maps, pass network, pressures and the like for the match report
@@ -1604,6 +1649,8 @@ class MatchEngine
   std::uint32_t dribbleTouches = 0;
   double dribbleContactGapSum = 0.0;
   std::uint32_t dribbleFailedTouches = 0;
+  /** Open-play strikes read by the contact model (observed only). */
+  StrikeContactStats strikeContacts;
   FirstTouchKnobs touchKnobs;
   std::array<LoadProfileStats, 2> loadProfile{};
   struct JitterTrack

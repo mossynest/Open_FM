@@ -47,6 +47,12 @@
                                            Vector2F aim, float intendedSpeed,
                                            const TouchMoment& moment,
                                            bool ownBall) const;
+  /** A strike's contact profile (provisional, contact plan §3). */
+  ContactProfile strikeProfileBinturong(StrikeKind kind) const;
+  /** Reads a strike as a contact (contact plan step 2) and tallies it,
+   * without changing it: `aim` metric unit, `intendedSpeed` m/s. */
+  void measureStrikeBinturong(const MatchPlayer& striker, StrikeKind kind,
+                              Vector2F aim, float intendedSpeed);
   /** Carries an assessed contact out with `skill` (0-1): each job's chance
    * of going wrong, how badly, and the ball off it. */
   ContactOutcome carryOutContactBinturong(const MatchPlayer& player,

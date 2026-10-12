@@ -288,6 +288,7 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
     total.turnSamples += side.turnSamples;
     total.sharpTurns += side.sharpTurns;
   }
+  sample.strike_contacts = engine.getStrikeContacts();
   sample.first_half_distance =
       sample.full_match_distance - sample.second_half_distance;
   sample.first_half_minutes = firstHalf;
@@ -977,6 +978,62 @@ std::vector<TextTable> matchTables(std::span<const MatchSample> samples)
                            info.unit)});
   }
   tables.push_back(std::move(derived));
+
+  // Strikes as the contact model reads them (contact plan step 2): how
+  // often each condition comes up, before it changes anything.
+  StrikeContactStats strikes;
+  for (const MatchSample* sample : valid)
+    for (std::size_t kind = 0; kind < STRIKE_KIND_COUNT; ++kind)
+    {
+      const auto& from = sample->strike_contacts.byKind[kind];
+      auto& to = strikes.byKind[kind];
+      to.strikes += from.strikes;
+      to.angleDifficulty += from.angleDifficulty;
+      to.weightDifficulty += from.weightDifficulty;
+      for (std::size_t index = 0; index < CONTACT_FACTOR_COUNT; ++index)
+      {
+        to.factorSum[index] += from.factorSum[index];
+        to.factorMarked[index] += from.factorMarked[index];
+      }
+    }
+  std::vector<std::string> strikeHeader{"Condition"};
+  for (const std::string_view name : STRIKE_KIND_NAMES)
+    strikeHeader.emplace_back(name);
+  TextTable strikeTable{
+      "Strike contact, open play (Binturong bodies; measured, no effect yet): "
+      "mean value, and in brackets the share at half or more",
+      std::move(strikeHeader),
+      {}};
+  const auto strikeRow = [&](std::string label, auto cell)
+  {
+    std::vector<std::string> row{std::move(label)};
+    for (const auto& kind : strikes.byKind)
+      row.push_back(kind.strikes > 0 ? cell(kind) : std::string("-"));
+    strikeTable.rows.push_back(std::move(row));
+  };
+  strikeRow("Strikes per team",
+            [&](const StrikeContactStats::ByKind& kind)
+            {
+              return std::format("{:.1f}", static_cast<double>(kind.strikes) /
+                                               (2.0 * static_cast<double>(n)));
+            });
+  strikeRow("Angle difficulty (provisional)",
+            [](const StrikeContactStats::ByKind& kind)
+            { return std::format("{:.3f}", kind.angleDifficulty / kind.strikes); });
+  strikeRow("Weight difficulty (provisional)",
+            [](const StrikeContactStats::ByKind& kind)
+            {
+              return std::format("{:.3f}", kind.weightDifficulty / kind.strikes);
+            });
+  for (std::size_t index = 0; index < CONTACT_FACTOR_COUNT; ++index)
+    strikeRow(std::string(CONTACT_FACTOR_LABELS[index]),
+              [index](const StrikeContactStats::ByKind& kind)
+              {
+                return std::format(
+                    "{:.3f} ({})", kind.factorSum[index] / kind.strikes,
+                    percent(share(kind.factorMarked[index], kind.strikes)));
+              });
+  tables.push_back(std::move(strikeTable));
   return tables;
 }
 

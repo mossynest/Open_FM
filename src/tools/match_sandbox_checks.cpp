@@ -1090,6 +1090,8 @@ int runSandboxChecks(GameController& controller, int matches)
           check(at.detail.foul, "foul propensity");
         if (at.detail.kind == MatchDuelDetail::Kind::FIRST_TOUCH)
           check(at.detail.foul, "first-touch weight difficulty");
+        if (at.detail.kind == MatchDuelDetail::Kind::STRIKE)
+          check(at.detail.foul, "strike weight difficulty");
       }
     }
     rewindExact = diverged == 0;

@@ -739,6 +739,94 @@ ContactProfile MatchEngine::touchProfileBinturong() const
   return profile;
 }
 
+ContactProfile MatchEngine::strikeProfileBinturong(StrikeKind kind) const
+{
+  // Provisional (contact plan §3): strikes are only measured so far.
+  using S = MatchTuning::Strike;
+  const auto both = [](float level) { return ContactProfile::Weights{level, level}; };
+  const bool groundPass = kind == StrikeKind::GROUND_PASS;
+  const bool shot = kind == StrikeKind::SHOT;
+  ContactProfile profile;
+  profile.paceChangeWeight = groundPass ? S::GROUND_PASS_PACE_CHANGE
+                             : shot     ? S::SHOT_PACE_CHANGE
+                                        : S::LOFTED_PACE_CHANGE;
+  profile.turnAngle = S::TURN_ANGLE;
+  profile.incomingPace = both(shot ? S::HIGH : S::MEDIUM);
+  profile.ownSpeed = both(groundPass ? S::LOW : S::MEDIUM);
+  profile.stretch = both(groundPass ? S::MEDIUM : S::HIGH);
+  profile.weakerFoot = both(groundPass ? S::MEDIUM : S::HIGH);
+  profile.offGround = both(shot ? S::VERY_HIGH : S::HIGH);
+  profile.pressure = both(shot ? S::HIGH : S::MEDIUM);
+  profile.acrossBody = both(groundPass ? S::MEDIUM : S::HIGH);
+  // The touch's measures, but pressure over the passer's or shooter's own
+  // radius (as their execution errors read it).
+  profile.referenceSpeed = touchKnobs[TouchKnob::REFERENCE_SPEED];
+  profile.comfortGap = touchKnobs[TouchKnob::COMFORT_GAP];
+  profile.pressureRadius =
+      shot ? MatchTuning::Shooting::PRESSURE_RADIUS_METRES
+           : MatchTuning::Passing::PASS_PRESSURE_RADIUS_METRES;
+  return profile;
+}
+
+void MatchEngine::measureStrikeBinturong(const MatchPlayer& striker,
+                                         StrikeKind kind, Vector2F aim,
+                                         float intendedSpeed)
+{
+  // Read the strike as a contact where the ball lies, changing nothing
+  // (contact plan step 2): no random draws, so the match plays as before.
+  TouchMoment moment;
+  moment.contactPoint = ball.position;
+  moment.gap = distance(striker.position, ball.position);
+  moment.reach = MatchTuning::Dribble::KICK_REACH_METRES;
+  moment.height = ball.z * MatchTuning::Units::BALL_Z_METRES;
+  const ContactProfile profile = strikeProfileBinturong(kind);
+  const ContactAssessment contact = assessContactBinturong(
+      striker, profile, aim, intendedSpeed, moment, true);
+
+  // Open play only: a dead ball is struck from a standstill.
+  if (state == MatchState::PLAYING)
+  {
+    StrikeContactStats::ByKind& tally =
+        strikeContacts.byKind[static_cast<std::size_t>(kind)];
+    ++tally.strikes;
+    tally.angleDifficulty += contact.angleDifficulty;
+    tally.weightDifficulty += contact.weightDifficulty;
+    for (std::size_t index = 0; index < CONTACT_FACTOR_COUNT; ++index)
+    {
+      const float value = contact.factors[index].value;
+      tally.factorSum[index] += value;
+      if (value >= 0.5f) ++tally.factorMarked[index];
+    }
+  }
+
+  if (!wantsDetail()) return;
+  MatchDuelDetail duel;
+  duel.kind = MatchDuelDetail::Kind::STRIKE;
+  duel.strike = kind;
+  duel.player = striker.player ? striker.player->getId() : 0;
+  duel.homeTeam = striker.isHomeTeam;
+  duel.chance.total = contact.angleDifficulty;
+  duel.foul.total = contact.weightDifficulty;
+  for (const ContactFactor& factor : contact.factors)
+  {
+    if (factor.angleWeight != 0.0f)
+      duel.chance.add(factor.name, factor.source,
+                      factor.value * factor.angleWeight);
+    if (factor.weightWeight != 0.0f)
+      duel.foul.add(factor.name, factor.source,
+                    factor.value * factor.weightWeight);
+  }
+  for (ScoreBreakdown* breakdown : {&duel.chance, &duel.foul})
+    if (const float clamp = breakdown->residual(); std::abs(clamp) > 1e-6f)
+      breakdown->add("clamped to its range", TermSource::SITUATION, clamp);
+  duel.intendedSpeed = intendedSpeed;
+  duel.turn = std::abs(contact.turn);
+  duel.outward = contact.outward && std::abs(contact.turn) > EPSILON;
+  duel.paceChange = contact.paceChange;
+  if (MatchRecorder* recorder = getRecorder())
+    recorder->onDuelDetail(*this, duel);
+}
+
 ContactAssessment MatchEngine::assessContactBinturong(
     const MatchPlayer& player, const ContactProfile& profile, Vector2F aim,
     float intendedSpeed, const TouchMoment& moment, bool ownBall) const
@@ -837,6 +925,11 @@ ContactAssessment MatchEngine::assessContactBinturong(
       {"pressure", TermSource::SITUATION,
        clamp01(1.0f - nearestOpponentDistance(player) / profile.pressureRadius),
        profile.pressure.angle, profile.pressure.weight},
+      // Where he sends it against where he faces: 0 straight ahead, a half
+      // square across him, 1 straight behind.
+      {"across or behind his body", TermSource::SITUATION,
+       clamp01((1.0f - (aim.x * facing.x + aim.y * facing.y)) * 0.5f),
+       profile.acrossBody.angle, profile.acrossBody.weight},
   }};
   float angleSum = 0.0f;
   float weightSum = 0.0f;
@@ -1065,6 +1158,14 @@ MatchEngine::Kick MatchEngine::kickPassBinturong(const MatchPlayer& passer,
   kick.target = {std::clamp(target.x + miss.x, 0.0f, 1.0f),
                  std::clamp(target.y + miss.y, 0.0f, 1.0f)};
   const float travel = distance(origin, kick.target);
+  // The contact model reads the kick he means (contact plan step 2): not a
+  // throw-in, nor a keeper's ball from his hands.
+  const bool kicked =
+      state != MatchState::THROW_IN &&
+      !(passer.isGoalkeeper && inPenaltyArea(passer.position, passer.isHomeTeam));
+  const StrikeKind strikeKind = !lofted    ? StrikeKind::GROUND_PASS
+                                : delivery ? StrikeKind::CROSS
+                                           : StrikeKind::LOFTED_PASS;
   if (lofted)
   {
     // Lofted balls are launched so they drop at the target: long passes at
@@ -1081,6 +1182,9 @@ MatchEngine::Kick MatchEngine::kickPassBinturong(const MatchPlayer& passer,
                  MatchTuning::Passing::MAX_LOFTED_SPEED);
     kick.verticalSpeed =
         loftVerticalSpeed(travel, kick.speed, 0.0f, arrivalMetres);
+    if (kicked)
+      measureStrikeBinturong(passer, strikeKind, direct,
+                             std::hypot(kick.speed, kick.verticalSpeed));
     return kick;
   }
   // Ground passes are weighted to arrive at a controllable pace; longer
@@ -1095,6 +1199,7 @@ MatchEngine::Kick MatchEngine::kickPassBinturong(const MatchPlayer& passer,
   kick.curve = randomFloat(-MatchTuning::Passing::MAX_CURVE,
                            MatchTuning::Passing::MAX_CURVE) *
                (MatchTuning::Passing::CURVE_SKILL_BASE + passer.passing);
+  if (kicked) measureStrikeBinturong(passer, strikeKind, direct, kick.speed);
   return kick;
 }
 
@@ -1163,6 +1268,17 @@ MatchEngine::ShotStrike MatchEngine::strikeShotBodyBinturong(
        shooter.physicality * MatchTuning::Shooting::POWER_SPEED_BONUS) *
       randomFloat(MatchTuning::Shooting::MIN_SPEED_VARIATION, 1.0f) *
       (header ? MatchTuning::Aerial::HEADER_SPEED_SCALE : 1.0f) * powerScale;
+  // The contact model reads the shot he means, at the spot he picked
+  // (contact plan step 2). Headers come later.
+  if (!header)
+  {
+    const Vector2F aimPoint{
+        shooter.isHomeTeam ? 1.0f : 0.0f,
+        MatchTuning::Pitch::CENTRE + aimY / MatchTuning::Pitch::WIDTH_METRES};
+    measureStrikeBinturong(shooter, StrikeKind::SHOT,
+                           metricDirection(ball.position, aimPoint),
+                           strike.speed);
+  }
   return strike;
 }
 

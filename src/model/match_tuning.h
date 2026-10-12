@@ -359,6 +359,27 @@ struct MatchTuning final
   };
 
   /**
+   * Strikes read by the contact model (Binturong body; Notes and plans/
+   * match_engine_contact_plan.md, step 2). Provisional: the strikes are
+   * only measured, so these weights change nothing yet. The levels are on
+   * the touch's condition scale; each condition adds its level to both
+   * jobs.
+   */
+  struct Strike final
+  {
+    static constexpr float LOW = 0.05f;
+    static constexpr float MEDIUM = 0.10f;
+    static constexpr float HIGH = 0.20f;
+    static constexpr float VERY_HIGH = 0.30f;
+    /** The jobs' sizes: power demand (the pace change) by kind, and the
+     * turn off the ball's line. */
+    static constexpr float GROUND_PASS_PACE_CHANGE = 0.2f;
+    static constexpr float LOFTED_PACE_CHANGE = 0.6f;
+    static constexpr float SHOT_PACE_CHANGE = 0.6f;
+    static constexpr float TURN_ANGLE = 0.6f;
+  };
+
+  /**
    * Dribbling: a carrier on the move pushes the ball 0.6-3 m ahead and
    * catches it up at the next touch, so the ball is exposed between touches
    * and a heavy touch can lose it. Defenders jockey goal-side and time their

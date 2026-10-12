@@ -132,6 +132,9 @@ struct MatchSample
   int full_match_sprints = 0;
   /** Movement jitter of both sides together (MatchEngine::getMovementJitter). */
   MovementJitterStats jitter;
+  /** Open-play strikes as the contact model reads them (Binturong bodies;
+   * MatchEngine::getStrikeContacts). */
+  StrikeContactStats strike_contacts;
   /** Derived stats summed over every player who took part, and how many. */
   std::array<double, DERIVED_STAT_COUNT> derived_sum{};
   int derived_players = 0;
