@@ -4648,7 +4648,18 @@ void MatchEngine::headBall(MatchPlayer& header)
   if (play.kind == HeaderPlay::Kind::BEHIND)
   {
     ++statsOf(header).clearances;
-    clearBehind(header, true);
+    if (play.speed > 0.0f)
+    {
+      // Headed out of play the way he chose.
+      const float height = ball.z;
+      const Kick kick = strikeAs(header, StrikeKind::HEADER, play.aim,
+                                 play.speed, play.lift);
+      launchBall(header, strikePoint(header), kick.target, kick.speed,
+                 kick.verticalSpeed, 0.0f);
+      ball.z = height;
+    }
+    else
+      clearBehind(header, true);
   }
   else if (play.kind == HeaderPlay::Kind::CLEAR)
   {

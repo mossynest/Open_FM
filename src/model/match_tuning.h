@@ -48,6 +48,7 @@ struct MatchTuning final
     static constexpr float LEFT_PENALTY_AREA_EDGE = 0.157f;
     static constexpr float RIGHT_PENALTY_AREA_EDGE = 0.843f;
     static constexpr float PENALTY_AREA_HALF_WIDTH_METRES = 20.16f;
+    static constexpr float GOAL_AREA_HALF_WIDTH_METRES = 9.16f;
     static constexpr float RESTART_INSET = 0.01f;
     static constexpr float RESTART_LONGITUDINAL_MARGIN = 0.04f;
     static constexpr float HOME_KICKOFF_X = 0.49f;
@@ -1389,6 +1390,12 @@ struct MatchTuning final
     static constexpr float MIN_CLEARANCE_SHARE = 0.45f;
     static constexpr float HEADER_PASS_SPEED = 10.0f;
     static constexpr float HEADER_LIFT = 5.0f;
+    // Headed out of play (Binturong brain), always as hard as he can: high
+    // over a line, or steeply up over the bar (radians above the ground),
+    // which it must clear by a margin (untuned).
+    static constexpr float HEADER_OUT_LIFT = 8.0f;
+    static constexpr float HEADER_OVER_ELEVATION = 0.9f;
+    static constexpr float HEADER_OVER_BAR_MARGIN_METRES = 1.0f;
     static constexpr float HEADER_ACCURACY_PENALTY = 0.96f;
     /** Share of physicality (against shooting) in heading precision. */
     static constexpr float HEADING_PHYSICAL_SHARE = 0.3f;

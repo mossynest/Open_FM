@@ -62,6 +62,10 @@
   /** Whether a wide forward in the final third is cutting inside toward
    * the box rather than going down the line to cross. */
   bool cutsInsideBinturong(const MatchPlayer& player) const;
+  /** Heading it out of play the safest way: hard and high over the nearest
+   * touchline from wide of the six-yard box; in line with it, up and over
+   * the bar or glanced on towards the corner, whichever is easier. */
+  HeaderPlay chooseHeaderOutBinturong(const MatchPlayer& header) const;
   /** Where the carrier heads with the ball: forward, away from the nearest
    * opponent, inside or down his lane. */
   Vector2F carryTargetBinturong(const MatchPlayer& player) const;

@@ -932,12 +932,12 @@ MatchEngine::Kick MatchEngine::strikeContactBinturong(
       along > EPSILON
           ? Vector2F{outcome.velocity.x / along, outcome.velocity.y / along}
           : aim;
-  // The target only gives the direction: as far away as the one he meant.
+  // The target only gives the direction: as far away as the one he meant,
+  // and not pulled back onto the pitch, which would bend it.
   const float metres = std::max(distance(origin, target), 1.0f);
   const Vector2F reach = toPitch({heading.x * metres, heading.y * metres});
   Kick kick;
-  kick.target = {std::clamp(origin.x + reach.x, 0.0f, 1.0f),
-                 std::clamp(origin.y + reach.y, 0.0f, 1.0f)};
+  kick.target = {origin.x + reach.x, origin.y + reach.y};
   kick.speed = along;
   kick.verticalSpeed = outcome.verticalSpeed;
   return kick;

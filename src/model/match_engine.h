@@ -1914,6 +1914,10 @@ class MatchEngine
     Vector2F aim;
     /** KNOCK_DOWN: the team-mate it is meant for (may be null). */
     const MatchPlayer* target = nullptr;
+    /** BEHIND with a speed: headed out along `aim` at this pace over the
+     * ground (m/s) and lift (m/s up). Without one, clearBehind aims it. */
+    float speed = 0.0f;
+    float lift = 0.0f;
   };
   HeaderPlay chooseHeaderPlay(const MatchPlayer& header, bool fromTeammate);
   /** A defender going in on the carrier this step (none: no challenge). */

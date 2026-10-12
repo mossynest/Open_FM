@@ -3053,6 +3053,63 @@ Vector2F MatchEngine::chooseClearBehindTargetBinturong(
                                  0.45f)};
 }
 
+MatchEngine::HeaderPlay MatchEngine::chooseHeaderOutBinturong(
+    const MatchPlayer& header) const
+{
+  // Forced to head it out of play, he looks for the safest way out rather
+  // than a point: only the direction of each aim matters, so they lie
+  // beyond the lines.
+  using A = MatchTuning::Aerial;
+  constexpr float BEYOND = 0.05f;
+  const Vector2F from = ball.position;
+  const float lateralMetres =
+      (from.y - MatchTuning::Pitch::CENTRE) * MatchTuning::Pitch::WIDTH_METRES;
+  const float sideY = lateralMetres < 0.0f ? -BEYOND : 1.0f + BEYOND;
+  HeaderPlay play;
+  play.kind = HeaderPlay::Kind::BEHIND;
+  play.speed = A::HEADER_CLEARANCE_SPEED;
+  play.lift = A::HEADER_OUT_LIFT;
+  // Wide of the six-yard box: hard and high over the nearest touchline.
+  if (std::abs(lateralMetres) > MatchTuning::Pitch::GOAL_AREA_HALF_WIDTH_METRES)
+  {
+    play.aim = {from.x, sideY};
+    return play;
+  }
+  // In line with it: glanced on towards the corner on his side, or up and
+  // over the bar, whichever is the easier header.
+  const float goalX = header.isHomeTeam ? 0.0f : 1.0f;
+  const float behindX = header.isHomeTeam ? -BEYOND : 1.0f + BEYOND;
+  play.aim = {behindX, sideY};
+  // Over the bar: as hard, steeply up, and only if that clears it.
+  const float pace = std::hypot(play.speed, play.lift);
+  const float overSpeed = pace * std::cos(A::HEADER_OVER_ELEVATION);
+  const float overLift = pace * std::sin(A::HEADER_OVER_ELEVATION);
+  const float lineMetres = std::max(
+      std::abs(from.x - goalX) * MatchTuning::Pitch::LENGTH_METRES, 0.5f);
+  if (loftVerticalSpeed(lineMetres, overSpeed,
+                        ball.z * MatchTuning::Units::BALL_Z_METRES,
+                        MatchTuning::Units::CROSSBAR_HEIGHT_METRES +
+                            A::HEADER_OVER_BAR_MARGIN_METRES) > overLift)
+    return play;
+  const ContactProfile profile = strikeProfileBinturong(StrikeKind::HEADER);
+  const auto difficulty = [&](Vector2F aim, float speed, float lift)
+  {
+    const ContactAssessment contact = assessStrikeBinturong(
+        header, profile, metricDirection(from, aim), std::hypot(speed, lift),
+        std::atan2(lift, speed));
+    return contact.angleDifficulty + contact.weightDifficulty;
+  };
+  const Vector2F over{behindX, from.y};
+  if (difficulty(over, overSpeed, overLift) <
+      difficulty(play.aim, play.speed, play.lift))
+  {
+    play.aim = over;
+    play.speed = overSpeed;
+    play.lift = overLift;
+  }
+  return play;
+}
+
 MatchEngine::ClearanceAim MatchEngine::chooseClearanceAimBinturong(
     const MatchPlayer& defender)
 {
@@ -3099,14 +3156,12 @@ MatchEngine::HeaderPlay MatchEngine::chooseHeaderPlayBinturong(
   const float ownDepth =
       header.isHomeTeam ? 1.0f - header.position.x : header.position.x;
   HeaderPlay play;
-  // Near his own goal a defender often plays safe and heads it behind.
+  // Behind his own penalty spot a defender often plays safe and heads it
+  // out of play.
   if (!fromTeammate &&
-      ownDepth > 1.0f - MatchTuning::SetPiece::CROSS_CLEARANCE_DEPTH &&
+      ownDepth > 1.0f - MatchTuning::Pitch::LEFT_PENALTY_SPOT_X &&
       randomFloat(0.0f, 1.0f) < MatchTuning::SetPiece::HEADER_BEHIND_CHANCE)
-  {
-    play.kind = HeaderPlay::Kind::BEHIND;
-    return play;
-  }
+    return chooseHeaderOutBinturong(header);
   if (!fromTeammate && ownDepth > 0.55f)
   {
     // Defensive header: clear the danger, upfield and away from the middle.
