@@ -273,9 +273,9 @@ struct MatchDuelDetail
     /** A first touch (Binturong body): `chance` is the angle difficulty and
      * `foul` the weight difficulty; no roll. */
     FIRST_TOUCH,
-    /** A strike read by the contact model (Binturong body; contact plan
-     * step 2): `chance` is the angle difficulty and `foul` the weight
-     * difficulty; measured only, it changes nothing. */
+    /** A strike read by the contact model (Binturong body; contact plan):
+     * `chance` is the angle difficulty and `foul` the weight difficulty;
+     * carried out or only measured (strikeCarriedOut). */
     STRIKE
   };
   Kind kind = Kind::ENGAGE;
@@ -315,6 +315,9 @@ struct MatchDuelDetail
   /** STRIKE: which kind (the speed he meant is `intendedSpeed`, the jobs
    * `turn`, `outward` and `paceChange`). */
   StrikeKind strike = StrikeKind::GROUND_PASS;
+  /** STRIKE: carried out by the contact model (step 3), with the
+   * FIRST_TOUCH fields filled as for a touch; otherwise measured only. */
+  bool strikeCarriedOut = false;
 };
 
 /** Receives the engine's observations. Every hook defaults to nothing. */

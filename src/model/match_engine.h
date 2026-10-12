@@ -330,6 +330,11 @@ struct ContactProfile
   float weightFailRange = 0.0f;
   float angleMissBase = 0.0f;
   float angleMissRange = 0.0f;
+  /** A failed angle job's miss beyond its share of the turn (radians, base
+   * + difficulty x range): a strike can miss a line it never meant to turn
+   * off. 0 for the touch. */
+  float angleMissAbsoluteBase = 0.0f;
+  float angleMissAbsoluteRange = 0.0f;
   float weightMissBase = 0.0f;
   float weightMissRange = 0.0f;
   /** Failures that go the usual way (under-turned; heavy). */
@@ -418,6 +423,14 @@ struct StrikeContactStats
     std::array<double, CONTACT_FACTOR_COUNT> factorSum{};
     /** Strikes with the condition at half or more. */
     std::array<std::uint32_t, CONTACT_FACTOR_COUNT> factorMarked{};
+    /** Strikes the contact model carried out (step 3), the jobs that went
+     * wrong, and sums of the angle error (rad, unsigned) and the weight
+     * error (m/s, + harder than meant). */
+    std::uint32_t carriedOut = 0;
+    std::uint32_t angleFailed = 0;
+    std::uint32_t weightFailed = 0;
+    double angleErrorSum = 0.0;
+    double weightErrorSum = 0.0;
   };
   std::array<ByKind, STRIKE_KIND_COUNT> byKind{};
 };

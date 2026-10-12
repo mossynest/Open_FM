@@ -524,23 +524,40 @@ void DebugInspector::renderDuelDetail(const SandboxRecorder& recorder,
     }
     if (duel.kind == MatchDuelDetail::Kind::STRIKE)
     {
-      // Measured only (contact plan step 2): the difficulties, no roll.
+      // Carried out (step 3) like a touch, or measured only (step 2).
       constexpr float DEGREES = 180.0f / std::numbers::pi_v<float>;
-      const std::string label = std::format(
+      std::string label = std::format(
           "{}  {}  {}  ·  turn {:.0f}° {}  ·  pace {:+.1f} m/s  ·  "
-          "difficulty angle {:.2f}, weight {:.2f} (measured)",
+          "difficulty angle {:.2f}, weight {:.2f}",
           clock(at->minute),
           STRIKE_KIND_NAMES[static_cast<std::size_t>(duel.strike)],
           recorder.playerName(duel.player), duel.turn * DEGREES,
           duel.outward ? "out" : "in", duel.paceChange, duel.chance.total,
           duel.foul.total);
+      if (duel.strikeCarriedOut)
+        label += std::format(
+            "  ·  angle {}({:.0f}%) {:+.1f}°  ·  weight {}({:.0f}%) "
+            "{:+.1f} m/s  ·  {:.1f} -> {:.1f} m/s",
+            duel.angleFailed ? "FAILED " : "", duel.angleFailChance * 100.0f,
+            duel.angleError * DEGREES, duel.weightFailed ? "FAILED " : "",
+            duel.weightFailChance * 100.0f, duel.weightError,
+            duel.intendedSpeed, duel.actualSpeed);
+      else
+        label += " (measured)";
       ImGui::PushID(shown);
       if (ImGui::TreeNodeEx("strike", ImGuiTreeNodeFlags_SpanAvailWidth, "%s",
                             label.c_str()))
       {
-        ImGui::TextDisabled(
-            "The contact model reads this strike but does not carry it out "
-            "yet: provisional weights, no effect on the ball.");
+        if (duel.strikeCarriedOut)
+          ImGui::TextDisabled(
+              "Struck by the contact model with skill %.0f: each job's "
+              "chance of going wrong = (base + difficulty x range) x (1 - "
+              "skill x reduction) x tiredness and nerves.",
+              duel.touchSkill * 100.0f);
+        else
+          ImGui::TextDisabled(
+              "The contact model reads this strike but does not carry it "
+              "out yet: provisional weights, no effect on the ball.");
         ImGui::TextDisabled("Angle difficulty:");
         renderBreakdown(duel.chance, "angle");
         ImGui::TextDisabled("Weight difficulty:");

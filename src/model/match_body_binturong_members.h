@@ -49,8 +49,19 @@
                                            bool ownBall) const;
   /** A strike's contact profile (provisional, contact plan §3). */
   ContactProfile strikeProfileBinturong(StrikeKind kind) const;
-  /** Reads a strike as a contact (contact plan step 2) and tallies it,
-   * without changing it: `aim` metric unit, `intendedSpeed` m/s. */
+  /** A strike as a contact where the ball lies: `aim` metric unit,
+   * `intendedSpeed` m/s. No random draws. */
+  ContactAssessment assessStrikeBinturong(const MatchPlayer& striker,
+                                          const ContactProfile& profile,
+                                          Vector2F aim,
+                                          float intendedSpeed) const;
+  /** Tallies an open-play strike and sends its debugger detail; `outcome`
+   * when it was carried out (with `skill`), null when only measured. */
+  void recordStrikeBinturong(const MatchPlayer& striker, StrikeKind kind,
+                             const ContactAssessment& contact,
+                             const ContactOutcome* outcome, float skill);
+  /** Reads a strike as a contact (contact plan step 2) and records it,
+   * without changing it. */
   void measureStrikeBinturong(const MatchPlayer& striker, StrikeKind kind,
                               Vector2F aim, float intendedSpeed);
   /** Carries an assessed contact out with `skill` (0-1): each job's chance

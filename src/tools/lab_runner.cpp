@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <format>
+#include <numbers>
 #include <memory>
 #include <numeric>
 #include <utility>
@@ -988,6 +989,11 @@ std::vector<TextTable> matchTables(std::span<const MatchSample> samples)
       const auto& from = sample->strike_contacts.byKind[kind];
       auto& to = strikes.byKind[kind];
       to.strikes += from.strikes;
+      to.carriedOut += from.carriedOut;
+      to.angleFailed += from.angleFailed;
+      to.weightFailed += from.weightFailed;
+      to.angleErrorSum += from.angleErrorSum;
+      to.weightErrorSum += from.weightErrorSum;
       to.angleDifficulty += from.angleDifficulty;
       to.weightDifficulty += from.weightDifficulty;
       for (std::size_t index = 0; index < CONTACT_FACTOR_COUNT; ++index)
@@ -1000,8 +1006,9 @@ std::vector<TextTable> matchTables(std::span<const MatchSample> samples)
   for (const std::string_view name : STRIKE_KIND_NAMES)
     strikeHeader.emplace_back(name);
   TextTable strikeTable{
-      "Strike contact, open play (Binturong bodies; measured, no effect yet): "
-      "mean value, and in brackets the share at half or more",
+      "Strike contact, open play (Binturong bodies): conditions as mean "
+      "value, and in brackets the share at half or more; failures and errors "
+      "for the kinds the contact model carries out",
       std::move(strikeHeader),
       {}};
   const auto strikeRow = [&](std::string label, auto cell)
@@ -1017,10 +1024,38 @@ std::vector<TextTable> matchTables(std::span<const MatchSample> samples)
               return std::format("{:.1f}", static_cast<double>(kind.strikes) /
                                                (2.0 * static_cast<double>(n)));
             });
-  strikeRow("Angle difficulty (provisional)",
+  const auto carriedRow = [&](std::string label, auto cell)
+  {
+    strikeRow(std::move(label),
+              [&cell](const StrikeContactStats::ByKind& kind)
+              {
+                return kind.carriedOut > 0 ? cell(kind)
+                                           : std::string("measured only");
+              });
+  };
+  carriedRow("Angle failed",
+             [](const StrikeContactStats::ByKind& kind)
+             { return percent(share(kind.angleFailed, kind.carriedOut)); });
+  carriedRow("Weight failed",
+             [](const StrikeContactStats::ByKind& kind)
+             { return percent(share(kind.weightFailed, kind.carriedOut)); });
+  carriedRow("Mean angle error (deg)",
+             [](const StrikeContactStats::ByKind& kind)
+             {
+               return std::format("{:.2f}", kind.angleErrorSum /
+                                                kind.carriedOut * 180.0 /
+                                                std::numbers::pi);
+             });
+  carriedRow("Mean weight error (m/s, + harder)",
+             [](const StrikeContactStats::ByKind& kind)
+             {
+               return std::format("{:+.2f}",
+                                  kind.weightErrorSum / kind.carriedOut);
+             });
+  strikeRow("Angle difficulty",
             [](const StrikeContactStats::ByKind& kind)
             { return std::format("{:.3f}", kind.angleDifficulty / kind.strikes); });
-  strikeRow("Weight difficulty (provisional)",
+  strikeRow("Weight difficulty",
             [](const StrikeContactStats::ByKind& kind)
             {
               return std::format("{:.3f}", kind.weightDifficulty / kind.strikes);

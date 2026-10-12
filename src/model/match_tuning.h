@@ -377,6 +377,34 @@ struct MatchTuning final
     static constexpr float LOFTED_PACE_CHANGE = 0.6f;
     static constexpr float SHOT_PACE_CHANGE = 0.6f;
     static constexpr float TURN_ANGLE = 0.6f;
+
+    /** Ground passes, carried out by the contact model (contact plan step
+     * 3) in place of the old sideways error. Skill: Passing. */
+    struct GroundPass final
+    {
+      /** The turn off a dribbled ball's line counts for less than a
+       * touch's: the ball is barely moving. */
+      static constexpr float TURN_ANGLE = 0.3f;
+      static constexpr float SKILL_REDUCTION = 0.8f;
+      static constexpr float ANGLE_FAIL_BASE = 0.05f;
+      static constexpr float ANGLE_FAIL_RANGE = 0.5f;
+      static constexpr float WEIGHT_FAIL_BASE = 0.05f;
+      static constexpr float WEIGHT_FAIL_RANGE = 0.5f;
+      /** A failed angle: a share of the turn, plus a fixed miss (rad). */
+      static constexpr float ANGLE_MISS_BASE = 0.1f;
+      static constexpr float ANGLE_MISS_RANGE = 0.3f;
+      static constexpr float ANGLE_MISS_ABSOLUTE_BASE = 0.04f;
+      static constexpr float ANGLE_MISS_ABSOLUTE_RANGE = 0.2f;
+      /** A failed weight: a share of the pace he puts on it. */
+      static constexpr float WEIGHT_MISS_BASE = 0.15f;
+      static constexpr float WEIGHT_MISS_RANGE = 0.4f;
+      static constexpr float UNDER_TURN_SHARE = 0.85f;
+      /** Failed passes are more often under-hit than over-hit. */
+      static constexpr float HEAVY_SHARE = 0.4f;
+      /** A clean pass's jitter: radians, and a share of the pace. */
+      static constexpr float ANGLE_JITTER = 0.05f;
+      static constexpr float WEIGHT_JITTER = 0.04f;
+    };
   };
 
   /**
