@@ -19,6 +19,7 @@
 
 #include "gui/render/imatch_renderer.h"
 #include "gui/widgets/theme.h"
+#include "model/match_engine_internal.h"
 #include "tools/match_sandbox_drill.h"
 
 namespace
@@ -1720,6 +1721,486 @@ class ShotDrill final : public Drill
   std::vector<Vector2F> path;
   std::map<std::string, Tally> tallies;
 };
+// --- First touch -----------------------------------------------------------
+
+/**
+ * One ball played to one receiver (New v1 body): how well his first touch
+ * comes off, with every variable of the ball, the receiver and the touch's
+ * tuning knobs as a setting (see Notes and plans/
+ * match_engine_first_touch_tuning_plan.md).
+ */
+class FirstTouchDrill final : public Drill
+{
+ public:
+  /** Where the receiver meets the ball (pitch), facing up the pitch. */
+  static constexpr Vector2F MEET{0.5f, 0.5f};
+  /** A run ends this long after its outcome, or with no outcome
+   * TIME_LIMIT seconds after the ball is played. */
+  static constexpr double LINGER_SECONDS = 0.3;
+  static constexpr double TIME_LIMIT = 8.0;
+  /** Over this far from him during the touch: a heavy touch. */
+  static constexpr float HEAVY_METRES = 2.0f;
+
+  const char* name() const override { return "First touch"; }
+  const char* summary() const override
+  {
+    return "One ball played to a receiver with the New v1 body: its pace, "
+           "the angle it comes from, how far he has to go to it, bounce, his "
+           "own pass or a loose ball, a pressing defender. Measures how his "
+           "first touch comes off (errors, heavy touches, the ball lost), "
+           "with his First Touch and every tuning knob of the touch as "
+           "settings. Pick a situation to start from.";
+  }
+
+  std::vector<DrillParameter> parameters() override
+  {
+    std::vector<DrillParameter> list;
+    const auto add = [&list](DrillParameter parameter, const char* section)
+    {
+      parameter.section = section;
+      list.push_back(std::move(parameter));
+    };
+    add(setting("Ball speed (m/s)", &ballSpeed, 2.0f, 30.0f, false,
+                "Pace when it is played in."),
+        "Ball");
+    add(setting("Comes from (deg)", &fromAngle, 0.0f, 180.0f, true,
+                "Where it is played from, against the way he faces (up the "
+                "pitch): 0 in front of him, 90 from his side, 180 from "
+                "behind."),
+        "Ball");
+    add(setting("Feed distance (m)", &feedDistance, 5.0f, 40.0f, false),
+        "Ball");
+    add(setting("Passes him by (m)", &passesBy, -1.5f, 1.5f, false,
+                "Sideways offset of its line from where he meets it: 0 "
+                "straight at him; + to one side, - the other (with Foot, "
+                "his stronger or weaker side)."),
+        "Ball");
+    add(setting("Bounce (m/s up)", &bounce, 0.0f, 3.0f, false,
+                "Upward speed when played: 0 along the ground."),
+        "Ball");
+    DrillParameter kind =
+        setting("Ball", &ballKind, 0.0f, 1.0f, true,
+                "His pass: played to him (he expects it).\nLoose: nobody's "
+                "pass (a surprise).");
+    kind.choices = {"His pass", "Loose"};
+    add(kind, "Ball");
+
+    add(setting("Run to meet (m)", &runToMeet, 0.0f, 10.0f, false,
+                "He starts this far off the ball's line and goes to it (his "
+                "brain chooses how)."),
+        "Receiver");
+    add(setting("Run-up (m)", &runUp, 0.0f, 30.0f, false,
+                "0: standing. Otherwise he runs up the pitch, and the ball is "
+                "played once he has run this far, aimed at where he will be; "
+                "he keeps running until he plays it."),
+        "Receiver");
+    add(setting("First Touch", &firstTouch, 1.0f, 100.0f, true,
+                "His First Touch rating (overrides the derived stat)."),
+        "Receiver");
+    add(setting("Pace", &pace, 1.0f, 100.0f, true), "Receiver");
+    add(setting("Condition", &condition, 30.0f, 100.0f, true,
+                "How fresh he is at the start (tiredness widens the touch's "
+                "errors)."),
+        "Receiver");
+    DrillParameter foot = setting("Foot", &footChoice, 0.0f, 1.0f, true);
+    foot.choices = {"Right", "Left"};
+    add(foot, "Receiver");
+    DrillParameter brain =
+        setting("Brain", &brainChoice, 0.0f, 1.0f, true,
+                "New v1: he times the touch and chooses it (set or into "
+                "stride).\nOriginal: he plays it at first contact, set "
+                "ahead of him.");
+    brain.choices = {"New v1 (timed)", "Original (first contact)"};
+    add(brain, "Receiver");
+
+    DrillParameter defender =
+        setting("Defender", &defenderChoice, 0.0f, 1.0f, true,
+                "A defender at his back (beyond him on the ball's line), "
+                "pressing once the ball is played.");
+    defender.choices = {"None", "Pressing"};
+    add(defender, "Defender");
+    add(setting("Defender distance (m)", &defenderDistance, 1.0f, 15.0f,
+                false),
+        "Defender");
+    add(setting("Defending", &defending, 1.0f, 100.0f, true), "Defender");
+
+    // Every knob of the touch, by its registry name and group.
+    static const std::array<std::string, TOUCH_KNOB_COUNT> sections = []
+    {
+      std::array<std::string, TOUCH_KNOB_COUNT> names;
+      for (std::size_t index = 0; index < TOUCH_KNOB_COUNT; ++index)
+        names[index] = "Knobs: " + std::string(TOUCH_KNOBS[index].group);
+      return names;
+    }();
+    for (std::size_t index = 0; index < TOUCH_KNOB_COUNT; ++index)
+    {
+      const TouchKnobInfo& info = TOUCH_KNOBS[index];
+      add(setting(info.name.data(), &knobs.values[index], info.min, info.max,
+                  false),
+          sections[index].c_str());
+    }
+    return list;
+  }
+
+  std::vector<DrillPreset> presets() const override
+  {
+    // Each starts from the same baseline; only what differs is listed
+    // after it.
+    const std::map<std::string, float> base{
+        {"Ball speed (m/s)", 12.0f}, {"Comes from (deg)", 0.0f},
+        {"Feed distance (m)", 20.0f}, {"Passes him by (m)", 0.0f},
+        {"Bounce (m/s up)", 0.0f},    {"Ball", 0.0f},
+        {"Run to meet (m)", 0.0f},    {"Run-up (m)", 0.0f},
+        {"Defender", 0.0f}};
+    const auto with = [&base](std::map<std::string, float> changes)
+    {
+      std::map<std::string, float> settings = base;
+      for (const auto& [name, value] : changes) settings[name] = value;
+      return settings;
+    };
+    return {
+        {"Firm pass to feet", "12 m/s from in front, straight at him, standing.",
+         base},
+        {"Driven pass to feet", "22 m/s: pace.", with({{"Ball speed (m/s)", 22.0f}})},
+        {"Soft pass, step to it", "6 m/s, 1 m off his line.",
+         with({{"Ball speed (m/s)", 6.0f}, {"Run to meet (m)", 1.0f}})},
+        {"Pass into his run",
+         "10 m/s from his side, played after a 20 m run-up.",
+         with({{"Ball speed (m/s)", 10.0f},
+               {"Comes from (deg)", 90.0f},
+               {"Run-up (m)", 20.0f}})},
+        {"Run to meet it", "12 m/s, he starts 4 m off its line.",
+         with({{"Run to meet (m)", 4.0f}})},
+        {"Across him", "12 m/s from his side, 0.6 m off centre.",
+         with({{"Comes from (deg)", 90.0f}, {"Passes him by (m)", 0.6f}})},
+        {"Over his shoulder", "10 m/s from behind him.",
+         with({{"Ball speed (m/s)", 10.0f}, {"Comes from (deg)", 135.0f}})},
+        {"Bouncing ball",
+         "12 m/s from 7 m with 2.8 m/s up: it reaches him on a hop.",
+         with({{"Bounce (m/s up)", 2.8f}, {"Feed distance (m)", 7.0f}})},
+        {"Loose ball", "8 m/s, nobody's pass.",
+         with({{"Ball speed (m/s)", 8.0f}, {"Ball", 1.0f}})},
+        {"Under pressure", "12 m/s with a defender 2 m behind him, pressing.",
+         with({{"Defender", 1.0f}, {"Defender distance (m)", 2.0f}})},
+    };
+  }
+
+  std::vector<DrillPlayerSpec> players() const override
+  {
+    DrillPlayerSpec receiver{"Receiver", PlayerRole::CM, true,
+                             {{"Pace", pace}}, 180,
+                             {{DerivedStat::FIRST_TOUCH, firstTouch}}};
+    receiver.foot = footChoice < 0.5f ? Foot::Right : Foot::Left;
+    receiver.condition = condition;
+    std::vector<DrillPlayerSpec> list{receiver};
+    if (defenderChoice > 0.5f)
+      list.push_back(
+          {"Defender", PlayerRole::CB, false, {{"Defending", defending}}, 182, {}});
+    return list;
+  }
+
+  void begin(MatchEngine& engine, const std::vector<PlayerID>& ids) override
+  {
+    receiverId = ids[0];
+    hasDefender = defenderChoice > 0.5f;
+    defenderId = hasDefender ? ids[1] : 0;
+    // The new first touch is the New v1 body's; the brain is a setting.
+    const BrainId brain = brainChoice < 0.5f ? BrainId::NEW_V1 : BrainId::ORIGINAL;
+    for (const bool home : {true, false})
+    {
+      engine.setBody(home, BodyId::NEW_V1);
+      engine.setBrain(home, brain);
+    }
+    engine.setFirstTouchKnobs(knobs);
+
+    // Geometry in metres: he faces up the pitch (+x); the ball comes from
+    // `fromAngle` round from in front of him, along a line `passesBy` to
+    // the side of the meeting point.
+    const Vector2F up{1.0f, 0.0f};
+    from = rotated(up, fromAngle * PI / 180.0f);
+    travel = {-from.x, -from.y};
+    side = rotated(travel, PI * 0.5f);
+    feedFrom = along(along(MEET, side, passesBy), from, feedDistance);
+    receiverStart = along(along(MEET, side, -runToMeet), up, -runUp);
+    // The defender marks him from behind: beyond him on the ball's line, so
+    // he cannot simply cut it out before it arrives.
+    defenderStart = along(MEET, travel, defenderDistance);
+
+    MatchScenario scenario;
+    scenario.players.push_back({receiverId, receiverStart, false});
+    if (hasDefender) scenario.players.push_back({defenderId, defenderStart, false});
+    scenario.carrierId = 0;
+    scenario.ballPosition = feedFrom;
+    engine.startDrill(scenario);
+    // The defender waits on his spot until the ball is played.
+    if (hasDefender) engine.setDrillTarget(defenderId, defenderStart, false);
+    if (runUp > 0.0f)
+      engine.setDrillTarget(receiverId,
+                            along(MEET, up, RUN_THROUGH_METRES * 4.0f), true);
+
+    fed = false;
+    touch.reset();
+    outcome.clear();
+    endAt.reset();
+    peakGap = 0.0f;
+    released = false;
+    lastBallVelocity = {0.0f, 0.0f};
+    ballPath.clear();
+    if (runUp <= 0.0f) feed(engine);
+  }
+
+  bool afterStep(MatchEngine& engine) override
+  {
+    const double now = secondsOf(engine);
+    const MatchBall& ball = engine.getBall();
+    const MatchPlayer* receiver = slotOf(engine, receiverId);
+    // On the run: played once he has run his run-up.
+    if (!fed && receiver &&
+        (metresBetween(receiverStart, receiver->position) >= runUp ||
+         now >= TIME_LIMIT * 0.5))
+      feed(engine);
+    if (fed && engine.getSimulatedSteps() % 2 == 0)
+      ballPath.push_back(ball.position);
+
+    const bool his = ball.possessedBy && ball.possessedBy->getId() == receiverId;
+    const bool theirs =
+        ball.possessedBy && hasDefender && ball.possessedBy->getId() == defenderId;
+    if (fed && outcome.empty())
+    {
+      if (his && !touch)
+      {
+        // His touch: read what it was from the ball as it leaves him.
+        Touch reading;
+        reading.at = now;
+        reading.inTouch = ball.inTouch;
+        reading.contactGap = ball.touchContactGap;
+        reading.height = ball.touchContactHeight;
+        reading.angleError = ball.touchAngleError;
+        reading.weightError = ball.touchWeightError;
+        reading.angleDifficulty = ball.touchAngleDifficulty;
+        reading.weightDifficulty = ball.touchWeightDifficulty;
+        reading.intoStride = ball.touchKind == TouchIntent::Kind::INTO_STRIDE;
+        reading.point = ball.position;
+        if (receiver)
+        {
+          reading.speed = speedOf(*receiver);
+          const Vector2F facing = directionBetween(
+              {0.0f, 0.0f}, {std::cos(receiver->facingAngle),
+                             std::sin(receiver->facingAngle)});
+          const float speed =
+              std::hypot(lastBallVelocity.x, lastBallVelocity.y);
+          reading.facingVsBall =
+              speed > 0.1f ? turnDegrees(facing, {-lastBallVelocity.x / speed,
+                                                  -lastBallVelocity.y / speed})
+                           : 0.0f;
+        }
+        touch = reading;
+        if (runUp > 0.0f) engine.setDrillTarget(receiverId, std::nullopt, false);
+        // The old trap (a ball off his feet): the ball is his at once.
+        if (!ball.inTouch) outcome = "collected (old trap)";
+      }
+      if (touch && ball.inTouch && his)
+        peakGap = std::max(peakGap, ball.touchPeakGap);
+      if (touch && his && !ball.inTouch && outcome.empty())
+        outcome = "collected";
+      if (theirs) outcome = touch ? "lost to the defender" : "intercepted";
+      if (engine.getState() != MatchState::PLAYING)
+        outcome = touch ? "lost (out of play)" : "out of play";
+      if (touch && !ball.possessedBy) released = true;
+      if (outcome.empty() && now >= fedAt + TIME_LIMIT)
+        outcome = touch ? "no result" : "never touched";
+    }
+    lastBallVelocity = ball.velocity;
+    if (!outcome.empty() && !endAt) endAt = now;
+    return !(endAt && now >= *endAt + LINGER_SECONDS);
+  }
+
+  void drawOverlay(const IMatchRenderer& renderer, ImDrawList& draw) const override
+  {
+    const float scale = Theme::scale();
+    DrillDraw::line(renderer, draw, feedFrom,
+                    along(feedFrom, travel, feedDistance * 1.3f),
+                    IM_COL32(255, 255, 255, 70), 1.0f * scale);
+    DrillDraw::marker(renderer, draw, feedFrom, 3.0f * scale,
+                      IM_COL32(255, 255, 255, 200), "feed");
+    DrillDraw::marker(renderer, draw, MEET, 2.5f * scale,
+                      IM_COL32(90, 220, 120, 220), "meet");
+    if (hasDefender)
+      DrillDraw::marker(renderer, draw, defenderStart, 2.5f * scale,
+                        IM_COL32(240, 80, 80, 200));
+    DrillDraw::path(renderer, draw, ballPath, IM_COL32(255, 230, 120, 160),
+                    1.5f * scale);
+    if (touch)
+      DrillDraw::marker(renderer, draw, touch->point, 3.0f * scale,
+                        IM_COL32(90, 170, 255, 255),
+                        outcome.empty() ? "touch" : outcome.c_str());
+  }
+
+  std::vector<std::string> report() const override
+  {
+    std::vector<std::string> lines;
+    lines.push_back(std::format(
+        "{:.0f} m/s from {:.0f} deg, {:.0f} m out, {:+.1f} m by{} · {}",
+        ballSpeed, fromAngle, feedDistance, passesBy,
+        bounce > 0.0f ? std::format(", {:.1f} m/s up", bounce) : std::string(),
+        ballKind < 0.5f ? "his pass" : "loose"));
+    lines.push_back(std::format(
+        "Receiver: First Touch {:.0f}, Pace {:.0f}, condition {:.0f}, {} "
+        "foot, {} · run to meet {:.1f} m, run-up {:.0f} m{}",
+        firstTouch, pace, condition, footChoice < 0.5f ? "right" : "left",
+        brainChoice < 0.5f ? "timed" : "first contact", runToMeet, runUp,
+        hasDefender ? std::format(" · defender {:.0f} m (Def {:.0f})",
+                                  defenderDistance, defending)
+                    : std::string()));
+    if (touch)
+      lines.push_back(std::format(
+          "Touch at {:.2f} s, {:.2f} m from his centre{}: angle {:+.1f} deg, "
+          "weight {:+.0f}% (difficulty {:.2f} / {:.2f}){}",
+          touch->at, touch->contactGap, touch->intoStride ? ", into stride" : "",
+          touch->angleError * 180.0f / PI, touch->weightError * 100.0f,
+          touch->angleDifficulty, touch->weightDifficulty,
+          peakGap > 0.0f ? std::format(", got {:.1f} m away", peakGap)
+                         : std::string()));
+    if (!outcome.empty()) lines.push_back("OUTCOME  " + outcome);
+    return lines;
+  }
+
+  std::vector<DrillMetric> metrics() const override
+  {
+    if (outcome.empty()) return {};
+    const auto flag = [](bool value) { return value ? 1.0 : 0.0; };
+    const bool collected = outcome.starts_with("collected");
+    std::vector<DrillMetric> out{
+        {"Touched", flag(touch.has_value())},
+        {"Collected", flag(collected)},
+        {"Lost", flag(touch && !collected && outcome != "no result")},
+        {"Heavy", flag(peakGap > HEAVY_METRES)},
+        {"Released", flag(released)},
+    };
+    if (touch && touch->inTouch)
+    {
+      out.push_back({"Angle error (deg)", touch->angleError * 180.0f / PI});
+      out.push_back(
+          {"Abs angle error (deg)", std::abs(touch->angleError) * 180.0f / PI});
+      out.push_back({"Weight error (%)", touch->weightError * 100.0f});
+      out.push_back({"Abs weight error (%)", std::abs(touch->weightError) * 100.0f});
+      out.push_back({"Angle difficulty", touch->angleDifficulty});
+      out.push_back({"Weight difficulty", touch->weightDifficulty});
+      out.push_back({"Contact gap (m)", touch->contactGap});
+      out.push_back({"Ball height (m)", touch->height});
+      out.push_back({"Into stride", flag(touch->intoStride)});
+      out.push_back({"Facing vs ball (deg)", touch->facingVsBall});
+      out.push_back({"His speed (m/s)", touch->speed});
+    }
+    if (touch) out.push_back({"Old trap", flag(!touch->inTouch)});
+    if (touch && collected && endAt)
+      out.push_back({"Time to collect (s)", *endAt - touch->at});
+    return out;
+  }
+
+ private:
+  struct Touch
+  {
+    double at = 0.0;
+    bool inTouch = true;
+    float contactGap = 0.0f;
+    float angleError = 0.0f;
+    float weightError = 0.0f;
+    float angleDifficulty = 0.0f;
+    float weightDifficulty = 0.0f;
+    bool intoStride = false;
+    float facingVsBall = 0.0f;
+    float speed = 0.0f;
+    float height = 0.0f;
+    Vector2F point{};
+  };
+
+  /** Seconds for the ball, as fed, to travel `metres` (the engine's own
+   * flight and rolling physics, in its ball sub-steps). */
+  [[nodiscard]] float rollSeconds(float metres) const
+  {
+    constexpr float DT =
+        STEP / static_cast<float>(MatchTuning::Timing::BALL_SUBSTEPS);
+    MatchEngineInternal::FlightState flight{ballSpeed, bounce, 0.0f, false};
+    float travelled = 0.0f;
+    float seconds = 0.0f;
+    while (travelled < metres && flight.horizontalSpeed > 0.0f &&
+           seconds < TIME_LIMIT)
+    {
+      travelled += MatchEngineInternal::stepFlight(flight, DT);
+      seconds += DT;
+    }
+    return seconds;
+  }
+
+  void feed(MatchEngine& engine)
+  {
+    fed = true;
+    fedAt = secondsOf(engine);
+    // The defender presses from here. A running receiver keeps running until
+    // he plays it (his brain would stop him to wait for it).
+    if (hasDefender) engine.setDrillTarget(defenderId, std::nullopt, false);
+    if (const MatchPlayer* receiver = slotOf(engine, receiverId);
+        receiver && runUp > 0.0f)
+    {
+      // On the run: the feed spot is placed, at the set distance and angle,
+      // from where he will be when the ball gets there (his current
+      // velocity over its exact travel time), still `passesBy` to his side.
+      const float seconds = rollSeconds(feedDistance) + STEP;
+      const Vector2F ahead = toPitch({receiver->velocity.x * seconds,
+                                      receiver->velocity.y * seconds});
+      const Vector2F meet{receiver->position.x + ahead.x,
+                          receiver->position.y + ahead.y};
+      feedFrom = along(along(meet, side, passesBy), from, feedDistance);
+    }
+    engine.feedBall(feedFrom, {travel.x * ballSpeed, travel.y * ballSpeed},
+                    bounce, ballKind < 0.5f ? receiverId : 0);
+    ballPath.push_back(feedFrom);
+  }
+
+  // Ball
+  float ballSpeed = 12.0f;
+  float fromAngle = 0.0f;
+  float feedDistance = 20.0f;
+  float passesBy = 0.0f;
+  float bounce = 0.0f;
+  float ballKind = 0.0f;
+  // Receiver
+  float runToMeet = 0.0f;
+  float runUp = 0.0f;
+  float firstTouch = 70.0f;
+  float pace = 70.0f;
+  float condition = 100.0f;
+  float footChoice = 0.0f;
+  float brainChoice = 0.0f;
+  // Defender
+  float defenderChoice = 0.0f;
+  float defenderDistance = 3.0f;
+  float defending = 70.0f;
+  // The touch's tuning, as this drill plays it.
+  FirstTouchKnobs knobs;
+
+  PlayerID receiverId = 0;
+  PlayerID defenderId = 0;
+  bool hasDefender = false;
+  /** Unit directions (metres): where the ball comes from, the way it
+   * travels, and square to it (the side `passesBy` measures). */
+  Vector2F from{-1.0f, 0.0f};
+  Vector2F travel{1.0f, 0.0f};
+  Vector2F side{0.0f, 1.0f};
+  Vector2F feedFrom{};
+  Vector2F receiverStart{};
+  Vector2F defenderStart{};
+  bool fed = false;
+  double fedAt = 0.0;
+  std::optional<Touch> touch;
+  std::string outcome;
+  bool released = false;
+  std::optional<double> endAt;
+  float peakGap = 0.0f;
+  Vector2F lastBallVelocity{};
+  std::vector<Vector2F> ballPath;
+};
 }  // namespace
 
 std::vector<std::unique_ptr<Drill>> makeDrills()
@@ -1731,5 +2212,6 @@ std::vector<std::unique_ptr<Drill>> makeDrills()
   drills.push_back(std::make_unique<RepeatedSprintsDrill>());
   drills.push_back(std::make_unique<FlagChaseDrill>());
   drills.push_back(std::make_unique<ShotDrill>());
+  drills.push_back(std::make_unique<FirstTouchDrill>());
   return drills;
 }

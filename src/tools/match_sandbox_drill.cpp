@@ -66,7 +66,8 @@ DrillRun::DrillRun(Drill& drill_ref, const StatsConfig& config, bool record)
       auto player = std::make_unique<Player>(
           nextId++, static_cast<TeamID>(side + 1), "", name, role, Language::EN,
           0, 0, 25, 1,
-          static_cast<std::uint8_t>(spec ? spec->height : 180), Foot::Right,
+          static_cast<std::uint8_t>(spec ? spec->height : 180),
+          spec ? spec->foot : Foot::Right,
           stats);
       if (spec) drillIds[static_cast<std::size_t>(spec - specs.data())] =
                     player->getId();
@@ -94,8 +95,13 @@ DrillRun::DrillRun(Drill& drill_ref, const StatsConfig& config, bool record)
     if (std::ranges::find(drillIds, player->getId()) == drillIds.end())
       (void)match->removeBeforeKickOff(player->getId());
   for (std::size_t index = 0; index < specs.size(); ++index)
+  {
     for (const auto& [stat, value] : specs[index].derived)
       match->setDerivedStat(drillIds[index], stat, value / 100.0f);
+    if (specs[index].condition < 100.0f)
+      (void)match->setPlayerCondition(drillIds[index],
+                                      specs[index].condition / 100.0f);
+  }
   if (record) match->setRecorder(log.get());
   drill.begin(*match, drillIds);
 }
@@ -118,11 +124,46 @@ bool DrillRun::step()
   return !over;
 }
 
+bool Drill::applyPreset(const std::string& name)
+{
+  for (const DrillPreset& preset : presets())
+  {
+    if (preset.name != name) continue;
+    for (const DrillParameter& parameter : parameters())
+      if (parameter.value)
+        if (const auto found = preset.settings.find(parameter.name);
+            found != preset.settings.end())
+          *parameter.value = found->second;
+    return true;
+  }
+  return false;
+}
+
 void Drill::renderSettings()
 {
+  if (const std::vector<DrillPreset> list = presets(); !list.empty())
+  {
+    // A picker that fills the settings in; it keeps no state of its own.
+    if (ImGui::BeginCombo("Situation", "choose to fill in the settings..."))
+    {
+      for (const DrillPreset& preset : list)
+      {
+        if (ImGui::Selectable(preset.name.c_str())) (void)applyPreset(preset.name);
+        if (!preset.summary.empty() && ImGui::IsItemHovered())
+          ImGui::SetTooltip("%s", preset.summary.c_str());
+      }
+      ImGui::EndCombo();
+    }
+  }
+  const char* section = nullptr;
   for (const DrillParameter& parameter : parameters())
   {
     if (!parameter.value) continue;
+    if (parameter.section && parameter.section != section)
+    {
+      section = parameter.section;
+      ImGui::SeparatorText(section);
+    }
     float& value = *parameter.value;
     if (!parameter.choices.empty())
     {
@@ -141,8 +182,9 @@ void Drill::renderSettings()
     }
     else
     {
+      // Small ranges (tuning knobs) need more decimals.
       ImGui::SliderFloat(parameter.name, &value, parameter.min, parameter.max,
-                         "%.1f");
+                         parameter.max - parameter.min < 2.5f ? "%.3f" : "%.1f");
     }
     if (parameter.tooltip && ImGui::IsItemHovered())
       ImGui::SetTooltip("%s", parameter.tooltip);

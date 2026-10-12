@@ -32,6 +32,9 @@
 #include "tools/lab_report.h"
 #include "tools/lab_runner.h"
 #include "tools/lab_season.h"
+#include "tools/lab_touch_sensitivity.h"
+#include "tools/match_sandbox_measure.h"
+#include "tools/match_sandbox_setup.h"
 
 #if !defined(_WIN32)
 #include <unistd.h>
@@ -63,6 +66,13 @@ Usage:
                  [--fidelity full|background] [--brains HOME,AWAY]
                  [--bodies HOME,AWAY] [--handshake H] [--home-advantage X]
                  [--out-dir DIR]
+  fm_lab drill   [--brains HOME,AWAY] [--bodies HOME,AWAY] [--handshake H]
+                 "DRILL" --sweep "Setting=FROM:TO:COUNT" [--by ...]
+                 [--preset NAME] [--set "Setting=value"]... [--repeats N]
+                 [--seed S] [--csv [FILE]]
+  fm_lab touch-sensitivity [--repeats N] [--ratings A,B,...]
+                 [--situations all|NAME;NAME] [--only NAME;NAME] [--step S]
+                 [--range "Name=LOW:HIGH"]... [--seed S] [--out-dir DIR]
 
 matches  isolated matches between synthetic 4-4-2 squads (default 2000 at
          rating 65 v 65; --spread draws both ratings uniformly per match;
@@ -75,6 +85,23 @@ season   whole AI-only world via GameController in a scratch directory
          after every season
 tactics  round robin of the tactic presets between equal teams; each seed is
          played twice with home and away swapped
+drill    a match sandbox drill measured headless: the same options as
+         match_sandbox --measure (a sweep of one setting, optionally by a
+         second, over repeated seeds; a preset fills settings in, --set
+         overrides any, beyond its slider range too); the table goes to the
+         console, the runs to CSV with --csv. Drills choose their own brains
+         and bodies where they need to (First touch: New v1 bodies); the
+         match options before the drill's name set them for the others
+touch-sensitivity
+         which variables move the first touch most: every First touch
+         situation at several First Touch ratings, as tuned, then with each
+         tuning knob and the receiver's Pace, Condition, Foot and First
+         Touch set low and high one at a time (same seeds); ranked by the
+         largest change in balls lost and in heavy touches, side by side,
+         with the angle and weight errors beside them. Knob steps are x(1
+         -/+ step) within each knob's range; --range sets any variable's two
+         values as given, beyond its range too. report.md, ranking.csv and
+         cells.csv in --out-dir (default a fresh fm-lab-touch-* temp folder)
 
 Fidelity: full (default, the live engine's 10 Hz step) or background (the
 cheaper step unwatched fixtures use); compare both to check equivalence.
@@ -518,8 +545,93 @@ void writeReport(const Lab::LabReport& report,
 }
 }  // namespace
 
+/**
+ * fm_lab drill: a match sandbox drill measured headless. The match options
+ * come first, then the drill's name, then the measure's own options, which
+ * go to the sandbox's measure command unchanged.
+ */
+int runDrillMode(int argc, char** argv)
+{
+  const std::vector<std::string> rest(argv + 2, argv + argc);
+  std::size_t index = 0;
+  for (; index + 1 < rest.size() && rest[index].starts_with("--"); index += 2)
+  {
+    const std::string& option = rest[index];
+    const std::string& value = rest[index + 1];
+    if (option == "--brains")
+    {
+      const auto brains = parseBrainPair(value);
+      if (!brains) throw UsageError("--brains must be HOME,AWAY or one brain");
+      sandboxBrains() = *brains;
+    }
+    else if (option == "--bodies")
+    {
+      const auto bodies = parseBodyPair(value);
+      if (!bodies) throw UsageError("--bodies must be HOME,AWAY or one body");
+      sandboxBodies() = *bodies;
+    }
+    else if (option == "--handshake")
+    {
+      const auto handshake = handshakeFromKey(value);
+      if (!handshake) throw UsageError("--handshake must be original or new-v1");
+      sandboxHandshake() = *handshake;
+    }
+    else
+    {
+      throw UsageError(std::format(
+          "drill: '{}' before the drill's name (only --brains, --bodies and "
+          "--handshake go there)",
+          option));
+    }
+  }
+  if (index >= rest.size()) throw UsageError("drill: missing the drill's name");
+  const std::string drill = rest[index];
+  const std::vector<std::string> options(rest.begin() + static_cast<std::ptrdiff_t>(index) + 1,
+                                         rest.end());
+  const ScratchRuntime runtime;
+  quietLogging();
+  return runMeasureCommand(Lab::loadStatsConfig(), drill, options) == 0
+             ? Lab::ExitCode::OK
+             : Lab::ExitCode::INVALID_ARGUMENTS;
+}
+
 int main(int argc, char** argv)
 {
+  if (argc >= 2 && std::string_view(argv[1]) == "touch-sensitivity")
+  {
+    try
+    {
+      const ScratchRuntime runtime;
+      quietLogging();
+      return runTouchSensitivity(Lab::loadStatsConfig(),
+                                 std::vector<std::string>(argv + 2, argv + argc)) ==
+                     0
+                 ? Lab::ExitCode::OK
+                 : Lab::ExitCode::INVALID_ARGUMENTS;
+    }
+    catch (const std::exception& error)
+    {
+      std::cerr << "fm_lab: " << error.what() << "\n";
+      return Lab::ExitCode::SIMULATION_ERROR;
+    }
+  }
+  if (argc >= 2 && std::string_view(argv[1]) == "drill")
+  {
+    try
+    {
+      return runDrillMode(argc, argv);
+    }
+    catch (const UsageError& error)
+    {
+      std::cerr << "fm_lab: " << error.what() << "\n\n" << USAGE;
+      return Lab::ExitCode::INVALID_ARGUMENTS;
+    }
+    catch (const std::exception& error)
+    {
+      std::cerr << "fm_lab: " << error.what() << "\n";
+      return Lab::ExitCode::SIMULATION_ERROR;
+    }
+  }
   Arguments arguments;
   try
   {

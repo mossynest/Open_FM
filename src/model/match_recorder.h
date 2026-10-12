@@ -269,7 +269,10 @@ struct MatchDuelDetail
     /** The nearest defender deciding whether to challenge this step. */
     ENGAGE,
     TAKE_ON,
-    TACKLE
+    TACKLE,
+    /** A first touch (New v1 body): `chance` is the angle difficulty and
+     * `foul` the weight difficulty; no roll. */
+    FIRST_TOUCH
   };
   Kind kind = Kind::ENGAGE;
   PlayerID player = 0;
@@ -288,6 +291,16 @@ struct MatchDuelDetail
   ScoreBreakdown foul;
   float foulThreshold = 0.0f;
   std::optional<float> foulRoll;
+  /** FIRST_TOUCH: his touch skill; the speed he meant to give the ball and
+   * the speed it got (m/s); the angle error (radians) and the weight error
+   * (share), each with its spread (one sigma). */
+  float touchSkill = 0.0f;
+  float intendedSpeed = 0.0f;
+  float actualSpeed = 0.0f;
+  float angleError = 0.0f;
+  float angleSigma = 0.0f;
+  float weightError = 0.0f;
+  float weightSigma = 0.0f;
 };
 
 /** Receives the engine's observations. Every hook defaults to nothing. */

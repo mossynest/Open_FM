@@ -405,6 +405,7 @@ int runMeasureCommand(const StatsConfig& config, const std::string& drillName,
   std::optional<std::filesystem::path> csvPath;
   bool csvAuto = false;
   std::string error;
+  std::optional<std::string> presetName;
   for (std::size_t index = 0; index < arguments.size(); ++index)
   {
     const std::string& argument = arguments[index];
@@ -439,6 +440,10 @@ int runMeasureCommand(const StatsConfig& config, const std::string& drillName,
     {
       spec.repeats = static_cast<int>(toFloat(value).value_or(1.0f));
     }
+    else if (argument == "--preset" && hasValue)
+    {
+      presetName = value;
+    }
     else if (argument == "--seed" && hasValue)
     {
       spec.firstSeed = static_cast<std::uint32_t>(toFloat(value).value_or(1.0f));
@@ -459,6 +464,22 @@ int runMeasureCommand(const StatsConfig& config, const std::string& drillName,
       break;
     }
     ++index;
+  }
+  // A preset fills in settings; any --set (whatever its place) wins over it.
+  if (error.empty() && presetName)
+  {
+    const auto list = drill->presets();
+    const auto found = std::ranges::find(list, *presetName, &DrillPreset::name);
+    if (found == list.end())
+    {
+      error = std::format("no preset \"{}\"; presets:", *presetName);
+      for (const DrillPreset& preset : list) error += " \"" + preset.name + '"';
+    }
+    else
+    {
+      for (const auto& [name, value] : found->settings)
+        spec.fixed.try_emplace(name, value);
+    }
   }
   if (error.empty() && spec.sweep.values.empty())
     error = "--sweep is required, e.g. --sweep \"Pace=40:95:12\"";

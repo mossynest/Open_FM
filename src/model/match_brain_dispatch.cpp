@@ -182,6 +182,33 @@ MatchEngine::HeaderPlay MatchEngine::chooseHeaderPlay(const MatchPlayer& header,
   return chooseHeaderPlayOriginal(header, fromTeammate);
 }
 
+bool MatchEngine::touchNow(const MatchPlayer& player, const TouchMoment& moment)
+{
+  // The Original brain has no first-touch decisions: it plays the ball the
+  // moment it comes into reach.
+  switch (brainOf(player.isHomeTeam))
+  {
+    case BrainId::ORIGINAL:
+      break;
+    case BrainId::NEW_V1:
+      return touchNowNewV1(player, moment);
+  }
+  return true;
+}
+
+TouchIntent MatchEngine::chooseFirstTouch(const MatchPlayer& player,
+                                          const TouchMoment& moment)
+{
+  switch (brainOf(player.isHomeTeam))
+  {
+    case BrainId::ORIGINAL:
+      break;
+    case BrainId::NEW_V1:
+      return chooseFirstTouchNewV1(player, moment);
+  }
+  return defaultTouchIntent(player);
+}
+
 MatchEngine::Challenge MatchEngine::chooseChallenge(const MatchPlayer& carrier,
                                                     float dt)
 {

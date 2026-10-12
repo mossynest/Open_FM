@@ -435,6 +435,36 @@ bool MatchEngine::executeCommand(const MatchCommandRecord& command)
       forcedShooter = command.player;
       ++inputRevision;
       return true;
+    case MatchCommandType::FEED_BALL:
+    {
+      MatchPlayer* receiver =
+          command.player != 0 ? drillPlayer(command.player) : nullptr;
+      if (state != MatchState::PLAYING || !command.target ||
+          (command.player != 0 && !receiver))
+        return false;
+      // A fresh ball in flight: nobody owns it or last played it.
+      clearPossession();
+      clearFlightState();
+      ball.position = {std::clamp(command.target->x, 0.001f, 0.999f),
+                       std::clamp(command.target->y, 0.001f, 0.999f)};
+      ball.z = 0.0f;
+      ball.velocity = command.feedVelocity;
+      ball.velocityZ = command.feedLift;
+      ball.curve = 0.0f;
+      ball.lastPossessor = nullptr;
+      ball.kicker = nullptr;
+      ball.kickerLockout = 0.0f;
+      ball.touchAttempts = 0;
+      if (receiver)
+      {
+        ball.isPass = true;
+        ball.intendedReceiver = receiver->player;
+        ball.passByHome = receiver->isHomeTeam;
+        ball.passTarget = receiver->position;
+      }
+      ++inputRevision;
+      return true;
+    }
     case MatchCommandType::TEAM_TALK:
       if (command.talkHalf < 1 || command.talkHalf > 2 ||
           !std::isfinite(command.talkModifier))
@@ -1155,7 +1185,8 @@ void MatchEngine::simulateStepBody(float dt)
         dt * (matchClockRate()) / MatchTuning::Timing::SECONDS_PER_MINUTE;
     resolvePossessionAndActions(dt);
     trackPressures();
-    if (!ball.possessedBy && state == MatchState::PLAYING) updateBall(dt);
+    if ((!ball.possessedBy || ball.inTouch) && state == MatchState::PLAYING)
+      updateBall(dt);
     // Possession belongs to the side in control, including its passes in
     // flight and the loose balls it last played.
     if (lastControlledTeamHome)
@@ -1236,7 +1267,7 @@ void MatchEngine::announceAddedTime()
 void MatchEngine::endPeriod()
 {
   restartTakerIndex.reset();
-  ball.possessedBy = nullptr;
+  clearPossession();
   ball.velocity = {0.0f, 0.0f};
   ball.velocityZ = 0.0f;
   clearFlightState();
@@ -1425,7 +1456,7 @@ void MatchEngine::beginShootoutKick()
   taker->movementTarget = spot;
   ball = MatchBall{};
   ball.position = spot;
-  ball.possessedBy = taker->player;
+  handBallTo(taker->player);
   ball.lastPossessor = taker->player;
   strikeShot(*taker, MatchTuning::Shooting::PENALTY_XG, false, true);
   planGoalkeeperDive(!home, true);
@@ -1512,7 +1543,7 @@ void MatchEngine::finishShootoutKick(MatchEventDetail outcome)
   shootout.inFlight = false;
   shootout.timer = MatchTuning::Timing::SHOOTOUT_KICK_INTERVAL_SECONDS;
   clearFlightState();
-  ball.possessedBy = nullptr;
+  clearPossession();
   ball.velocity = {0.0f, 0.0f};
   ball.velocityZ = 0.0f;
   keepers[shootout.kickerHome ? 1 : 0].state = GoalkeeperState::SET_POSITION;
@@ -1635,7 +1666,8 @@ void MatchEngine::updateMovement(float dt)
   // ball changes hands or starts/ends a flight; bodies move every step.
   const std::uint8_t flags = static_cast<std::uint8_t>(
       (ball.isPass ? 1U : 0U) | (ball.isShot ? 2U : 0U) |
-      (lastControlledTeamHome ? (*lastControlledTeamHome ? 4U : 8U) : 0U));
+      (lastControlledTeamHome ? (*lastControlledTeamHome ? 4U : 8U) : 0U) |
+      (ball.inTouch ? 16U : 0U));
   const bool scheduled =
       periodElapsed(MatchTuning::Timing::TACTICAL_REFRESH_STEPS);
   const bool forced =
@@ -1682,6 +1714,8 @@ void MatchEngine::updateMovement(float dt)
         player.tacticalTarget = goalkeeperTarget(player, holder);
     }
   }
+
+  if (ball.inTouch) chaseTouchedBall();
 
   // Every target was read from the same snapshot of the play; now the bodies
   // move: diving keepers, the controlled player and a batch of the rest.
@@ -2743,7 +2777,18 @@ void MatchEngine::resolvePossessionAndActions(float dt)
   MatchPlayer* carrier = findMatchPlayer(ball.possessedBy);
   if (!carrier) return;
   ball.lastPossessor = carrier->player;
-  if (!updateDribble(*carrier, dt)) return;
+  if (ball.inTouch)
+  {
+    // A touched ball rolls free until he collects it (then the dribble
+    // takes over this same step); he can be challenged meanwhile.
+    const bool rolling = updateTouch(*carrier);
+    if (ball.possessedBy != carrier->player) return;
+    if (!rolling && !updateDribble(*carrier, dt)) return;
+  }
+  else if (!updateDribble(*carrier, dt))
+  {
+    return;
+  }
 
   // The controlled player tackles only on the button, when in reach.
   if (controlledIndex && controlInput.action != MatchInputAction::NONE)
@@ -2783,6 +2828,9 @@ void MatchEngine::resolvePossessionAndActions(float dt)
         return;
     }
   }
+
+  // Nobody plays a ball that is still rolling to him.
+  if (ball.inTouch) return;
 
   // The AI waits out its decision time after a touch; a controlled player
   // can play the ball as soon as it is under control.
@@ -3093,7 +3141,7 @@ void MatchEngine::attemptTackle(MatchPlayer& carrier, MatchPlayer& defender,
           randomFloat(-std::numbers::pi_v<float>, std::numbers::pi_v<float>);
       const float speed = randomFloat(MatchTuning::Defending::MIN_POKE_SPEED,
                                       MatchTuning::Defending::MAX_POKE_SPEED);
-      ball.possessedBy = nullptr;
+      clearPossession();
       ball.lastPossessor = defender.player;
       clearFlightState();
       ball.z = 0.0f;
@@ -3592,7 +3640,7 @@ void MatchEngine::launchBall(const MatchPlayer& kicker, Vector2F origin,
                    direction.y * horizontalSpeed};
   ball.velocityZ = verticalSpeed;
   ball.curve = curve;
-  ball.possessedBy = nullptr;
+  clearPossession();
   ball.lastPossessor = kicker.player;
   ball.kicker = kicker.player;
   ball.kickerLockout = MatchTuning::Passing::KICKER_LOCKOUT_SECONDS;
@@ -3796,9 +3844,13 @@ void MatchEngine::updateBall(float dt)
   const float substep = dt / static_cast<float>(substeps);
   for (int index = 0; index < substeps; ++index)
   {
-    if (ball.possessedBy || state != MatchState::PLAYING) return;
+    // A touched ball (owned but rolling free) keeps moving like a loose one.
+    if ((ball.possessedBy && !ball.inTouch) || state != MatchState::PLAYING)
+      return;
     substepBallPosition = ball.position;
     substepBallZ = ball.z;
+    substepsLeftInStep = substeps - 1 - index;
+    ballStepSeconds = dt;
     integrateBall(substep);
 
     // A shot that has died (smothered, spent or trickling) is a loose ball.
@@ -3926,30 +3978,45 @@ void MatchEngine::parryShot(MatchPlayer& keeper, bool overTheBar)
 void MatchEngine::recordPassCompletion(MatchPlayer& receiver)
 {
   if (!ball.isPass) return;
-  MatchPlayer* passer = findMatchPlayer(ball.lastPossessor);
   if (receiver.isHomeTeam == ball.passByHome)
   {
-    if (receiver.isHomeTeam)
-      ++stats.homePassesCompleted;
-    else
-      ++stats.awayPassesCompleted;
-    if (passer && passer->isHomeTeam == receiver.isHomeTeam &&
-        passer != &receiver)
-    {
-      ++statsOf(*passer).passesCompleted;
-      trackPassCompletion(*passer, receiver);
-      lastCompletedPasser = passer->player;
-      lastCompletedReceiver = receiver.player;
-    }
+    creditPassCompletion(receiver, ball.lastPossessor);
     return;
   }
   ++statsOf(receiver).interceptions;
 }
 
+void MatchEngine::creditPassCompletion(MatchPlayer& receiver,
+                                       const Player* passerPlayer)
+{
+  if (receiver.isHomeTeam)
+    ++stats.homePassesCompleted;
+  else
+    ++stats.awayPassesCompleted;
+  MatchPlayer* passer = findMatchPlayer(passerPlayer);
+  if (passer && passer->isHomeTeam == receiver.isHomeTeam &&
+      passer != &receiver)
+  {
+    ++statsOf(*passer).passesCompleted;
+    trackPassCompletion(*passer, receiver);
+    lastCompletedPasser = passer->player;
+    lastCompletedReceiver = receiver.player;
+  }
+}
+
 void MatchEngine::resolveLooseBall()
 {
-  if (ball.possessedBy) return;
+  // A touched ball is still rolling free: only its owner's opponents can
+  // play it (he collects it himself in updateTouch).
+  if (ball.possessedBy && !ball.inTouch) return;
+  const MatchPlayer* touchOwner =
+      ball.inTouch ? findMatchPlayer(ball.possessedBy) : nullptr;
   using B = MatchTuning::Ball;
+  // While it is still within his own reach it is his: an opponent has to
+  // tackle him for it (chooseChallenge), not just touch it away.
+  if (touchOwner &&
+      distance(touchOwner->position, ball.position) <= feetReach(*touchOwner))
+    return;
 
   const float endHeight = ball.z * MatchTuning::Units::BALL_Z_METRES;
   if (!ball.isShot && endHeight > MatchTuning::Aerial::CONTROL_CEILING_METRES)
@@ -3989,11 +4056,14 @@ void MatchEngine::resolveLooseBall()
   std::size_t contactCount = 0;
   // Nobody further than the largest reach from the segment's bounding box can
   // touch the ball; the margin keeps the exact test below authoritative.
-  constexpr float REACH_BOUND = B::GOALKEEPER_CONTROL_RADIUS_METRES + 0.01f;
-  const float boundMinX = std::min(start.x, end.x) - REACH_BOUND;
-  const float boundMaxX = std::max(start.x, end.x) + REACH_BOUND;
-  const float boundMinY = std::min(start.y, end.y) - REACH_BOUND;
-  const float boundMaxY = std::max(start.y, end.y) + REACH_BOUND;
+  // (The feet reach is a knob, which may be set beyond a keeper's.)
+  const float maxReach = std::max(B::GOALKEEPER_CONTROL_RADIUS_METRES,
+                                  touchKnobs[TouchKnob::FEET_REACH]);
+  const float reachBound = maxReach + 0.01f;
+  const float boundMinX = std::min(start.x, end.x) - reachBound;
+  const float boundMaxX = std::max(start.x, end.x) + reachBound;
+  const float boundMinY = std::min(start.y, end.y) - reachBound;
+  const float boundMaxY = std::max(start.y, end.y) + reachBound;
   for (std::size_t slot = 0; slot < players.size() && slot < contacts.size();
        ++slot)
   {
@@ -4003,6 +4073,7 @@ void MatchEngine::resolveLooseBall()
         position.y < boundMinY || position.y > boundMaxY)
       continue;
     if (!active(player) || player.trapTimer > 0.0f) continue;
+    if (touchOwner && player.isHomeTeam == touchOwner->isHomeTeam) continue;
     if (ball.kickerLockout > 0.0f && ball.kicker == player.player) continue;
     if ((ball.touchAttempts & (1U << slot)) != 0U) continue;
     // Team-mates let a pass run to its receiver, and never block their own
@@ -4023,9 +4094,7 @@ void MatchEngine::resolveLooseBall()
     const float gapY = position.y - (start.y + segment.y * along);
     const float gapSquared = gapX * gapX + gapY * gapY;
     // Cheap reject beyond the largest reach before any square root.
-    if (gapSquared > B::GOALKEEPER_CONTROL_RADIUS_METRES *
-                         B::GOALKEEPER_CONTROL_RADIUS_METRES)
-      continue;
+    if (gapSquared > maxReach * maxReach) continue;
     const float gap = std::sqrt(gapSquared);
     const float height = startHeight + (endHeight - startHeight) * along;
     const bool hands = handsAllowed(player);
@@ -4050,11 +4119,22 @@ void MatchEngine::resolveLooseBall()
     }
     else
     {
-      reach = height <= B::LOW_BALL_METRES ? B::OUTFIELD_CONTROL_RADIUS_METRES
+      reach = height <= B::LOW_BALL_METRES ? feetReach(player)
                                            : B::CHEST_CONTROL_RADIUS_METRES;
     }
     if (reach <= 0.0f || gap > reach) continue;
     contacts[contactCount++] = {slot, along, gap, height, reach};
+  }
+  // A player who let the ball come closer and now finds it out of his reach
+  // waited too long (counted for the sandbox checks; should never happen).
+  if (ball.touchWaiting != 0U)
+  {
+    std::uint32_t inReach = 0;
+    for (std::size_t index = 0; index < contactCount; ++index)
+      inReach |= 1U << contacts[index].slot;
+    const std::uint32_t lost = ball.touchWaiting & ~inReach;
+    firstTouchWaitsMissed += static_cast<std::uint32_t>(std::popcount(lost));
+    ball.touchWaiting &= inReach;
   }
   insertionSort(contacts, contactCount,
                 [](const Contact& first, const Contact& second)
@@ -4068,6 +4148,27 @@ void MatchEngine::resolveLooseBall()
   {
     const Contact& contact = contacts[index];
     MatchPlayer& player = players[contact.slot];
+    const bool hands = handsAllowed(player);
+    const int substepsPerStep =
+        MatchTuning::Timing::BALL_SUBSTEPS * static_cast<int>(stepTicks);
+    const TouchMoment moment{toPitch({start.x + segment.x * contact.along,
+                                      start.y + segment.y * contact.along}),
+                             contact.gap,
+                             contact.reach,
+                             contact.height,
+                             substepsLeftInStep,
+                             ballStepSeconds /
+                                 static_cast<float>(substepsPerStep),
+                             ballStepSeconds};
+    // With the new first touch he may let the ball come closer before he
+    // plays it; until he does, it is no attempt.
+    if (!ball.isShot && playsFirstTouch(player, hands, contact.height) &&
+        !touchNow(player, moment))
+    {
+      ball.touchWaiting |= 1U << contact.slot;
+      continue;
+    }
+    ball.touchWaiting &= ~(1U << contact.slot);
     ball.touchAttempts |= 1U << contact.slot;
     const float stretch = contact.gap / std::max(contact.reach, EPSILON);
 
@@ -4106,10 +4207,12 @@ void MatchEngine::resolveLooseBall()
     // Anyone other than the intended receiver has to stretch and react to
     // get a touch: close balls are met, fast wide ones fly past.
     const bool intended = ball.isPass && ball.intendedReceiver == player.player;
-    const bool hands = handsAllowed(player);
     if (!intended && !hands && ballSpeed > B::MAX_HEAVY_TOUCH_SPEED &&
         !reachesBall(player, ballSpeed, stretch))
       continue;
+    // An opponent getting to a touched ball ends the claim, whatever his own
+    // touch then does with it.
+    if (ball.inTouch) clearPossession();
 
     // A defender meeting a cross close to his own goal line often plays safe
     // and puts it behind, and now and then turns it into his own net.
@@ -4133,6 +4236,29 @@ void MatchEngine::resolveLooseBall()
       --statsOf(player).interceptions;
     }
 
+    // The receiver of an offside pass is penalised when he plays it.
+    const auto whistledOffside = [&]
+    {
+      if (!ball.isPass || !ball.passWasOffside || !intended) return false;
+      if (player.isHomeTeam)
+        ++stats.homeOffsides;
+      else
+        ++stats.awayOffsides;
+      MatchEvent& event = logEvent(MatchEventType::OFFSIDE, player);
+      event.position = player.position;
+      setupFreeKick(!player.isHomeTeam, player.position);
+      return true;
+    };
+
+    if (playsFirstTouch(player, hands, contact.height))
+    {
+      // The new first touch: no success roll; the ball is played on from
+      // where he met it, and what happens next follows from where it goes.
+      if (whistledOffside()) return;
+      playFirstTouch(player, moment);
+      return;
+    }
+
     const float skill = touchSkill(player, hands);
     if (!controlsBall(player, skill, ballSpeed, contact.height))
     {
@@ -4151,17 +4277,7 @@ void MatchEngine::resolveLooseBall()
       return;
     }
 
-    if (ball.isPass && ball.passWasOffside && intended)
-    {
-      if (player.isHomeTeam)
-        ++stats.homeOffsides;
-      else
-        ++stats.awayOffsides;
-      MatchEvent& event = logEvent(MatchEventType::OFFSIDE, player);
-      event.position = player.position;
-      setupFreeKick(!player.isHomeTeam, player.position);
-      return;
-    }
+    if (whistledOffside()) return;
 
     recordPassCompletion(player);
     setPossession(player);
@@ -4484,7 +4600,7 @@ void MatchEngine::setPossession(MatchPlayer& player)
     possessionStartSeconds = getSimulatedSeconds();
     ++statsOf(player).touches;
   }
-  ball.possessedBy = player.player;
+  handBallTo(player.player);
   ball.lastPossessor = player.player;
   ball.position = player.position;
   ball.z = 0.0f;
@@ -4501,6 +4617,199 @@ void MatchEngine::setPossession(MatchPlayer& player)
   if (length(ball.dribbleDirection) <= EPSILON)
     ball.dribbleDirection = {player.isHomeTeam ? 1.0f : -1.0f, 0.0f};
   updateTeamPhases();
+}
+
+void MatchEngine::clearPossession()
+{
+  ball.possessedBy = nullptr;
+  ball.inTouch = false;
+  ball.touchPasser = nullptr;
+  ball.touchWaiting = 0;
+}
+
+void MatchEngine::handBallTo(const Player* holder)
+{
+  ball.possessedBy = holder;
+  ball.inTouch = false;
+  ball.touchPasser = nullptr;
+  ball.touchWaiting = 0;
+}
+
+bool MatchEngine::possessionConsistent() const
+{
+  return !ball.inTouch ||
+         (ball.possessedBy != nullptr && state == MatchState::PLAYING);
+}
+
+bool MatchEngine::playsFirstTouch(const MatchPlayer& player, bool hands,
+                                  float heightMetres) const
+{
+  // Feet only, outfielders only, New v1 bodies only: chest control and
+  // goalkeepers keep the old trap for now (first-touch plan, §1).
+  return bodyOf(player.isHomeTeam) == BodyId::NEW_V1 && !player.isGoalkeeper &&
+         !hands && heightMetres <= MatchTuning::Ball::LOW_BALL_METRES;
+}
+
+float MatchEngine::feetReach(const MatchPlayer& player) const
+{
+  // The knob reaches only the bodies with the new first touch, so the
+  // Original body keeps its reach.
+  return bodyOf(player.isHomeTeam) == BodyId::NEW_V1 && !player.isGoalkeeper
+             ? touchKnobs[TouchKnob::FEET_REACH]
+             : MatchTuning::Ball::OUTFIELD_CONTROL_RADIUS_METRES;
+}
+
+TouchIntent MatchEngine::defaultTouchIntent(const MatchPlayer& player) const
+{
+  TouchIntent intent;
+  const Vector2F ahead = toPitch(
+      {(player.isHomeTeam ? 1.0f : -1.0f) *
+           touchKnobs[TouchKnob::SET_OFFSET],
+       0.0f});
+  intent.targetSpot = {std::clamp(player.position.x + ahead.x, 0.001f, 0.999f),
+                       player.position.y};
+  return intent;
+}
+
+void MatchEngine::playFirstTouch(MatchPlayer& player, const TouchMoment& moment)
+{
+  const Vector2F contactPoint = moment.contactPoint;
+  // A team-mate's pass counts as completed only once the ball is collected;
+  // an opponent's pass is intercepted at the touch.
+  const bool receivingPass = ball.isPass && ball.passByHome == player.isHomeTeam;
+  const Player* passer = ball.lastPossessor;
+  if (!receivingPass) recordPassCompletion(player);
+  const TouchIntent intent = chooseFirstTouch(player, moment);
+  // Read before setPossession clears the flight (whose pass it was).
+  const TouchResult touch = firstTouchNewV1(player, intent, moment);
+
+  // He owns it from the touch (phases, transitions, touches), but the ball
+  // carries on from where he met it instead of being placed at his feet.
+  setPossession(player);
+  ball.position = {std::clamp(contactPoint.x, 0.001f, 0.999f),
+                   std::clamp(contactPoint.y, 0.001f, 0.999f)};
+  ball.velocity = touch.velocity;
+  ball.z = 0.0f;
+  ball.velocityZ = 0.0f;
+  ball.curve = 0.0f;
+  ball.kicker = player.player;
+  ball.kickerLockout = 0.0f;
+  ball.touchAttempts = 0;
+  ball.inTouch = true;
+  ball.touchPasser = receivingPass ? passer : nullptr;
+  ball.touchKind = intent.kind;
+  ball.touchContactGap = moment.gap;
+  ball.touchContactHeight = moment.height;
+  ball.touchAngleError = touch.angleError;
+  ball.touchWeightError = touch.weightError;
+  ball.touchAngleDifficulty = touch.angleDifficulty;
+  ball.touchWeightDifficulty = touch.weightDifficulty;
+  const float gap = distance(player.position, ball.position);
+  ball.touchGap = gap;
+  ball.touchPeakGap = gap;
+  ball.dribbleExposure = gap;
+  ball.dribbleTouchLength =
+      std::max(gap, MatchTuning::Dribble::MAX_TOUCH_METRES);
+}
+
+bool MatchEngine::updateTouch(MatchPlayer& carrier)
+{
+  using F = MatchTuning::FirstTouch;
+  using R = MatchTuning::Dribble;
+  const float gap = distance(carrier.position, ball.position);
+  const Vector2F relative{ball.velocity.x - carrier.velocity.x,
+                          ball.velocity.y - carrier.velocity.y};
+
+  if (gap <= R::KICK_REACH_METRES &&
+      length(relative) <= touchKnobs[TouchKnob::COLLECT_RELATIVE_SPEED])
+  {
+    // Collected: the dribble carries on from where the ball really is, its
+    // next touch due on the usual rhythm rather than at once.
+    const Vector2F toBall = metricDirection(carrier.position, ball.position);
+    if (length(toBall) > EPSILON) ball.dribbleDirection = toBall;
+    ball.dribbleExposure = gap;
+    ball.dribbleTouchLength = std::max(ball.touchPeakGap, R::MAX_TOUCH_METRES);
+    ball.touchTimer = std::clamp(
+        R::TOUCH_INTERVAL_BASE -
+            length(carrier.velocity) * R::TOUCH_INTERVAL_PER_SPEED -
+            carrier.dribbling * R::TOUCH_INTERVAL_DRIBBLING,
+        R::MIN_TOUCH_INTERVAL, R::MAX_TOUCH_INTERVAL);
+    ball.inTouch = false;
+    if (ball.touchPasser) creditPassCompletion(carrier, ball.touchPasser);
+    ball.touchPasser = nullptr;
+    carrier.actionCooldown =
+        randomFloat(F::MIN_DECISION_DELAY, F::MAX_DECISION_DELAY);
+    return false;
+  }
+
+  // Lost the claim: the ball got away from him, or an opponent will get
+  // there first. It is a loose ball again, his to chase like anyone's.
+  bool lost = gap > touchKnobs[TouchKnob::RELEASE_DISTANCE] &&
+              gap > ball.touchGap;
+  if (!lost)
+  {
+    const float own = gap / std::max(currentTopSpeed(carrier), EPSILON);
+    if (const MatchPlayer* rival =
+            findClosestPlayer(ball.position, !carrier.isHomeTeam, false))
+      lost = distance(rival->position, ball.position) /
+                     std::max(currentTopSpeed(*rival), EPSILON) +
+                 touchKnobs[TouchKnob::RELEASE_RACE] <
+             own;
+  }
+  if (lost)
+  {
+    clearPossession();
+    ball.kicker = carrier.player;
+    ball.kickerLockout = MatchTuning::Ball::FAILED_TOUCH_LOCKOUT;
+    ball.touchAttempts = 0;
+    return false;
+  }
+
+  // Still rolling to him: defenders read how far it is from his foot.
+  ball.touchGap = gap;
+  ball.touchPeakGap = std::max(ball.touchPeakGap, gap);
+  ball.dribbleExposure = gap;
+  ball.dribbleTouchLength = std::max(ball.touchPeakGap, R::MAX_TOUCH_METRES);
+  return true;
+}
+
+void MatchEngine::chaseTouchedBall()
+{
+  // He runs to the earliest point of the ball's roll he can reach, read
+  // with the same rolling physics the ball obeys. A human steers himself.
+  MatchPlayer* owner = findMatchPlayer(ball.possessedBy);
+  if (!owner || !active(*owner) || isControlled(*owner)) return;
+  using F = MatchTuning::FirstTouch;
+  constexpr int SUBSTEPS = MatchTuning::Timing::BALL_SUBSTEPS;
+  const float topSpeed = std::max(currentTopSpeed(*owner), EPSILON);
+  const float speed = length(ball.velocity);
+  const Vector2F heading =
+      speed > EPSILON ? Vector2F{ball.velocity.x / speed, ball.velocity.y / speed}
+                      : Vector2F{0.0f, 0.0f};
+  FlightState flight{speed, 0.0f, 0.0f, false};
+  float travelled = 0.0f;
+  Vector2F meet = ball.position;
+  for (float elapsed = F::CHASE_STEP_SECONDS;
+       elapsed <= F::CHASE_HORIZON_SECONDS + EPSILON;
+       elapsed += F::CHASE_STEP_SECONDS)
+  {
+    for (int step = 0; step < SUBSTEPS && flight.horizontalSpeed > 0.0f; ++step)
+      travelled +=
+          stepFlight(flight, F::CHASE_STEP_SECONDS / static_cast<float>(SUBSTEPS));
+    const Vector2F rolled =
+        toPitch({heading.x * travelled, heading.y * travelled});
+    meet = {ball.position.x + rolled.x, ball.position.y + rolled.y};
+    if (distance(owner->position, meet) -
+            MatchTuning::Dribble::KICK_REACH_METRES <=
+        topSpeed * elapsed)
+      break;
+  }
+  owner->tacticalTarget = meet;
+  // Running with it, not pulling up at the point: a moving target, so his
+  // run matches the ball's (a still ball: he stops on it).
+  owner->targetVelocity = ball.velocity;
+  owner->intent = PlayerIntent::RECEIVE_PASS;
+  owner->urgentMovement = true;
 }
 
 void MatchEngine::clearFlightState()
@@ -4685,7 +4994,7 @@ void MatchEngine::scoreGoal(bool homeTeam)
   goalScoredByHome = homeTeam;
   goalCelebrationRemaining = getGoalCelebrationDuration();
   state = MatchState::GOAL;
-  ball.possessedBy = nullptr;
+  clearPossession();
   ball.shotByHome = homeTeam;
   pendingAdvantage.active = false;
   restartTakerIndex.reset();
@@ -4793,7 +5102,7 @@ void MatchEngine::setupKickOff(bool homeKickingOff)
                                       : MatchTuning::Pitch::AWAY_KICKOFF_X,
                        MatchTuning::Pitch::CENTRE};
     taker->movementTarget = taker->position;
-    ball.possessedBy = taker->player;
+    handBallTo(taker->player);
     ball.lastPossessor = taker->player;
   }
   state = MatchState::KICK_OFF;
@@ -4831,7 +5140,7 @@ void MatchEngine::setupThrowIn(bool homeTeam)
   // The taker walks to the touchline spot during the stoppage.
   if (taker) taker->movementTarget = ball.position;
   ball.velocity = {0.0f, 0.0f};
-  ball.possessedBy = taker ? taker->player : nullptr;
+  handBallTo(taker ? taker->player : nullptr);
   ball.lastPossessor = ball.possessedBy;
   clearFlightState();
   state = MatchState::THROW_IN;
@@ -4858,7 +5167,7 @@ void MatchEngine::setupGoalKick(bool homeTeam)
   setRestartTaker(taker);
   if (taker) taker->movementTarget = ball.position;
   ball.velocity = {0.0f, 0.0f};
-  ball.possessedBy = taker ? taker->player : nullptr;
+  handBallTo(taker ? taker->player : nullptr);
   ball.lastPossessor = ball.possessedBy;
   clearFlightState();
   state = MatchState::GOAL_KICK;
@@ -4887,7 +5196,7 @@ void MatchEngine::setupCorner(bool homeTeam, bool topCorner)
   setRestartTaker(taker);
   if (taker) placeTaker(*taker, ball.position);
   ball.velocity = {0.0f, 0.0f};
-  ball.possessedBy = taker ? taker->player : nullptr;
+  handBallTo(taker ? taker->player : nullptr);
   ball.lastPossessor = ball.possessedBy;
   clearFlightState();
   arrangeSetPiece(homeTeam, ball.position);
@@ -4929,7 +5238,7 @@ void MatchEngine::setupFreeKick(bool homeTeam, Vector2F foulPos)
   else if (taker)
     taker->movementTarget = ball.position;
   ball.velocity = {0.0f, 0.0f};
-  ball.possessedBy = taker ? taker->player : nullptr;
+  handBallTo(taker ? taker->player : nullptr);
   ball.lastPossessor = ball.possessedBy;
   clearFlightState();
   if (restartIsSetPiece) arrangeSetPiece(homeTeam, ball.position);
@@ -4960,7 +5269,7 @@ void MatchEngine::setupPenalty(bool homeTeam)
   ball.z = 0.0f;
   ball.velocityZ = 0.0f;
   ball.velocity = {0.0f, 0.0f};
-  ball.possessedBy = taker ? taker->player : nullptr;
+  handBallTo(taker ? taker->player : nullptr);
   ball.lastPossessor = ball.possessedBy;
   if (taker) placeTaker(*taker, spot);
   // Everyone else waits outside the area; the keeper stands on his line.
@@ -5099,7 +5408,7 @@ void MatchEngine::completeRestart()
   restartTakerIndex.reset();
   if (!taker || !active(*taker))
   {
-    ball.possessedBy = nullptr;
+    clearPossession();
     ball.velocity = {0.0F, 0.0F};
     ball.velocityZ = 0.0F;
     clearFlightState();
@@ -5599,7 +5908,7 @@ bool MatchEngine::performSubstitution(MatchPlayer& outgoing,
   outgoing.yellowCards = 0;
   outgoing.actionCooldown = MatchTuning::Player::SUBSTITUTION_SETTLE_SECONDS;
   outgoing.statsIndex = addPlayerStats(outgoing, false);
-  if (hadPossession) ball.possessedBy = inPlayer;
+  if (hadPossession) handBallTo(inPlayer);
   if (ball.lastPossessor && ball.lastPossessor->getId() == outgoingId)
     ball.lastPossessor = inPlayer;
 
@@ -5855,7 +6164,7 @@ void MatchEngine::removeFromPitch(MatchPlayer& player)
   statsOf(player).condition = player.stamina;
   if (ball.possessedBy == player.player)
   {
-    ball.possessedBy = nullptr;
+    clearPossession();
     ball.velocity = {0.0f, 0.0f};
   }
   // Park beside the dugouts, clear of play and of each other.
@@ -5881,7 +6190,7 @@ void MatchEngine::removeFromPitch(MatchPlayer& player)
         findClosestPlayer(ball.position, homeTeam, false);
     setRestartTaker(replacement);
     if (replacement && state != MatchState::PLAYING)
-      ball.possessedBy = replacement->player;
+      handBallTo(replacement->player);
   }
   if (wasKeeper) ensureGoalkeeper(homeTeam);
   rebalanceShape(homeTeam, vacated, wasKeeper ? -1 : vacatedSlot);
@@ -6058,7 +6367,7 @@ std::optional<MatchPlayer*> MatchEngine::placeScenario(
       });
   if (carrier == players.end()) return std::nullopt;
 
-  ball.possessedBy = carrier->player;
+  handBallTo(carrier->player);
   ball.lastPossessor = carrier->player;
   if (carrier->isHomeTeam)
   {
@@ -6128,7 +6437,7 @@ bool MatchEngine::removeBeforeKickOff(PlayerID playerId)
   player->movementTarget = player->position;
   player->tacticalTarget = player->position;
   player->targetVelocity = {0.0f, 0.0f};
-  if (ball.possessedBy == player->player) ball.possessedBy = nullptr;
+  if (ball.possessedBy == player->player) clearPossession();
   return true;
 }
 
@@ -6155,6 +6464,18 @@ void MatchEngine::forceShot(PlayerID playerId)
   MatchCommandRecord command;
   command.type = MatchCommandType::FORCE_SHOT;
   command.player = playerId;
+  recordCommand(command);
+}
+
+void MatchEngine::feedBall(Vector2F from, Vector2F velocity, float lift,
+                           PlayerID receiverId)
+{
+  MatchCommandRecord command;
+  command.type = MatchCommandType::FEED_BALL;
+  command.player = receiverId;
+  command.target = from;
+  command.feedVelocity = velocity;
+  command.feedLift = lift;
   recordCommand(command);
 }
 

@@ -172,6 +172,7 @@ set(FM_CORE_SOURCES
     model/match_brain_original.cpp
     model/match_brain_original_members.h
     model/match_derived_stats.h
+    model/match_first_touch_knobs.h
     model/match_handshake.h
     model/match_handshake_dispatch.cpp
     model/match_handshake_new_v1.cpp
@@ -606,7 +607,8 @@ endif()
 
 # -----------------------------
 # Balance lab: headless batch simulation and calibration reports (fm_lab).
-# Links fm_core only (no window, no ImGui).
+# Links fm_core; the drill mode also links the drills (and through them the
+# UI library), but runs headless.
 # -----------------------------
 add_library(fm_lab_lib STATIC
     tools/lab_stats.h
@@ -623,8 +625,29 @@ add_library(fm_lab_lib STATIC
 target_link_libraries(fm_lab_lib PUBLIC fm_core)
 target_compile_options(fm_lab_lib PRIVATE ${FM_WARNING_FLAGS})
 
+# -----------------------------
+# Drills: the match sandbox's minigames and Measure mode, shared by the
+# sandbox and the lab (fm_lab drill). Their settings and overlays use ImGui,
+# so they link the UI library; the lab only ever runs them headless.
+# -----------------------------
+add_library(fm_drills STATIC
+    tools/match_sandbox_drill.h
+    tools/match_sandbox_drill.cpp
+    tools/match_sandbox_drills.cpp
+    tools/match_sandbox_measure.h
+    tools/match_sandbox_measure.cpp
+    tools/match_sandbox_setup.h
+    tools/match_sandbox_setup.cpp
+    tools/match_sandbox_recorder.h
+    tools/match_sandbox_recorder.cpp
+    tools/lab_touch_sensitivity.h
+    tools/lab_touch_sensitivity.cpp
+)
+target_link_libraries(fm_drills PUBLIC fm_ui fm_lab_lib)
+target_compile_options(fm_drills PRIVATE ${FM_WARNING_FLAGS})
+
 add_executable(fm_lab tools/lab_main.cpp)
-target_link_libraries(fm_lab PRIVATE fm_lab_lib)
+target_link_libraries(fm_lab PRIVATE fm_lab_lib fm_drills)
 target_compile_options(fm_lab PRIVATE ${FM_WARNING_FLAGS})
 
 # -----------------------------
@@ -635,8 +658,6 @@ add_executable(match_sandbox
     tools/match_sandbox_main.cpp
     tools/match_sandbox_scene.h
     tools/match_sandbox_scene.cpp
-    tools/match_sandbox_recorder.h
-    tools/match_sandbox_recorder.cpp
     tools/match_sandbox_debugger.h
     tools/match_sandbox_debugger.cpp
     tools/match_sandbox_checks.h
@@ -651,21 +672,14 @@ add_executable(match_sandbox
     tools/match_sandbox_inspector_detail.cpp
     tools/match_sandbox_detail.h
     tools/match_sandbox_detail.cpp
-    tools/match_sandbox_setup.h
-    tools/match_sandbox_setup.cpp
     tools/match_sandbox_recording.h
     tools/match_sandbox_recording.cpp
     tools/match_sandbox_compare.h
     tools/match_sandbox_compare.cpp
     tools/match_sandbox_scenario.h
     tools/match_sandbox_scenario.cpp
-    tools/match_sandbox_drill.h
-    tools/match_sandbox_drill.cpp
-    tools/match_sandbox_drills.cpp
     tools/match_sandbox_drill_scene.h
     tools/match_sandbox_drill_scene.cpp
-    tools/match_sandbox_measure.h
-    tools/match_sandbox_measure.cpp
     tools/match_sandbox_measure_scene.h
     tools/match_sandbox_measure_scene.cpp
     tools/match_sandbox_shot_map.h
@@ -675,5 +689,5 @@ add_executable(match_sandbox
     tools/match_sandbox_test_teams.h
     tools/match_sandbox_test_teams.cpp
 )
-target_link_libraries(match_sandbox PRIVATE fm_ui fm_lab_lib)
+target_link_libraries(match_sandbox PRIVATE fm_drills)
 target_compile_options(match_sandbox PRIVATE ${FM_WARNING_FLAGS})

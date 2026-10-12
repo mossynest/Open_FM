@@ -13,8 +13,8 @@
 // Usage: match_sandbox [--world-seed N] [--kick-off] [--drill NAME]
 //                      [--check [MATCHES]]
 //                      [--measure DRILL --sweep AXIS [--by AXIS]
-//                       [--set NAME=VALUE]... [--repeats N] [--seed N]
-//                       [--csv [PATH]]]
+//                       [--preset NAME] [--set NAME=VALUE]... [--repeats N]
+//                       [--seed N] [--csv [PATH]]]
 //   --kick-off  start a match with the default setup straight away
 //   --drill     open a drill (e.g. sprint) straight away in Watch mode
 //   --measure-view  open a drill straight away in Measure mode
@@ -23,9 +23,14 @@
 //   --measure   headless: run a drill over a sweep of one setting and print
 //               the results (no window). AXIS is "Pace=40:95:12"
 //               (from:to:count), "Pace=50,70,90", or a choice setting alone
-//               ("Who runs"). --csv writes every run (to Documents/Player12
-//               drill results without a path). E.g.
+//               ("Who runs"). --preset fills in a drill's named situation;
+//               --set overrides any setting (beyond its slider range too).
+//               --csv writes every run (to Documents/Player12 drill results
+//               without a path). The same command runs from the lab (fm_lab
+//               drill). E.g.
 //               match_sandbox --measure turn --sweep Turn --by "Who runs"
+//               match_sandbox --measure "First touch" --preset "Driven pass
+//               to feet" --sweep "First Touch=30:90:4" --repeats 100
 //   --shot-map  headless: the Shot drill over a grid of spots; prints
 //               conversion, engine xG and their difference per spot and the
 //               calibration. Options: --line from:to:count (metres out),

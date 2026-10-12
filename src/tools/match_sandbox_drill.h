@@ -19,6 +19,7 @@
 #include "global/stats_config.h"
 #include "global/types.h"
 #include "model/match_engine.h"
+#include "model/player.h"
 #include "tools/match_sandbox_recorder.h"
 
 class IMatchRenderer;
@@ -46,6 +47,9 @@ struct DrillPlayerSpec
   /** Derived stats overridden for this player, 0-100 (match_derived_stats.h);
    * any not given come from their recipes. */
   std::map<DerivedStat, float> derived;
+  Foot foot = Foot::Right;
+  /** Condition at the start, 0-100 (100: fresh). */
+  float condition = 100.0f;
 };
 
 /** One setting of a drill (also what a measure sweep can vary). */
@@ -60,6 +64,17 @@ struct DrillParameter
   const char* tooltip = nullptr;
   /** Named choices (the value is the index), e.g. who runs. */
   std::vector<const char*> choices;
+  /** A heading shown above this setting (and the ones after it). */
+  const char* section = nullptr;
+};
+
+/** A named set of a drill's settings (a situation to start from); settings
+ * it leaves out keep their values. */
+struct DrillPreset
+{
+  std::string name;
+  std::string summary;
+  std::map<std::string, float> settings;
 };
 
 /** One numeric result of a drill run, e.g. "Finish (s)". */
@@ -79,7 +94,12 @@ class Drill
   [[nodiscard]] virtual const char* summary() const = 0;
   /** The drill's settings, read and written through their pointers. */
   [[nodiscard]] virtual std::vector<DrillParameter> parameters() = 0;
-  /** Settings widgets: every parameter as a slider or a choice. */
+  /** Named situations to start from (Watch: a picker; Measure: --preset). */
+  [[nodiscard]] virtual std::vector<DrillPreset> presets() const { return {}; }
+  /** Sets the preset's settings; false for an unknown preset name. */
+  bool applyPreset(const std::string& name);
+  /** Settings widgets: the presets, then every parameter as a slider or a
+   * choice (ctrl+click a slider to type a value beyond its range). */
   void renderSettings();
   /** The players this drill needs (their ids follow, in this order). */
   [[nodiscard]] virtual std::vector<DrillPlayerSpec> players() const = 0;

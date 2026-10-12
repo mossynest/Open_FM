@@ -13,6 +13,7 @@
 #include <cmath>
 #include <format>
 #include <limits>
+#include <numbers>
 #include <string>
 #include <variant>
 #include <vector>
@@ -489,6 +490,35 @@ void DebugInspector::renderDuelDetail(const SandboxRecorder& recorder,
         duel.roll >= duel.probability)
       continue;
     ++shown;
+    if (duel.kind == MatchDuelDetail::Kind::FIRST_TOUCH)
+    {
+      // No roll: the difficulty sets the spread of two errors, then draws.
+      constexpr float DEGREES = 180.0f / std::numbers::pi_v<float>;
+      const std::string label = std::format(
+          "{}  First touch  {}  ·  angle off {:+.0f}° (sigma {:.0f}°)  ·  "
+          "weight {:+.0f}% (sigma {:.0f}%)  ·  {:.1f} -> {:.1f} m/s",
+          clock(at->minute), recorder.playerName(duel.player),
+          duel.angleError * DEGREES, duel.angleSigma * DEGREES,
+          duel.weightError * 100.0f, duel.weightSigma * 100.0f,
+          duel.intendedSpeed, duel.actualSpeed);
+      ImGui::PushID(shown);
+      if (ImGui::TreeNodeEx("touch", ImGuiTreeNodeFlags_SpanAvailWidth, "%s",
+                            label.c_str()))
+      {
+        ImGui::TextDisabled(
+            "Touch skill %.0f. Each sigma = (base + difficulty x range) x "
+            "(1 - skill x %.1f) x tiredness and nerves.",
+            duel.touchSkill * 100.0f,
+            MatchTuning::FirstTouch::SKILL_REDUCTION);
+        ImGui::TextDisabled("Angle difficulty:");
+        renderBreakdown(duel.chance, "angle");
+        ImGui::TextDisabled("Weight difficulty:");
+        renderBreakdown(duel.foul, "weight");
+        ImGui::TreePop();
+      }
+      ImGui::PopID();
+      continue;
+    }
     const char* kind = duel.kind == MatchDuelDetail::Kind::ENGAGE ? "Goes in"
                        : duel.kind == MatchDuelDetail::Kind::TAKE_ON
                            ? "Take-on"

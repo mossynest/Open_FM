@@ -36,6 +36,11 @@
   /** Moves the dribbled ball with its carrier; false if a heavy touch lost it.
    */
   bool updateDribbleNewV1(MatchPlayer& carrier, float dt);
+  /** His first touch, trying to carry out `intent` where he meets the ball:
+   * how hard it is decides the spread of its angle and weight errors. */
+  TouchResult firstTouchNewV1(const MatchPlayer& player,
+                              const TouchIntent& intent,
+                              const TouchMoment& moment);
   /** The passer's strike: execution error, weight, height and curve. */
   Kick kickPassNewV1(const MatchPlayer& passer, const MatchPlayer& receiver,
                 Vector2F target, float passDistance, bool lofted,

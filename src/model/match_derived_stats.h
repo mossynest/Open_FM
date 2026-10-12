@@ -35,8 +35,9 @@ enum class DerivedStat : std::uint8_t
   BURST_CAPACITY,
   FUEL_CAPACITY,
   RECOVERY_RATE,
+  FIRST_TOUCH,
 };
-inline constexpr std::size_t DERIVED_STAT_COUNT = 5;
+inline constexpr std::size_t DERIVED_STAT_COUNT = 6;
 
 /** The match attributes a recipe blends (MatchPlayer's fields). */
 enum class BaseAttribute : std::uint8_t
@@ -106,6 +107,10 @@ inline constexpr std::array<DerivedStatInfo, DERIVED_STAT_COUNT> DERIVED_STATS{{
      "constant of the refill while walking (slower the harder he still "
      "runs).",
      "s", 180.0f, 100.0f, 65.0f, 275.0f},
+    {"First touch", "Tch",
+     "Receiving the ball: taking the pace off it and placing it where he "
+     "wants it.",
+     "", 0.0f, 0.0f, 0.0f, 0.0f},
 }};
 
 namespace DerivedStats
@@ -129,16 +134,28 @@ constexpr DerivedRecipe agilityRecipe()
       P::ACCELERATION_PHYSICALITY / total;
   return recipe;
 }
+
+constexpr DerivedRecipe firstTouchRecipe()
+{
+  // Dribbling for close control, Passing standing in for clean technique
+  // (there is no Technique stat).
+  DerivedRecipe recipe;
+  recipe.weights[static_cast<std::size_t>(BaseAttribute::DRIBBLING)] = 0.6f;
+  recipe.weights[static_cast<std::size_t>(BaseAttribute::PASSING)] = 0.4f;
+  return recipe;
+}
 }  // namespace DerivedStats
 
 /** The recipes a handshake uses unless it has its own (the Original's). For
- * now every endurance stat simply echoes Stamina. */
+ * now every endurance stat simply echoes Stamina; first touch blends
+ * Dribbling and Passing. */
 inline constexpr DerivedRecipes DEFAULT_DERIVED_RECIPES{{
     DerivedStats::agilityRecipe(),
     DerivedStats::only(BaseAttribute::STAMINA),
     DerivedStats::only(BaseAttribute::STAMINA),
     DerivedStats::only(BaseAttribute::STAMINA),
     DerivedStats::only(BaseAttribute::STAMINA),
+    DerivedStats::firstTouchRecipe(),
 }};
 
 inline const DerivedStatInfo& derivedStatInfo(DerivedStat stat)

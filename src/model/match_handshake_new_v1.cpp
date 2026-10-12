@@ -74,7 +74,8 @@ void MatchEngine::convertMatchContextNewV1(const MatchContext& context)
 const DerivedRecipes& MatchEngine::derivedRecipesNewV1()
 {
   // New v1's own derived-stat recipes (match_derived_stats.h); the defaults
-  // for now: agility mirrors acceleration, the endurance stats echo Stamina.
+  // for now: agility mirrors acceleration, the endurance stats echo Stamina,
+  // first touch blends Dribbling and Passing.
   static constexpr DerivedRecipes recipes = DEFAULT_DERIVED_RECIPES;
   return recipes;
 }

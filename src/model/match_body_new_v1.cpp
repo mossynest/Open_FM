@@ -26,7 +26,9 @@
 
 #include "model/match_engine.h"
 #include "model/match_engine_internal.h"
+#include "model/match_recorder.h"
 #include "model/match_rules.h"
+#include "model/player.h"
 
 using namespace MatchEngineInternal;
 
@@ -669,6 +671,182 @@ bool MatchEngine::updateDribbleNewV1(MatchPlayer& carrier, float dt)
   ball.z = 0.0f;
   ball.velocity = carrier.velocity;
   return true;
+}
+
+TouchResult MatchEngine::firstTouchNewV1(const MatchPlayer& player,
+                                         const TouchIntent& intent,
+                                         const TouchMoment& moment)
+{
+  using K = TouchKnob;
+  const FirstTouchKnobs& knob = touchKnobs;
+  // What he means to do: straight at the target spot, weighted with the
+  // rolling physics to arrive at the intended speed.
+  const Vector2F gap = toMetres({intent.targetSpot.x - moment.contactPoint.x,
+                                 intent.targetSpot.y - moment.contactPoint.y});
+  const float metres = length(gap);
+  const Vector2F facing = normalized(
+      {std::cos(player.facingAngle) * MatchTuning::Pitch::LENGTH_METRES,
+       std::sin(player.facingAngle) * MatchTuning::Pitch::WIDTH_METRES});
+  const Vector2F aim =
+      metres > EPSILON ? Vector2F{gap.x / metres, gap.y / metres} : facing;
+  const float intendedSpeed =
+      metres > EPSILON ? std::min(groundLaunchSpeed(metres, intent.arrivalSpeed),
+                                  knob[K::MAX_TOUCH_SPEED])
+                       : 0.0f;
+
+  // How hard that is, factor by factor (each 0-1).
+  const float incomingSpeed = length(ball.velocity);
+  const bool moving = incomingSpeed > MatchTuning::Ball::STOP_SPEED;
+  const Vector2F incoming =
+      moving ? Vector2F{ball.velocity.x / incomingSpeed,
+                        ball.velocity.y / incomingSpeed}
+             : Vector2F{0.0f, 0.0f};
+  const Vector2F toBall =
+      metricDirection(player.position, moment.contactPoint);
+  // Where it comes from: back along its path, or where it lies if still.
+  const Vector2F from = moving ? Vector2F{-incoming.x, -incoming.y} : toBall;
+  // Which side of him it is on (+ his right), for the weaker foot.
+  const float side = facing.y * toBall.x - facing.x * toBall.y;
+  const bool rightFooted =
+      !player.player || player.player->getFoot() == Foot::Right;
+  const float weakSide = rightFooted ? std::max(-side, 0.0f)
+                                     : std::max(side, 0.0f);
+  const auto clamp01 = [](float value) { return std::clamp(value, 0.0f, 1.0f); };
+  const float surprise =
+      !ball.isPass ? knob[K::LOOSE_BALL_SURPRISE]
+                   : (ball.intendedReceiver == player.player ? 0.0f : 1.0f);
+  struct Factor
+  {
+    const char* name;
+    TermSource source;
+    float value;
+    float angleWeight;
+    float weightWeight;
+  };
+  const std::array<Factor, 11> factors{{
+      {"incoming pace", TermSource::SITUATION,
+       clamp01(incomingSpeed / knob[K::REFERENCE_SPEED]),
+       knob[K::INCOMING_SPEED_ANGLE], knob[K::INCOMING_SPEED_WEIGHT]},
+      {"pace to take off or add", TermSource::SITUATION,
+       clamp01(std::abs(incomingSpeed - intendedSpeed) /
+               knob[K::REFERENCE_SPEED]),
+       knob[K::SPEED_CHANGE_ANGLE], knob[K::SPEED_CHANGE_WEIGHT]},
+      {"turning its path", TermSource::SITUATION,
+       moving && intendedSpeed > EPSILON
+           ? std::acos(std::clamp(incoming.x * aim.x + incoming.y * aim.y,
+                                  -1.0f, 1.0f)) /
+                 std::numbers::pi_v<float>
+           : 0.0f,
+       knob[K::REDIRECTION_ANGLE], knob[K::REDIRECTION_WEIGHT]},
+      {"coming from behind him", TermSource::SITUATION,
+       clamp01((1.0f - (from.x * facing.x + from.y * facing.y)) * 0.5f),
+       knob[K::APPROACH_ANGLE], knob[K::APPROACH_WEIGHT]},
+      {"his own speed", TermSource::SITUATION,
+       clamp01(length(player.velocity) / std::max(player.maxSpeed, EPSILON)),
+       knob[K::OWN_MOVEMENT_ANGLE], knob[K::OWN_MOVEMENT_WEIGHT]},
+      {"stretching for it", TermSource::SITUATION,
+       clamp01((moment.gap - knob[K::COMFORT_GAP]) /
+               std::max(moment.reach - knob[K::COMFORT_GAP], EPSILON)),
+       knob[K::STRETCH_ANGLE], knob[K::STRETCH_WEIGHT]},
+      {"on his weaker foot", TermSource::ATTRIBUTE, clamp01(weakSide),
+       knob[K::WEAK_FOOT_ANGLE], knob[K::WEAK_FOOT_WEIGHT]},
+      {"off the ground", TermSource::SITUATION,
+       clamp01(moment.height / MatchTuning::Ball::LOW_BALL_METRES),
+       knob[K::OFF_GROUND_ANGLE], knob[K::OFF_GROUND_WEIGHT]},
+      {"not expecting it", TermSource::SITUATION, surprise,
+       knob[K::SURPRISE_ANGLE], knob[K::SURPRISE_WEIGHT]},
+      {"pressure", TermSource::SITUATION,
+       clamp01(1.0f -
+               nearestOpponentDistance(player) / knob[K::PRESSURE_RADIUS]),
+       knob[K::PRESSURE_ANGLE], knob[K::PRESSURE_WEIGHT]},
+      {"playing it on hard", TermSource::SITUATION,
+       clamp01(intendedSpeed / knob[K::MAX_TOUCH_SPEED]),
+       knob[K::AMBITION_ANGLE], knob[K::AMBITION_WEIGHT]},
+  }};
+  float angleSum = 0.0f;
+  float weightSum = 0.0f;
+  for (const Factor& factor : factors)
+  {
+    angleSum += factor.value * factor.angleWeight;
+    weightSum += factor.value * factor.weightWeight;
+  }
+  const float angleDifficulty = clamp01(angleSum);
+  const float weightDifficulty = clamp01(weightSum);
+
+  // His touch cuts the spread; tiredness, nerves and being shown onto his
+  // weaker foot widen it, as for his passes and shots
+  // (executionErrorScaleNewV1, with the touch's own gains).
+  const float skill = player.derivedStat(DerivedStat::FIRST_TOUCH);
+  const float fatigue =
+      1.0f + (1.0f - player.stamina) * knob[K::FATIGUE_ERROR_GAIN];
+  const float execution =
+      fatigue * std::max(0.5f, 1.0f - teamEdge(player.isHomeTeam)) *
+      (1.0f + weakFootPressure(player) * knob[K::SHOWN_WEAK_FOOT_GAIN]);
+  const float scale = (1.0f - skill * knob[K::SKILL_REDUCTION]) * execution;
+  const float angleSigma = (knob[K::ANGLE_SIGMA_BASE] +
+                            angleDifficulty * knob[K::ANGLE_SIGMA_RANGE]) *
+                           scale;
+  const float weightSigma = (knob[K::WEIGHT_SIGMA_BASE] +
+                             weightDifficulty * knob[K::WEIGHT_SIGMA_RANGE]) *
+                            scale;
+  // Near-normal draws (a sum of three uniforms), bounded at three sigma.
+  const auto draw = [this]
+  {
+    return (randomFloat(0.0f, 1.0f) + randomFloat(0.0f, 1.0f) +
+            randomFloat(0.0f, 1.0f) - 1.5f) *
+           2.0f;
+  };
+  TouchResult result;
+  result.angleDifficulty = angleDifficulty;
+  result.weightDifficulty = weightDifficulty;
+  result.angleError = draw() * angleSigma;
+  result.weightError = draw() * weightSigma;
+
+  // What he actually did: the aim turned by the angle error, the pace off
+  // by the weight error (against the pace in play, so misjudging a fast
+  // ball leaves more on it), within what a touch can do.
+  const float cosine = std::cos(result.angleError);
+  const float sine = std::sin(result.angleError);
+  const Vector2F direction{aim.x * cosine - aim.y * sine,
+                           aim.x * sine + aim.y * cosine};
+  const float reference =
+      std::max(intendedSpeed, incomingSpeed * knob[K::WEIGHT_REFERENCE_SHARE]);
+  // (A minimum above the maximum keeps the maximum.)
+  const float actualSpeed = std::min(
+      std::max(intendedSpeed + result.weightError * reference,
+               incomingSpeed * knob[K::MIN_RETAINED_SHARE]),
+      knob[K::MAX_TOUCH_SPEED]);
+  result.velocity = {direction.x * actualSpeed, direction.y * actualSpeed};
+
+  if (wantsDetail())
+  {
+    MatchDuelDetail duel;
+    duel.kind = MatchDuelDetail::Kind::FIRST_TOUCH;
+    duel.player = player.player ? player.player->getId() : 0;
+    duel.homeTeam = player.isHomeTeam;
+    duel.chance.total = angleDifficulty;
+    duel.foul.total = weightDifficulty;
+    for (const Factor& factor : factors)
+    {
+      duel.chance.add(factor.name, factor.source,
+                      factor.value * factor.angleWeight);
+      duel.foul.add(factor.name, factor.source,
+                    factor.value * factor.weightWeight);
+    }
+    for (ScoreBreakdown* breakdown : {&duel.chance, &duel.foul})
+      if (const float clamp = breakdown->residual(); std::abs(clamp) > 1e-6f)
+        breakdown->add("clamped to its range", TermSource::SITUATION, clamp);
+    duel.touchSkill = skill;
+    duel.intendedSpeed = intendedSpeed;
+    duel.actualSpeed = actualSpeed;
+    duel.angleError = result.angleError;
+    duel.angleSigma = angleSigma;
+    duel.weightError = result.weightError;
+    duel.weightSigma = weightSigma;
+    if (MatchRecorder* recorder = getRecorder())
+      recorder->onDuelDetail(*this, duel);
+  }
+  return result;
 }
 
 MatchEngine::Kick MatchEngine::kickPassNewV1(const MatchPlayer& passer,

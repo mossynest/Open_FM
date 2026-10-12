@@ -32,6 +32,9 @@
                                     bool fromTeammate);
   HeaderPlay chooseHeaderPlayNewV1(const MatchPlayer& header, bool fromTeammate);
   Challenge chooseChallengeNewV1(const MatchPlayer& carrier, float dt);
+  bool touchNowNewV1(const MatchPlayer& player, const TouchMoment& moment) const;
+  TouchIntent chooseFirstTouchNewV1(const MatchPlayer& player,
+                                    const TouchMoment& moment) const;
   bool choosesToBlockNewV1(const MatchPlayer& player);
   bool choosesToPutBlockBehindNewV1(const MatchPlayer& player);
   bool choosesToClearCrossBehindNewV1(const MatchPlayer& player);
@@ -53,6 +56,9 @@
   /** Whether a wide forward in the final third is cutting inside toward
    * the box rather than going down the line to cross. */
   bool cutsInsideNewV1(const MatchPlayer& player) const;
+  /** Where the carrier heads with the ball: forward, away from the nearest
+   * opponent, inside or down his lane. */
+  Vector2F carryTargetNewV1(const MatchPlayer& player) const;
   /** Signed x shift of the role in the defensive block (normalised). */
   float defensiveRoleShiftNewV1(const MatchPlayer& player) const;
   /** Second presser's spot when doubling up on the carrier, if ordered. */

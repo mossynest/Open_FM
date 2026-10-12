@@ -26,6 +26,7 @@
 #include "model/match_handshake.h"
 #include "model/match_context.h"
 #include "model/match_derived_stats.h"
+#include "model/match_first_touch_knobs.h"
 #include "model/match_events.h"
 #include "model/match_rules.h"
 #include "model/match_scenario.h"
@@ -231,8 +232,51 @@ struct MatchPlayer
   std::size_t statsIndex = 0;
 };
 
+/** What a first touch tries to do (first-touch plan): send the ball to
+ * `targetSpot` (normalised), arriving at `arrivalSpeed` m/s. */
+struct TouchIntent
+{
+  enum class Kind : std::uint8_t
+  {
+    SET,
+    INTO_STRIDE,
+  };
+  Kind kind = Kind::SET;
+  Vector2F targetSpot{0.0f, 0.0f};
+  float arrivalSpeed = 0.0f;
+};
+
+/** A loose ball in a player's reach during one ball sub-step: where it is
+ * closest to him on that stretch of its path, how close (m), and his
+ * reach (m). Players move only between steps: `substepsLeft` ball
+ * sub-steps of `substepSeconds` come before his next move, which then
+ * comes every `stepSeconds`. */
+struct TouchMoment
+{
+  Vector2F contactPoint{0.0f, 0.0f};
+  float gap = 0.0f;
+  float reach = 0.0f;
+  /** Ball height there (m). */
+  float height = 0.0f;
+  int substepsLeft = 0;
+  float substepSeconds = 0.0f;
+  float stepSeconds = 0.0f;
+};
+
+/** What a first touch actually did: the ball's velocity off it (m/s), and
+ * how far it missed the intent (angle in radians, weight as a share). */
+struct TouchResult
+{
+  Vector2F velocity{0.0f, 0.0f};
+  float angleError = 0.0f;
+  float weightError = 0.0f;
+  /** How hard it was (0-1): the scores behind the two errors' spreads. */
+  float angleDifficulty = 0.0f;
+  float weightDifficulty = 0.0f;
+};
+
 /**
- * The ball. `position` is normalised; `z` is the height in length units
+ * The ball.`position` is normalised; `z` is the height in length units
  * (z * MatchTuning::Units::BALL_Z_METRES = metres) for renderers. Velocities
  * are in m/s and `curve` is the heading rotation rate in rad/s.
  */
@@ -245,6 +289,27 @@ struct MatchBall
   float curve = 0.0f;
 
   const Player* possessedBy = nullptr;
+  /** Owned but rolling free: the first touch has played the ball and the
+   * owner has not reached it yet (first-touch plan). Only ever set with an
+   * owner in open play; the possession helpers clear it. */
+  bool inTouch = false;
+  /** While in a touch: the team-mate whose pass he is receiving, credited
+   * with the completion only once the ball is collected. */
+  const Player* touchPasser = nullptr;
+  /** While in a touch: the gap (m) to the owner at the last check, and the
+   * largest gap so far. */
+  float touchGap = 0.0f;
+  float touchPeakGap = 0.0f;
+  /** The current touch: what was tried, and how far from his centre (m)
+   * he met the ball. */
+  TouchIntent::Kind touchKind = TouchIntent::Kind::SET;
+  float touchContactGap = 0.0f;
+  float touchContactHeight = 0.0f;
+  /** How far the current touch missed its intent (TouchResult). */
+  float touchAngleError = 0.0f;
+  float touchWeightError = 0.0f;
+  float touchAngleDifficulty = 0.0f;
+  float touchWeightDifficulty = 0.0f;
   const Player* lastPossessor = nullptr;
   const Player* intendedReceiver = nullptr;
   /** The player who last kicked or deflected the ball. */
@@ -253,6 +318,9 @@ struct MatchBall
   float kickerLockout = 0.0f;
   /** Players (by slot bit) who already tried to reach this ball in flight. */
   std::uint32_t touchAttempts = 0;
+  /** Players (by slot bit) letting this loose ball come closer before they
+   * touch it (first-touch timing). */
+  std::uint32_t touchWaiting = 0;
   /** While dribbled: metres ahead of the carrier's feet and the metric
    * direction of the last touch. */
   float dribbleExposure = 0.0f;
@@ -380,7 +448,9 @@ enum class MatchCommandType : std::uint8_t
   /** Drills: hold (or release) a player's movement target. */
   DRILL_TARGET,
   /** Drills: the player shoots as soon as he has the ball and can act. */
-  FORCE_SHOT
+  FORCE_SHOT,
+  /** Drills: the ball is played in (a pass to a player, or loose). */
+  FEED_BALL
 };
 
 /**
@@ -411,6 +481,10 @@ struct MatchCommandRecord
    * whether he runs at it urgently. */
   std::optional<Vector2F> target;
   bool urgent = false;
+  /** FEED_BALL: played from `target` with this velocity along the ground
+   * (m/s) and this upward speed (m/s), to `player` (0: loose). */
+  Vector2F feedVelocity{0.0f, 0.0f};
+  float feedLift = 0.0f;
 };
 
 /** One-shot action requested by an external controller (play mode). */
@@ -859,6 +933,9 @@ class MatchEngine
 
   const std::vector<MatchPlayer>& getPlayers() const { return players; }
   const MatchBall& getBall() const { return ball; }
+  /** Whether the ball's ownership state is coherent: a ball in a first touch
+   * has an owner, in open play. The sandbox checks this every step. */
+  bool possessionConsistent() const;
   const std::vector<MatchEvent>& getEvents() const { return events; }
   /**
    * Team names used in the commentary lines (MatchEvent::description) from
@@ -921,6 +998,9 @@ class MatchEngine
     return loadProfile;
   }
   /** Movement jitter observed so far, home then away. */
+  /** First-touch timing: how often a player who let the ball come closer
+   * then lost it out of his reach untouched (should stay 0). */
+  std::uint32_t getFirstTouchWaitsMissed() const { return firstTouchWaitsMissed; }
   const std::array<MovementJitterStats, 2>& getMovementJitter() const
   {
     return movementJitter;
@@ -1113,6 +1193,19 @@ class MatchEngine
   /** Drills: the player shoots, through the AI's own shot, as soon as he
    * has the ball and can act. Logged and replayed. */
   void forceShot(PlayerID playerId);
+  /** Drills: plays the ball in from `from` (normalised) with `velocity`
+   * along the ground (m/s) and `lift` upward (m/s): as a pass to
+   * `receiverId` (his own pass to receive), or loose for 0. Nobody kicked
+   * it, so a completion credits only his side. In play only; logged and
+   * replayed. */
+  void feedBall(Vector2F from, Vector2F velocity, float lift,
+                PlayerID receiverId);
+
+  /** Drills and the lab: the first-touch knobs (match_first_touch_knobs.h),
+   * defaulting to the tuned constants. Set before kick-off. A saved
+   * recording does not keep them: it replays with the defaults. */
+  void setFirstTouchKnobs(const FirstTouchKnobs& knobs) { touchKnobs = knobs; }
+  const FirstTouchKnobs& getFirstTouchKnobs() const { return touchKnobs; }
   MatchRecorder* getRecorder() const { return recorderLink.target; }
 
  private:
@@ -1298,6 +1391,10 @@ class MatchEngine
   Vector2F substepBallPosition{MatchTuning::Pitch::CENTRE,
                                MatchTuning::Pitch::CENTRE};
   float substepBallZ = 0.0f;
+  /** Ball sub-steps still to come in the current step after this one, and
+   * the step's length: players move only between steps. */
+  int substepsLeftInStep = 0;
+  float ballStepSeconds = MatchTuning::Timing::FIXED_STEP_SECONDS;
   float homeFamiliarity = 1.0f;
   float awayFamiliarity = 1.0f;
   struct ShoutState
@@ -1339,6 +1436,8 @@ class MatchEngine
   /** Movement jitter (observed only), and what each slot's observation
    * compares with. */
   std::array<MovementJitterStats, 2> movementJitter{};
+  std::uint32_t firstTouchWaitsMissed = 0;
+  FirstTouchKnobs touchKnobs;
   std::array<LoadProfileStats, 2> loadProfile{};
   struct JitterTrack
   {
@@ -1559,6 +1658,12 @@ class MatchEngine
     bool sliding = false;
   };
   Challenge chooseChallenge(const MatchPlayer& carrier, float dt);
+  /** First touch: whether he plays the ball now or lets it come closer
+   * (asked every ball sub-step it is in his reach). */
+  bool touchNow(const MatchPlayer& player, const TouchMoment& moment);
+  /** First touch: what he tries to do with it. */
+  TouchIntent chooseFirstTouch(const MatchPlayer& player,
+                               const TouchMoment& moment);
   /** Whether an outfielder in a shot's path throws his body in. */
   bool choosesToBlock(const MatchPlayer& player);
   /** Whether a defender who blocked a shot puts it behind. */
@@ -1889,6 +1994,8 @@ class MatchEngine
                    std::uint32_t epochSteps) const;
   float executionErrorScale(const MatchPlayer& player) const;
   void recordPassCompletion(MatchPlayer& receiver);
+  /** Credits a completed pass from `passer` (a team-mate) to `receiver`. */
+  void creditPassCompletion(MatchPlayer& receiver, const Player* passer);
   void captureInterpolationFrame();
   void simulateStep(float dt);
   void updateTeamPhases();
@@ -1973,6 +2080,30 @@ class MatchEngine
    * sub-step (reach and save roll only, no consequences). */
   SaveAttempt attemptSave(const MatchPlayer& keeper);
   void setPossession(MatchPlayer& player);
+  /** Nobody owns the ball any more (kicked, lost, stopped, removed). */
+  void clearPossession();
+  /** Gives the ball to a player outside open play (restarts, substitutes,
+   * scenarios): ownership only, none of setPossession's touch bookkeeping. */
+  void handBallTo(const Player* holder);
+  // First touch (first-touch plan): a New v1 body plays a feet-height ball on
+  // under physics and runs onto it, instead of trapping it dead.
+  /** Whether this contact is played with the new first touch. */
+  bool playsFirstTouch(const MatchPlayer& player, bool hands,
+                       float heightMetres) const;
+  /** How far from his centre he can play a ball at his feet (the feet-reach
+   * knob for New v1 outfielders). */
+  float feetReach(const MatchPlayer& player) const;
+  /** The touch when no brain chooses one: set it just ahead of him, toward
+   * the goal he attacks. */
+  TouchIntent defaultTouchIntent(const MatchPlayer& player) const;
+  /** Plays the touch where he meets the ball and claims it. */
+  void playFirstTouch(MatchPlayer& player, const TouchMoment& moment);
+  /** A claimed ball, each step: collected, released or still rolling to
+   * him. Returns true while the touch goes on. */
+  bool updateTouch(MatchPlayer& carrier);
+  /** The owner of a touched ball runs to meet it (every step, after the
+   * brains plan, so the plan never sends him elsewhere). */
+  void chaseTouchedBall();
   // Feeds the tracker (match_engine_tracking.cpp); no effect when it is off.
   void trackTouch(const MatchPlayer& player);
   void trackPassRelease(const MatchPlayer& passer);

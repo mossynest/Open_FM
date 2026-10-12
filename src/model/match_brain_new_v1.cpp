@@ -804,66 +804,7 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
     if (&player == carrier)
     {
       player.intent = PlayerIntent::CARRY_BALL;
-      target = player.position;
-      target.x +=
-          attackDirection *
-          (MatchTuning::Shape::CARRIER_BASE_ADVANCE +
-           player.dribbling * MatchTuning::Shape::CARRIER_DRIBBLING_ADVANCE +
-           sliders.riskTaking * MatchTuning::Shape::CARRIER_RISK_ADVANCE);
-      if (teamPhase == TeamPhase::ATTACKING_TRANSITION)
-      {
-        target.x += attackDirection *
-                    MatchTuning::Shape::ATTACKING_TRANSITION_CARRIER_ADVANCE;
-      }
-
-      // Carry away from the nearest defender instead of running directly
-      // through them, while gradually looking for a central shooting lane.
-      const MatchPlayer* closestOpponent = nullptr;
-      float closestDistance = std::numeric_limits<float>::max();
-      for (const MatchPlayer* const opponent : onPitch(!player.isHomeTeam))
-      {
-        const float opponentDistance =
-            distance(opponent->position, player.position);
-        if (opponentDistance < closestDistance)
-        {
-          closestDistance = opponentDistance;
-          closestOpponent = opponent;
-        }
-      }
-      // A wide forward cutting inside heads for the box; otherwise wide
-      // players keep their lane to reach the byline and cross.
-      using S = MatchTuning::Shape;
-      const PlayerRole role = player.player->getRole();
-      const bool wideLane =
-          (role == PlayerRole::LM || role == PlayerRole::RM ||
-           role == PlayerRole::LW || role == PlayerRole::RW ||
-           role == PlayerRole::LB || role == PlayerRole::RB) &&
-          std::abs(player.position.y - MatchTuning::Pitch::CENTRE) >
-              S::WIDE_LANE_DEVIATION;
-      if (cutsInsideNewV1(player))
-      {
-        target.y = player.position.y +
-                   (MatchTuning::Pitch::CENTRE - player.position.y) *
-                       S::CUT_INSIDE_PULL;
-      }
-      else if (closestOpponent &&
-               closestDistance < S::CARRIER_EVASION_RANGE_METRES)
-      {
-        const float evadeDirection =
-            player.position.y <= closestOpponent->position.y ? -1.0f : 1.0f;
-        target.y +=
-            evadeDirection * (S::CARRIER_BASE_EVASION +
-                              player.dribbling * S::CARRIER_DRIBBLING_EVASION);
-      }
-      else if (wideLane)
-      {
-        target.y = player.position.y;
-      }
-      else
-      {
-        target.y += (MatchTuning::Pitch::CENTRE - player.position.y) *
-                    S::CARRIER_CENTRALITY;
-      }
+      target = carryTargetNewV1(player);
     }
     else if (ownPossession)
     {
@@ -1352,6 +1293,75 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
   }
 }
 
+Vector2F MatchEngine::carryTargetNewV1(const MatchPlayer& player) const
+{
+  const StrategySliders sliders = getEffectiveSliders(player.isHomeTeam);
+  const TeamPhase teamPhase = player.isHomeTeam ? homePhase : awayPhase;
+  const float attackDirection = player.isHomeTeam ? 1.0f : -1.0f;
+  Vector2F target = player.position;
+  target.x +=
+      attackDirection *
+      (MatchTuning::Shape::CARRIER_BASE_ADVANCE +
+       player.dribbling * MatchTuning::Shape::CARRIER_DRIBBLING_ADVANCE +
+       sliders.riskTaking * MatchTuning::Shape::CARRIER_RISK_ADVANCE);
+  if (teamPhase == TeamPhase::ATTACKING_TRANSITION)
+  {
+    target.x += attackDirection *
+                MatchTuning::Shape::ATTACKING_TRANSITION_CARRIER_ADVANCE;
+  }
+
+  // Carry away from the nearest defender instead of running directly
+  // through them, while gradually looking for a central shooting lane.
+  const MatchPlayer* closestOpponent = nullptr;
+  float closestDistance = std::numeric_limits<float>::max();
+  for (const MatchPlayer& opponent : players)
+  {
+    if (!active(opponent) || opponent.isHomeTeam == player.isHomeTeam)
+      continue;
+    const float opponentDistance = distance(opponent.position, player.position);
+    if (opponentDistance < closestDistance)
+    {
+      closestDistance = opponentDistance;
+      closestOpponent = &opponent;
+    }
+  }
+  // A wide forward cutting inside heads for the box; otherwise wide
+  // players keep their lane to reach the byline and cross.
+  using S = MatchTuning::Shape;
+  const PlayerRole role = player.player->getRole();
+  const bool wideLane =
+      (role == PlayerRole::LM || role == PlayerRole::RM ||
+       role == PlayerRole::LW || role == PlayerRole::RW ||
+       role == PlayerRole::LB || role == PlayerRole::RB) &&
+      std::abs(player.position.y - MatchTuning::Pitch::CENTRE) >
+          S::WIDE_LANE_DEVIATION;
+  if (cutsInsideNewV1(player))
+  {
+    target.y = player.position.y +
+               (MatchTuning::Pitch::CENTRE - player.position.y) *
+                   S::CUT_INSIDE_PULL;
+  }
+  else if (closestOpponent &&
+           closestDistance < S::CARRIER_EVASION_RANGE_METRES)
+  {
+    const float evadeDirection =
+        player.position.y <= closestOpponent->position.y ? -1.0f : 1.0f;
+    target.y +=
+        evadeDirection * (S::CARRIER_BASE_EVASION +
+                          player.dribbling * S::CARRIER_DRIBBLING_EVASION);
+  }
+  else if (wideLane)
+  {
+    target.y = player.position.y;
+  }
+  else
+  {
+    target.y += (MatchTuning::Pitch::CENTRE - player.position.y) *
+                S::CARRIER_CENTRALITY;
+  }
+  return target;
+}
+
 bool MatchEngine::cutsInsideNewV1(const MatchPlayer& player) const
 {
   using S = MatchTuning::Shape;
@@ -1693,6 +1703,186 @@ void MatchEngine::updateRestartSupportNewV1(MatchPlayer& player,
                                ball.position.y + offset.y};
     }
   }
+}
+
+bool MatchEngine::touchNowNewV1(const MatchPlayer& player,
+                                const TouchMoment& moment) const
+{
+  // Control is easier the closer the ball is: he lets it come to the
+  // closest comfortable point it will pass, reading its roll and his own
+  // run, unless waiting would risk losing it.
+  using K = TouchKnob;
+  const FirstTouchKnobs& knob = touchKnobs;
+  // Nobody waits to steal a ball another player is already playing.
+  if (moment.gap <= knob[K::COMFORT_GAP] || ball.inTouch) return true;
+  constexpr int SUBSTEPS = MatchTuning::Timing::BALL_SUBSTEPS;
+  constexpr float STEP =
+      MatchTuning::Timing::FIXED_STEP_SECONDS / static_cast<float>(SUBSTEPS);
+  // Up to five seconds ahead, however far the knob is set.
+  constexpr int MAX_LOOKAHEAD = 200;
+  const int LOOKAHEAD = std::clamp(
+      static_cast<int>(knob[K::TIMING_LOOKAHEAD] / STEP + 0.5f), 0,
+      MAX_LOOKAHEAD);
+  const float speed = length(ball.velocity);
+  const Vector2F heading =
+      speed > EPSILON ? Vector2F{ball.velocity.x / speed, ball.velocity.y / speed}
+                      : Vector2F{0.0f, 0.0f};
+  FlightState flight{speed, ball.velocityZ,
+                     ball.z * MatchTuning::Units::BALL_Z_METRES, false};
+  const Vector2F ballStart = toMetres(ball.position);
+  const Vector2F playerStart = toMetres(player.position);
+  // He stands still through the rest of this step's ball sub-steps, then
+  // moves at the step boundaries (read from his current velocity).
+  const int perStep = std::max(
+      1, static_cast<int>(moment.stepSeconds / moment.substepSeconds + 0.5f));
+  const auto movesBy = [&](int step)
+  {
+    return step > moment.substepsLeft
+               ? 1 + (step - moment.substepsLeft - 1) / perStep
+               : 0;
+  };
+  std::array<Vector2F, MAX_LOOKAHEAD + 1> path{};
+  float travelled = 0.0f;
+  float bestGap = moment.gap;
+  int bestStep = 0;
+  float gapAfterMove = 0.0f;
+  // The first sub-step at which a bounce lifts it out of reach of his feet.
+  int risesAt = LOOKAHEAD + 1;
+  for (int step = 1; step <= LOOKAHEAD; ++step)
+  {
+    travelled += stepFlight(flight, STEP);
+    if (risesAt > LOOKAHEAD &&
+        flight.height > MatchTuning::Ball::LOW_BALL_METRES)
+      risesAt = step;
+    path[static_cast<std::size_t>(step)] = {ballStart.x + heading.x * travelled,
+                                            ballStart.y + heading.y * travelled};
+    const float moved = moment.stepSeconds * static_cast<float>(movesBy(step));
+    const Vector2F gapVector{
+        path[static_cast<std::size_t>(step)].x -
+            (playerStart.x + player.velocity.x * moved),
+        path[static_cast<std::size_t>(step)].y -
+            (playerStart.y + player.velocity.y * moved)};
+    const float gap = length(gapVector);
+    // Out of his reach by the next sub-step: this is his last chance.
+    if (step == 1 && gap > moment.reach) return true;
+    if (step == moment.substepsLeft + 1) gapAfterMove = gap;
+    if (gap < bestGap)
+    {
+      bestGap = gap;
+      bestStep = step;
+    }
+    if (gap <= knob[K::COMFORT_GAP]) break;
+  }
+  // Only worth waiting for a clearly closer point, safely inside his reach.
+  if (bestStep == 0 || bestGap > moment.gap - knob[K::WAIT_GAIN] ||
+      bestGap > moment.reach - knob[K::WAIT_MARGIN])
+    return true;
+  // A bounce on the way would take it up off his feet first.
+  if (risesAt <= bestStep) return true;
+  // His own next move is the least certain part of the read: wait through
+  // it only if the ball is still safely inside his reach just after.
+  if (bestStep > moment.substepsLeft &&
+      gapAfterMove > moment.reach - knob[K::WAIT_MARGIN])
+    return true;
+  // An opponent who can get to the ball's path first would take it: play
+  // it now, stretched or not.
+  for (const MatchPlayer& opponent : players)
+  {
+    if (!active(opponent) || opponent.isHomeTeam == player.isHomeTeam)
+      continue;
+    const float reach = opponent.isGoalkeeper
+                            ? MatchTuning::Ball::GOALKEEPER_CONTROL_RADIUS_METRES
+                            : feetReach(opponent);
+    const Vector2F from = toMetres(opponent.position);
+    for (int step = 1; step <= bestStep; ++step)
+    {
+      const float elapsed = STEP * static_cast<float>(step);
+      const Vector2F at = path[static_cast<std::size_t>(step)];
+      const float gapX = at.x - (from.x + opponent.velocity.x * elapsed);
+      const float gapY = at.y - (from.y + opponent.velocity.y * elapsed);
+      if (gapX * gapX + gapY * gapY <= reach * reach) return true;
+    }
+  }
+  return false;
+}
+
+TouchIntent MatchEngine::chooseFirstTouchNewV1(
+    const MatchPlayer& player, const TouchMoment& /*moment*/) const
+{
+  using K = TouchKnob;
+  const FirstTouchKnobs& knob = touchKnobs;
+  using Pitch = MatchTuning::Pitch;
+  const auto onPitch = [](Vector2F spot)
+  {
+    return Vector2F{std::clamp(spot.x, Pitch::PLAYER_MIN_X, Pitch::PLAYER_MAX_X),
+                    std::clamp(spot.y, Pitch::PLAYER_MIN_Y, Pitch::PLAYER_MAX_Y)};
+  };
+  const float attackDirection = player.isHomeTeam ? 1.0f : -1.0f;
+  const float speed = length(player.velocity);
+  TouchIntent intent;
+
+  // Running into open space: push it on along his run.
+  if (speed >= MatchTuning::Dribble::CLOSE_CONTROL_SPEED)
+  {
+    const Vector2F run{player.velocity.x / speed, player.velocity.y / speed};
+    const float lead = speed * knob[K::STRIDE_LEAD] + knob[K::STRIDE_EXTRA];
+    const Vector2F ahead = toPitch({run.x * lead, run.y * lead});
+    const Vector2F spot =
+        onPitch({player.position.x + ahead.x, player.position.y + ahead.y});
+    bool clear = true;
+    for (const MatchPlayer& opponent : players)
+      if (active(opponent) && opponent.isHomeTeam != player.isHomeTeam &&
+          distance(opponent.position, spot) < knob[K::STRIDE_CLEARANCE])
+        clear = false;
+    if (clear)
+    {
+      intent.kind = TouchIntent::Kind::INTO_STRIDE;
+      intent.targetSpot = spot;
+      intent.arrivalSpeed = speed * knob[K::STRIDE_SPEED_SHARE];
+      return intent;
+    }
+  }
+
+  // Otherwise set it just ahead of where he will be, toward where he means
+  // to carry it, turned away from the nearest opponent the closer he is,
+  // and never back toward his own goal near it.
+  Vector2F aim = metricDirection(player.position, carryTargetNewV1(player));
+  if (length(aim) <= EPSILON) aim = {attackDirection, 0.0f};
+  const MatchPlayer* nearest = nullptr;
+  float nearestDistance = std::numeric_limits<float>::max();
+  for (const MatchPlayer& opponent : players)
+  {
+    if (!active(opponent) || opponent.isHomeTeam == player.isHomeTeam) continue;
+    const float gap = distance(opponent.position, player.position);
+    if (gap < nearestDistance)
+    {
+      nearestDistance = gap;
+      nearest = &opponent;
+    }
+  }
+  constexpr float PRESSURE = MatchTuning::Decision::PRESSURE_RADIUS_METRES;
+  if (nearest && nearestDistance < PRESSURE)
+  {
+    const float weight = 1.0f - nearestDistance / PRESSURE;
+    const Vector2F away = metricDirection(nearest->position, player.position);
+    aim = normalized({aim.x * (1.0f - weight) + away.x * weight,
+                      aim.y * (1.0f - weight) + away.y * weight});
+    if (length(aim) <= EPSILON) aim = {attackDirection, 0.0f};
+  }
+  const float ownDepth =
+      player.isHomeTeam ? player.position.x : 1.0f - player.position.x;
+  if (ownDepth < MatchTuning::SetPiece::CROSS_CLEARANCE_DEPTH &&
+      aim.x * attackDirection < 0.0f)
+  {
+    aim.x = 0.0f;
+    aim = length(aim) > EPSILON ? normalized(aim) : Vector2F{attackDirection, 0.0f};
+  }
+  const Vector2F offset = toPitch(
+      {player.velocity.x * knob[K::SET_LEAD] + aim.x * knob[K::SET_OFFSET],
+       player.velocity.y * knob[K::SET_LEAD] + aim.y * knob[K::SET_OFFSET]});
+  intent.targetSpot =
+      onPitch({player.position.x + offset.x, player.position.y + offset.y});
+  return intent;
 }
 
 MatchEngine::Challenge MatchEngine::chooseChallengeNewV1(const MatchPlayer& carrier,

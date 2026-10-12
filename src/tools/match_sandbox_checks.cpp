@@ -20,6 +20,7 @@
 #include <iostream>
 #include <map>
 #include <memory>
+#include <numbers>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -479,6 +480,283 @@ bool runDerivedStatChecks(const std::vector<const Team*>& clubs,
       valuesOk ? "yes" : "NO", means);
   return registryOk && valuesOk;
 }
+
+/** Possession: one match for every pairing of bodies, stepped one fixed step
+ * at a time, with the ball's ownership state coherent after every step (a
+ * ball in a first touch has an owner, in open play). */
+bool runPossessionChecks(const std::vector<const Team*>& clubs,
+                         const StatsConfig& config)
+{
+  bool consistent = true;
+  std::size_t steps = 0;
+  std::size_t pairing = 0;
+  for (const BodyId homeBody : ALL_BODIES)
+    for (const BodyId awayBody : ALL_BODIES)
+    {
+      const std::size_t pair = (pairing++ * 2) % clubs.size();
+      auto engine = makeEngine(*clubs[pair], *clubs[(pair + 1) % clubs.size()],
+                               config, static_cast<std::uint32_t>(2000 + pair));
+      engine->setBody(true, homeBody);
+      engine->setBody(false, awayBody);
+      while (engine->getState() != MatchState::FULL_TIME && steps < 2'000'000)
+      {
+        (void)engine->advance(MatchTuning::Timing::FIXED_STEP_SECONDS);
+        ++steps;
+        consistent = consistent && engine->possessionConsistent();
+      }
+    }
+  std::cout << std::format(
+      "\nPossession: {} body pairings, {} steps, ownership coherent every "
+      "step: {}\n",
+      pairing, steps, consistent ? "yes" : "NO");
+  return consistent;
+}
+
+/** First touch: every pairing of brain and body on the same fixtures. For
+ * the New v1 bodies: how touches end and how long they take, that a touched
+ * ball only ever moves under physics (never further in a step than its
+ * speed carries it), how close to his centre he meets the ball, and that a
+ * player who waits for it never loses it. Passes for all four, for
+ * reference. */
+bool runFirstTouchChecks(const std::vector<const Team*>& clubs,
+                         const StatsConfig& config)
+{
+  constexpr int MATCHES = 3;
+  constexpr float DT = MatchTuning::Timing::FIXED_STEP_SECONDS;
+  // Rounding slack for one step's travel, in metres.
+  constexpr float SLACK_METRES = 0.02f;
+  // A touch that let the ball this far from him counts as heavy.
+  constexpr float HEAVY_GAP_METRES = 2.0f;
+  const auto metres = [](Vector2F from, Vector2F to)
+  {
+    const float x = (to.x - from.x) * MatchTuning::Pitch::LENGTH_METRES;
+    const float y = (to.y - from.y) * MatchTuning::Pitch::WIDTH_METRES;
+    return std::sqrt(x * x + y * y);
+  };
+  const auto speedOf = [](Vector2F velocity)
+  { return std::sqrt(velocity.x * velocity.x + velocity.y * velocity.y); };
+
+  // How the touches ended: [all touches, pass receptions].
+  struct Outcomes
+  {
+    std::size_t started = 0;
+    std::size_t collected = 0;
+    std::size_t released = 0;
+    std::size_t taken = 0;
+    /** Someone else played it, then the same player touched it again. */
+    std::size_t replayed = 0;
+    std::size_t stopped = 0;
+  };
+  struct Setup
+  {
+    const char* name;
+    BrainId brain;
+    BodyId body;
+    std::array<Outcomes, 2> outcomes{};
+    double collectSeconds = 0.0;
+    double contactGapSum = 0.0;
+    std::size_t intoStride = 0;
+    /** Touches whose ball got more than HEAVY_GAP_METRES from him. */
+    std::size_t heavy = 0;
+    /** Sums of the touches' absolute errors (radians, share). */
+    double angleErrorSum = 0.0;
+    double weightErrorSum = 0.0;
+    std::uint32_t waitsMissed = 0;
+    float worstExcess = 0.0f;
+    float worstCollectJump = 0.0f;
+    /** Attempted, completed, intercepted. */
+    std::array<int, 3> passes{};
+  };
+  std::array<Setup, 4> setups{{
+      {"Original brain + Original body", BrainId::ORIGINAL, BodyId::ORIGINAL},
+      {"Original brain + New v1 body", BrainId::ORIGINAL, BodyId::NEW_V1},
+      {"New v1 brain + Original body", BrainId::NEW_V1, BodyId::ORIGINAL},
+      {"New v1 brain + New v1 body", BrainId::NEW_V1, BodyId::NEW_V1},
+  }};
+
+  for (Setup& setup : setups)
+    for (int match = 0; match < MATCHES; ++match)
+    {
+      const std::size_t pair =
+          (static_cast<std::size_t>(match) * 2) % clubs.size();
+      auto engine =
+          makeEngine(*clubs[pair], *clubs[(pair + 1) % clubs.size()], config,
+                     static_cast<std::uint32_t>(3000 + match));
+      for (const bool home : {true, false})
+      {
+        engine->setBrain(home, setup.brain);
+        engine->setBody(home, setup.body);
+      }
+      const auto ownerOf = [&engine](const Player* player) -> const MatchPlayer*
+      {
+        for (const MatchPlayer& slot : engine->getPlayers())
+          if (player && slot.player == player) return &slot;
+        return nullptr;
+      };
+      const auto touchesOf = [&engine, &ownerOf](const Player* player)
+      {
+        const MatchPlayer* holder = ownerOf(player);
+        return holder ? engine->getPlayerStats()[holder->statsIndex].touches
+                      : 0;
+      };
+      bool wasInTouch = false;
+      bool reception = false;
+      int ownerTouches = 0;
+      float lastPeakGap = 0.0f;
+      const Player* owner = nullptr;
+      double touchStart = 0.0;
+      Vector2F lastPosition = engine->getBall().position;
+      Vector2F lastOffset{0.0f, 0.0f};
+      float lastSpeed = 0.0f;
+      std::uint64_t lastSteps = engine->getSimulatedSteps();
+      while (engine->getState() != MatchState::FULL_TIME)
+      {
+        (void)engine->advance(DT);
+        // advance() keeps exact time, so one call can run zero or two steps.
+        const std::uint64_t steps = engine->getSimulatedSteps();
+        if (steps == lastSteps) continue;
+        const auto stepCount = static_cast<float>(steps - lastSteps);
+        lastSteps = steps;
+        const MatchBall& ball = engine->getBall();
+        const bool inTouch = ball.inTouch;
+        const double now = engine->getSimulatedSeconds();
+        // The same touch only while its owner has not re-claimed the ball:
+        // someone else can play it and he touch it again within one step.
+        const bool sameTouch = wasInTouch && inTouch &&
+                               ball.possessedBy == owner &&
+                               touchesOf(owner) == ownerTouches;
+        const auto recordEnd = [&](std::size_t Outcomes::* field)
+        {
+          ++(setup.outcomes[0].*field);
+          if (reception) ++(setup.outcomes[1].*field);
+        };
+        if (sameTouch)
+        {
+          // Rolling on to him: nothing but the ball's own physics moved it.
+          const float allowed =
+              std::max(lastSpeed, speedOf(ball.velocity)) * DT * stepCount +
+              SLACK_METRES;
+          setup.worstExcess = std::max(
+              setup.worstExcess, metres(lastPosition, ball.position) - allowed);
+        }
+        else if (wasInTouch)
+        {
+          if (lastPeakGap > HEAVY_GAP_METRES) ++setup.heavy;
+          if (engine->getState() != MatchState::PLAYING)
+          {
+            recordEnd(&Outcomes::stopped);
+          }
+          else if (ball.possessedBy == owner &&
+                   touchesOf(owner) != ownerTouches)
+          {
+            recordEnd(&Outcomes::replayed);
+          }
+          else if (ball.possessedBy == owner)
+          {
+            recordEnd(&Outcomes::collected);
+            setup.collectSeconds += now - touchStart;
+            // How far the ball jumped relative to him as the dribble took
+            // over, beyond what its own speed relative to him explains.
+            if (const MatchPlayer* holder = ownerOf(owner);
+                holder && stepCount == 1.0f)
+            {
+              const Vector2F offset{ball.position.x - holder->position.x,
+                                    ball.position.y - holder->position.y};
+              setup.worstCollectJump = std::max(
+                  setup.worstCollectJump,
+                  metres(lastOffset, offset) -
+                      (lastSpeed + speedOf(holder->velocity)) * DT);
+            }
+          }
+          else if (!ball.possessedBy)
+          {
+            recordEnd(&Outcomes::released);
+          }
+          else
+          {
+            recordEnd(&Outcomes::taken);
+          }
+        }
+        if (inTouch && !sameTouch)
+        {
+          owner = ball.possessedBy;
+          ownerTouches = touchesOf(owner);
+          reception = ball.touchPasser != nullptr;
+          touchStart = now;
+          ++setup.outcomes[0].started;
+          if (reception) ++setup.outcomes[1].started;
+          setup.contactGapSum += ball.touchContactGap;
+          setup.angleErrorSum += std::abs(ball.touchAngleError);
+          setup.weightErrorSum += std::abs(ball.touchWeightError);
+          if (ball.touchKind == TouchIntent::Kind::INTO_STRIDE)
+            ++setup.intoStride;
+        }
+        wasInTouch = inTouch;
+        lastPeakGap = inTouch ? ball.touchPeakGap : 0.0f;
+        lastPosition = ball.position;
+        lastSpeed = speedOf(ball.velocity);
+        if (const MatchPlayer* holder = inTouch ? ownerOf(owner) : nullptr)
+          lastOffset = {ball.position.x - holder->position.x,
+                        ball.position.y - holder->position.y};
+      }
+      setup.waitsMissed += engine->getFirstTouchWaitsMissed();
+      const MatchStats& stats = engine->getStats();
+      setup.passes[0] += stats.homePassesAttempted + stats.awayPassesAttempted;
+      setup.passes[1] += stats.homePassesCompleted + stats.awayPassesCompleted;
+      for (const PlayerMatchStats& line : engine->getPlayerStats())
+        setup.passes[2] += line.interceptions;
+    }
+
+  const auto describe = [](const Outcomes& counts)
+  {
+    const auto share = [&counts](std::size_t part)
+    {
+      return counts.started ? 100.0 * static_cast<double>(part) /
+                                  static_cast<double>(counts.started)
+                            : 0.0;
+    };
+    return std::format(
+        "{} touches: collected {:.0f}%, released {:.0f}%, taken by an "
+        "opponent {:.0f}%, played by another then touched again {:.1f}%, "
+        "play stopped {:.0f}%",
+        counts.started, share(counts.collected), share(counts.released),
+        share(counts.taken), share(counts.replayed), share(counts.stopped));
+  };
+  bool ok = true;
+  std::cout << std::format("\nFirst touch ({} matches per set-up)\n", MATCHES);
+  for (const Setup& setup : setups)
+  {
+    const double completion =
+        setup.passes[0] ? 100.0 * setup.passes[1] / setup.passes[0] : 0.0;
+    std::cout << std::format("  {}: passes {} attempted, {:.1f}% completed, "
+                             "{} intercepted\n",
+                             setup.name, setup.passes[0], completion,
+                             setup.passes[2]);
+    if (setup.body != BodyId::NEW_V1) continue;
+    const Outcomes& all = setup.outcomes[0];
+    const bool physical = setup.worstExcess <= 0.0f;
+    const double started = std::max(1.0, static_cast<double>(all.started));
+    std::cout << std::format(
+        "    all: {}\n    pass receptions: {}\n    met the ball {:.2f} m from "
+        "his centre on average; into stride {:.0f}%; mean error: angle "
+        "{:.1f}°, weight {:.0f}%; heavy (ball over 2 m away) {:.1f}%; mean "
+        "time to collect {:.2f} s\n    rolling "
+        "ball moved only under physics: {} (worst excess {:.3f} m); largest "
+        "jump relative to him at collection {:.2f} m; waited and lost it: {}\n",
+        describe(all), describe(setup.outcomes[1]),
+        setup.contactGapSum / started,
+        100.0 * static_cast<double>(setup.intoStride) / started,
+        setup.angleErrorSum / started * 180.0 / std::numbers::pi,
+        100.0 * setup.weightErrorSum / started,
+        100.0 * static_cast<double>(setup.heavy) / started,
+        all.collected ? setup.collectSeconds / static_cast<double>(all.collected)
+                      : 0.0,
+        physical ? "yes" : "NO", std::max(setup.worstExcess, 0.0f),
+        std::max(setup.worstCollectJump, 0.0f), setup.waitsMissed);
+    ok = ok && physical && all.collected > 0 && setup.waitsMissed == 0;
+  }
+  return ok;
+}
 }  // namespace
 
 int runSandboxChecks(GameController& controller, int matches)
@@ -758,6 +1036,8 @@ int runSandboxChecks(GameController& controller, int matches)
         check(at.detail.chance, "duel chance");
         if (at.detail.kind == MatchDuelDetail::Kind::TACKLE)
           check(at.detail.foul, "foul propensity");
+        if (at.detail.kind == MatchDuelDetail::Kind::FIRST_TOUCH)
+          check(at.detail.foul, "first-touch weight difficulty");
       }
     }
     rewindExact = diverged == 0;
@@ -917,5 +1197,17 @@ int runSandboxChecks(GameController& controller, int matches)
   const bool derivedWork = runDerivedStatChecks(clubs, config);
   std::cout << (derivedWork ? "PASS: derived stats complete and in range.\n"
                             : "FAIL: a derived stat check failed.\n");
-  return allIdentical && rewindExact && drillsWork && derivedWork ? 0 : 1;
+  const bool possessionWorks = runPossessionChecks(clubs, config);
+  std::cout << (possessionWorks
+                    ? "PASS: ball ownership coherent throughout.\n"
+                    : "FAIL: the ball's ownership state was incoherent.\n");
+  const bool firstTouchWorks = runFirstTouchChecks(clubs, config);
+  std::cout << (firstTouchWorks
+                    ? "PASS: first touches roll under physics and are "
+                      "collected.\n"
+                    : "FAIL: a first-touch check failed.\n");
+  return allIdentical && rewindExact && drillsWork && derivedWork &&
+                 possessionWorks && firstTouchWorks
+             ? 0
+             : 1;
 }

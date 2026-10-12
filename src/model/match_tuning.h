@@ -243,6 +243,102 @@ struct MatchTuning final
   };
 
   /**
+   * First touch (New v1 body, feet): the touch plays the ball on under real
+   * physics and the player runs onto it. He owns it from the touch (a
+   * claimed ball) until he collects it, an opponent plays it, or he loses
+   * the claim (see Notes and plans/match_engine_first_touch_plan.md).
+   */
+  struct FirstTouch final
+  {
+    /** A set touch leaves the ball this far ahead of him. */
+    static constexpr float SET_OFFSET_METRES = 0.5f;
+    /** Collected: within kick reach and moving with him. */
+    static constexpr float COLLECT_RELATIVE_SPEED = 1.5f;
+    /** The claim is dropped beyond this gap while it still grows... */
+    static constexpr float RELEASE_METRES = 3.5f;
+    /** ...or when an opponent can get there this much sooner than he can. */
+    static constexpr float RELEASE_RACE_SECONDS = 0.3f;
+    /** Thinking time once the ball is collected (the AI). */
+    static constexpr float MIN_DECISION_DELAY = 0.2f;
+    static constexpr float MAX_DECISION_DELAY = 0.4f;
+    /** How far ahead the chase looks along the ball's roll, and in what
+     * steps. */
+    static constexpr float CHASE_HORIZON_SECONDS = 2.0f;
+    static constexpr float CHASE_STEP_SECONDS = 0.1f;
+
+    // When to touch (New v1 brain): at the closest comfortable point the
+    // ball will pass, not the moment it comes into reach.
+    /** About a foot from his centre: any closer is as good as it gets. */
+    static constexpr float COMFORT_GAP_METRES = 0.3f;
+    /** He waits only for a point at least this much closer... */
+    static constexpr float WAIT_GAIN_METRES = 0.05f;
+    /** ...that is inside his reach by this margin. */
+    static constexpr float WAIT_MARGIN_METRES = 0.15f;
+    /** How far ahead he reads the ball and his own run. */
+    static constexpr float TIMING_LOOKAHEAD_SECONDS = 0.3f;
+
+    // What touch (New v1 brain).
+    /** A set touch goes where he will be this long after it. */
+    static constexpr float SET_LEAD_SECONDS = 0.3f;
+    /** Into stride: the ball is played this far ahead along his run (his
+     * speed times the lead, plus the extra), arriving at a share of his
+     * speed so he gains on it; only into space clear of opponents. */
+    static constexpr float STRIDE_LEAD_SECONDS = 0.8f;
+    static constexpr float STRIDE_EXTRA_METRES = 1.0f;
+    static constexpr float STRIDE_SPEED_SHARE = 0.9f;
+    static constexpr float STRIDE_CLEARANCE_METRES = 4.0f;
+
+    // How well he carries it out (New v1 body). Each difficulty factor is
+    // 0-1 and adds to an angle and a weight difficulty with its weights.
+    struct FactorWeights
+    {
+      float angle;
+      float weight;
+    };
+    /** Incoming ball speed (1 at the reference speed). */
+    static constexpr FactorWeights INCOMING_SPEED{0.10f, 0.30f};
+    /** Pace he must take off or add (1 at the reference speed). */
+    static constexpr FactorWeights SPEED_CHANGE{0.00f, 0.25f};
+    /** How far he turns its path (1 straight back). */
+    static constexpr FactorWeights REDIRECTION{0.30f, 0.05f};
+    /** Where it comes from against where he faces (1 from behind). */
+    static constexpr FactorWeights APPROACH{0.20f, 0.10f};
+    /** His own speed against his top speed. */
+    static constexpr FactorWeights OWN_MOVEMENT{0.10f, 0.10f};
+    /** How far he reaches for it (0 within the comfort gap). */
+    static constexpr FactorWeights STRETCH{0.15f, 0.15f};
+    /** On the side of his weaker foot (by how far to that side). */
+    static constexpr FactorWeights WEAK_FOOT{0.10f, 0.10f};
+    /** Off the ground (1 at the top of the feet band). */
+    static constexpr FactorWeights OFF_GROUND{0.15f, 0.15f};
+    /** Not expecting it (0 his pass, LOOSE_BALL a loose ball, 1 someone
+     * else's pass). */
+    static constexpr FactorWeights SURPRISE{0.15f, 0.15f};
+    static constexpr float LOOSE_BALL_SURPRISE = 0.4f;
+    /** An opponent close by (1 on top of him, 0 at the radius). */
+    static constexpr FactorWeights PRESSURE{0.10f, 0.10f};
+    static constexpr float PRESSURE_RADIUS_METRES = 3.0f;
+    /** How hard he plays it on (1 at the maximum touch speed). */
+    static constexpr FactorWeights AMBITION{0.00f, 0.15f};
+    static constexpr float REFERENCE_SPEED = 25.0f;
+
+    /** Error spreads (one sigma): angle in radians, weight as a share of
+     * the pace in play; a perfect touch skill cuts them by SKILL_REDUCTION. */
+    static constexpr float ANGLE_SIGMA_BASE = 0.035f;
+    static constexpr float ANGLE_SIGMA_RANGE = 0.45f;
+    static constexpr float WEIGHT_SIGMA_BASE = 0.05f;
+    static constexpr float WEIGHT_SIGMA_RANGE = 0.5f;
+    static constexpr float SKILL_REDUCTION = 0.6f;
+    /** The weight error is measured against the larger of the intended
+     * speed and this share of the incoming speed: misjudging a fast ball
+     * leaves more pace on it. */
+    static constexpr float WEIGHT_REFERENCE_SHARE = 0.5f;
+    /** A first touch is not a pass, and cannot kill a ball completely. */
+    static constexpr float MAX_TOUCH_SPEED = 8.0f;
+    static constexpr float MIN_RETAINED_SHARE = 0.05f;
+  };
+
+  /**
    * Dribbling: a carrier on the move pushes the ball 0.6-3 m ahead and
    * catches it up at the next touch, so the ball is exposed between touches
    * and a heavy touch can lose it. Defenders jockey goal-side and time their

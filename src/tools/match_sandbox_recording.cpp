@@ -76,7 +76,9 @@ json toJson(const MatchCommandRecord& command)
           {"talk_modifier", command.talkModifier},
           {"target", command.target ? json{command.target->x, command.target->y}
                                     : json(nullptr)},
-          {"urgent", command.urgent}};
+          {"urgent", command.urgent},
+          {"feed_velocity", json{command.feedVelocity.x, command.feedVelocity.y}},
+          {"feed_lift", command.feedLift}};
 }
 
 MatchCommandRecord commandFromJson(const json& value)
@@ -100,6 +102,9 @@ MatchCommandRecord commandFromJson(const json& value)
       target != value.end() && !target->is_null())
     command.target = Vector2F{target->at(0).get<float>(), target->at(1).get<float>()};
   command.urgent = value.value("urgent", false);
+  if (const auto feed = value.find("feed_velocity"); feed != value.end())
+    command.feedVelocity = {feed->at(0).get<float>(), feed->at(1).get<float>()};
+  command.feedLift = value.value("feed_lift", 0.0f);
   return command;
 }
 
