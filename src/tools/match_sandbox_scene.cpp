@@ -752,8 +752,8 @@ void MatchSandboxScene::renderFooter()
     ImGui::SetTooltip(
         "How the game's inputs become the match's numbers, for both sides: "
         "the attribute scale (level shift, stretch), top speed and "
-        "acceleration, roles, positions, match context. Original is the "
-        "inherited engine; New v1 is being developed.");
+        "acceleration, roles, positions, match context. Aardvark is the "
+        "inherited engine; Binturong is being developed.");
   ImGui::SameLine(0.0f, Theme::Space::XL * scale);
   ImGui::TextUnformatted("Home advantage");
   ImGui::SameLine();

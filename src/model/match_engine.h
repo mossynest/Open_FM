@@ -299,7 +299,7 @@ struct MatchBall
 
   const Player* possessedBy = nullptr;
   /** Owned but rolling free (a claimed ball): a first touch has played it,
-   * or a New v1 body's outfielder is dribbling it, never tethered (first-
+   * or a Binturong body's outfielder is dribbling it, never tethered (first-
    * touch and dribble touches plans). Only ever set with an owner in open
    * play; the possession helpers clear it. */
   bool inTouch = false;
@@ -714,7 +714,7 @@ class MatchEngine
   MatchEngine(const Lineup& home_lineup, const Lineup& away_lineup,
               const Strategy& home_strat, const Strategy& away_strat,
               const StatsConfig& config, uint32_t seed,
-              HandshakeId handshake = HandshakeId::ORIGINAL);
+              HandshakeId handshake = HandshakeId::AARDVARK);
   /** The handshake this match was built with. */
   HandshakeId getHandshake() const { return handshakeId; }
 
@@ -796,13 +796,13 @@ class MatchEngine
   }
   /**
    * The brain a side decides with (see match_brain.h). Set before kickoff;
-   * both sides use BrainId::ORIGINAL unless told otherwise.
+   * both sides use BrainId::AARDVARK unless told otherwise.
    */
   void setBrain(bool homeTeam, BrainId brain);
   BrainId getBrain(bool homeTeam) const { return brains[homeTeam ? 0 : 1]; }
   /**
    * The body a side's players move and play with (see match_body.h),
-   * independent of its brain. Set before kickoff; Original unless told
+   * independent of its brain. Set before kickoff; Aardvark unless told
    * otherwise.
    */
   void setBody(bool homeTeam, BodyId body)
@@ -1298,11 +1298,11 @@ class MatchEngine
   Strategy homeStrategy;
   Strategy awayStrategy;
   /** Each side's brain (home, away); see setBrain. */
-  std::array<BrainId, 2> brains{BrainId::ORIGINAL, BrainId::ORIGINAL};
+  std::array<BrainId, 2> brains{BrainId::AARDVARK, BrainId::AARDVARK};
   /** Each side's body (home, away); see setBody. */
-  std::array<BodyId, 2> bodies{BodyId::ORIGINAL, BodyId::ORIGINAL};
+  std::array<BodyId, 2> bodies{BodyId::AARDVARK, BodyId::AARDVARK};
   /** The match's handshake (constructor). */
-  HandshakeId handshakeId = HandshakeId::ORIGINAL;
+  HandshakeId handshakeId = HandshakeId::AARDVARK;
   std::mt19937 rng;
   // Referee decisions and injuries draw from their own stream so tuning them
   // does not reshuffle player decisions and ball physics.
@@ -1618,9 +1618,9 @@ class MatchEngine
     float urgencyDistanceMetres = 0.0f;
     float maxUrgencyShare = 0.0f;
     /** Pacing: how much less hard a fully tired player chooses to run
-     * (read by the New bodies; the Original body has it built in). */
+     * (read by the Binturong body; the Aardvark body has it built in). */
     float fatigueWorkRateLoss = MatchTuning::Player::FATIGUE_WORK_RATE_LOSS;
-    /** Pacing on the burst reserve (read by the New bodies): the intents
+    /** Pacing on the burst reserve (read by the Binturong body): the intents
      * that save it, and the reserve below which a saving player keeps
      * closer to his critical speed (at an empty reserve, to it). 0: never
      * saves. */
@@ -1755,8 +1755,8 @@ class MatchEngine
   // The brain functions above take the decision for a side: each dispatches
   // to that side's brain (match_brain_dispatch.cpp). The brains' own members
   // follow, one file per brain.
-#include "model/match_brain_original_members.h"
-#include "model/match_brain_new_v1_members.h"
+#include "model/match_brain_aardvark_members.h"
+#include "model/match_brain_binturong_members.h"
 
   // --- Body: carrying out the brain's choices --------------------------------
   void executeBallAction(MatchPlayer& carrier, const BallAction& action);
@@ -1807,7 +1807,7 @@ class MatchEngine
   /** The endurance stats' physical values, lane by lane alongside the
    * FitnessLanes of the same step (match_derived_stats.h): critical speed
    * (m/s), burst capacity (m), the walking refill time constant (s) and the
-   * fuel capacity rating. Read by the New bodies. */
+   * fuel capacity rating. Read by the Binturong body. */
   struct EnduranceLanes
   {
     static constexpr std::size_t LANES = FitnessLanes::LANES;
@@ -2131,13 +2131,13 @@ class MatchEngine
   /** Gives the ball to a player outside open play (restarts, substitutes,
    * scenarios): ownership only, none of setPossession's touch bookkeeping. */
   void handBallTo(const Player* holder);
-  // First touch (first-touch plan): a New v1 body plays a feet-height ball on
-  // under physics and runs onto it, instead of trapping it dead.
+  // First touch (first-touch plan): a Binturong body plays a feet-height ball
+  // on under physics and runs onto it, instead of trapping it dead.
   /** Whether this contact is played with the new first touch. */
   bool playsFirstTouch(const MatchPlayer& player, bool hands,
                        float heightMetres) const;
   /** How far from his centre he can play a ball at his feet (the feet-reach
-   * knob for New v1 outfielders). */
+   * knob for Binturong outfielders). */
   float feetReach(const MatchPlayer& player) const;
   /** The touch when no brain chooses one: set it just ahead of him, toward
    * the goal he attacks. */
@@ -2239,8 +2239,8 @@ class MatchEngine
   // The bodies' own members, one file per body (after every type they use;
   // the functions in "Player body" above dispatch to them,
   // match_body_dispatch.cpp).
-#include "model/match_body_original_members.h"
-#include "model/match_body_new_v1_members.h"
-#include "model/match_handshake_original_members.h"
-#include "model/match_handshake_new_v1_members.h"
+#include "model/match_body_aardvark_members.h"
+#include "model/match_body_binturong_members.h"
+#include "model/match_handshake_aardvark_members.h"
+#include "model/match_handshake_binturong_members.h"
 };

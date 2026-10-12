@@ -24,19 +24,19 @@ using nlohmann::json;
 
 std::array<BrainId, 2>& sandboxBrains()
 {
-  static std::array<BrainId, 2> brains{BrainId::ORIGINAL, BrainId::ORIGINAL};
+  static std::array<BrainId, 2> brains{BrainId::AARDVARK, BrainId::AARDVARK};
   return brains;
 }
 
 std::array<BodyId, 2>& sandboxBodies()
 {
-  static std::array<BodyId, 2> bodies{BodyId::ORIGINAL, BodyId::ORIGINAL};
+  static std::array<BodyId, 2> bodies{BodyId::AARDVARK, BodyId::AARDVARK};
   return bodies;
 }
 
 HandshakeId& sandboxHandshake()
 {
-  static HandshakeId handshake = HandshakeId::ORIGINAL;
+  static HandshakeId handshake = HandshakeId::AARDVARK;
   return handshake;
 }
 
@@ -297,7 +297,7 @@ bool SandboxJson::fromJson(const json& value, MatchSetup& setup,
                                       item.at(1).get<std::uint8_t>());
     setup.autoSubstitutions =
         value.at("auto_substitutions").get<std::array<bool, 2>>();
-    // Older setups have no brains: both sides played the Original brain.
+    // Older setups have no brains: both sides played the Aardvark brain.
     if (const auto brains = value.find("brains"); brains != value.end())
       for (std::size_t index = 0; index < setup.brains.size(); ++index)
       {
@@ -310,7 +310,7 @@ bool SandboxJson::fromJson(const json& value, MatchSetup& setup,
         }
         setup.brains[index] = *brain;
       }
-    // Likewise older setups have no bodies: both sides played the Original.
+    // Likewise older setups have no bodies: both sides played the Aardvark.
     if (const auto bodies = value.find("bodies"); bodies != value.end())
       for (std::size_t index = 0; index < setup.bodies.size(); ++index)
       {
@@ -323,7 +323,7 @@ bool SandboxJson::fromJson(const json& value, MatchSetup& setup,
         }
         setup.bodies[index] = *body;
       }
-    // And no handshake: they were built with the Original.
+    // And no handshake: they were built with the Aardvark.
     if (const auto handshake = value.find("handshake"); handshake != value.end())
     {
       const auto key = handshake->get<std::string>();

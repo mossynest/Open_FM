@@ -20,54 +20,57 @@
  * goalkeeping, non-contact injuries). Contests between players, the ball's
  * flight, the rules and attribute mapping are shared by every body.
  *
- * ORIGINAL is the inherited body, kept frozen for comparison; the NEW_V*
- * bodies are the ones being developed. Each side picks one before kickoff
- * (MatchEngine::setBody), independently of its brain (match_brain.h).
+ * AARDVARK is the inherited body, kept frozen for comparison; the BINTURONG
+ * and later bodies are the ones being developed. Each side picks one before
+ * kickoff (MatchEngine::setBody), independently of its brain (match_brain.h).
  */
 enum class BodyId : std::uint8_t
 {
-  ORIGINAL,
-  NEW_V1,
+  AARDVARK,
+  BINTURONG,
 };
 
-inline constexpr std::array<BodyId, 2> ALL_BODIES = {BodyId::ORIGINAL,
-                                                     BodyId::NEW_V1};
+inline constexpr std::array<BodyId, 2> ALL_BODIES = {BodyId::AARDVARK,
+                                                     BodyId::BINTURONG};
 
-/** Display name ("Original", "New v1"). */
+/** Display name ("Aardvark", "Binturong"). */
 constexpr std::string_view bodyName(BodyId body)
 {
   switch (body)
   {
-    case BodyId::ORIGINAL:
-      return "Original";
-    case BodyId::NEW_V1:
-      return "New v1";
+    case BodyId::AARDVARK:
+      return "Aardvark";
+    case BodyId::BINTURONG:
+      return "Binturong";
   }
   return "Unknown";
 }
 
-/** Command-line and file key ("original", "new-v1"). */
+/** Command-line and file key ("aardvark", "binturong"). */
 constexpr std::string_view bodyKey(BodyId body)
 {
   switch (body)
   {
-    case BodyId::ORIGINAL:
-      return "original";
-    case BodyId::NEW_V1:
-      return "new-v1";
+    case BodyId::AARDVARK:
+      return "aardvark";
+    case BodyId::BINTURONG:
+      return "binturong";
   }
   return "unknown";
 }
 
-/** The body with this key, if any. */
+/** The body with this key, if any (also the keys used before the versions
+ * were renamed: "original" and "new-v1"). */
 constexpr std::optional<BodyId> bodyFromKey(std::string_view key)
 {
+  if (key == "original") return BodyId::AARDVARK;
+  if (key == "new-v1") return BodyId::BINTURONG;
   for (const BodyId body : ALL_BODIES)
     if (bodyKey(body) == key) return body;
   return std::nullopt;
 }
 
-/** "Original v New v1" (home first). */
+/** "Aardvark v Binturong" (home first). */
 inline std::string bodyPairName(const std::array<BodyId, 2>& bodies)
 {
   return std::string(bodyName(bodies[0])) + " v " +
@@ -75,7 +78,7 @@ inline std::string bodyPairName(const std::array<BodyId, 2>& bodies)
 }
 
 /**
- * Parses "HOME,AWAY" (e.g. "original,new-v1"); a single key sets both
+ * Parses "HOME,AWAY" (e.g. "aardvark,binturong"); a single key sets both
  * sides. Null when a key is unknown.
  */
 constexpr std::optional<std::array<BodyId, 2>> parseBodyPair(

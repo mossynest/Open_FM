@@ -9,7 +9,7 @@
 #pragma once
 
 // First-touch knobs: every game constant that changes how well a first touch
-// comes off (New v1 brain and body, see Notes and plans/
+// comes off (Binturong brain and body, see Notes and plans/
 // match_engine_first_touch_tuning_plan.md), as runtime values each engine
 // holds. They default to the MatchTuning constants, so a match nobody sets
 // them on plays exactly as before; drills and the lab change one at a time.
@@ -74,7 +74,7 @@ enum class TouchKnob : std::uint8_t
   REFERENCE_SPEED,
   PRESSURE_RADIUS,
   LOOSE_BALL_SURPRISE,
-  // Reach (New v1 bodies only, feet height).
+  // Reach (Binturong bodies only, feet height).
   FEET_REACH,
   // Timing (brain): when he plays it.
   COMFORT_GAP,

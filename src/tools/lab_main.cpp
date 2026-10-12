@@ -90,7 +90,7 @@ drill    a match sandbox drill measured headless: the same options as
          second, over repeated seeds; a preset fills settings in, --set
          overrides any, beyond its slider range too); the table goes to the
          console, the runs to CSV with --csv. Drills choose their own brains
-         and bodies where they need to (First touch: New v1 bodies); the
+         and bodies where they need to (First touch: Binturong bodies); the
          match options before the drill's name set them for the others
 touch-sensitivity
          which variables move the first touch most: every First touch
@@ -106,15 +106,15 @@ touch-sensitivity
 Fidelity: full (default, the live engine's 10 Hz step) or background (the
 cheaper step unwatched fixtures use); compare both to check equivalence.
 
-Brains: each side's decision-making, original (default) or new-v1; one name
-sets both sides ("--brains new-v1"), two set home and away
-("--brains original,new-v1").
+Brains: each side's decision-making, aardvark (default) or binturong; one name
+sets both sides ("--brains binturong"), two set home and away
+("--brains aardvark,binturong").
 
 Bodies: each side's players' bodies (movement, fitness, kicking, first
-touch, goalkeeping), original (default) or new-v1, set the same way.
+touch, goalkeeping), aardvark (default) or binturong, set the same way.
 
 Handshake: how the inputs become match state (attribute scale, physical
-limits, roles), one for the match: original (default) or new-v1.
+limits, roles), one for the match: aardvark (default) or binturong.
 
 Home advantage: the home side's edge on attributes, execution and
 refereeing (MatchContext::homeAdvantageScale), 0 a neutral venue (default)
@@ -286,25 +286,25 @@ bool backgroundFidelity(const Arguments& arguments)
   return fidelity == "background";
 }
 
-/** --brains HOME,AWAY (or one brain for both sides); default original. */
+/** --brains HOME,AWAY (or one brain for both sides); default aardvark. */
 std::array<BrainId, 2> brainPair(const Arguments& arguments)
 {
-  const std::string text = arguments.value("--brains").value_or("original");
+  const std::string text = arguments.value("--brains").value_or("aardvark");
   const auto brains = parseBrainPair(text);
   if (!brains)
     throw UsageError(
-        "--brains must be HOME,AWAY or one brain, each original or new-v1");
+        "--brains must be HOME,AWAY or one brain, each aardvark or binturong");
   return *brains;
 }
 
-/** --bodies HOME,AWAY (or one body for both sides); default original. */
+/** --bodies HOME,AWAY (or one body for both sides); default aardvark. */
 std::array<BodyId, 2> bodyPair(const Arguments& arguments)
 {
-  const std::string text = arguments.value("--bodies").value_or("original");
+  const std::string text = arguments.value("--bodies").value_or("aardvark");
   const auto bodies = parseBodyPair(text);
   if (!bodies)
     throw UsageError(
-        "--bodies must be HOME,AWAY or one body, each original or new-v1");
+        "--bodies must be HOME,AWAY or one body, each aardvark or binturong");
   return *bodies;
 }
 
@@ -333,14 +333,12 @@ std::string bodiesParameter(std::array<BodyId, 2> bodies)
                      bodyName(bodies[1]));
 }
 
-/** --handshake original|new-v1 (one for the match); default original. */
+/** --handshake aardvark|binturong (one for the match); default aardvark. */
 HandshakeId handshakeOption(const Arguments& arguments)
 {
-  const std::string text =
-      arguments.value("--handshake").value_or("original");
+  const std::string text = arguments.value("--handshake").value_or("aardvark");
   const auto handshake = handshakeFromKey(text);
-  if (!handshake)
-    throw UsageError("--handshake must be original or new-v1");
+  if (!handshake) throw UsageError("--handshake must be aardvark or binturong");
   return *handshake;
 }
 
@@ -573,7 +571,8 @@ int runDrillMode(int argc, char** argv)
     else if (option == "--handshake")
     {
       const auto handshake = handshakeFromKey(value);
-      if (!handshake) throw UsageError("--handshake must be original or new-v1");
+      if (!handshake)
+        throw UsageError("--handshake must be aardvark or binturong");
       sandboxHandshake() = *handshake;
     }
     else

@@ -6,18 +6,17 @@
 //  See the LICENSE file in the project root.
 // -----------------------------------------------------------------------------
 
-// The New v1 body: how one player's body carries out his brain's choices
+// The Aardvark body: how one player's body carries out his brain's choices
 // and what it costs him (movement, fitness, kicking, dribbling, first touch,
-// goalkeeping, non-contact injuries), the version being developed (see
-// match_body.h). It started as an exact copy of the Original body
-// (match_body_original.cpp). Every function here is a MatchEngine member
-// with the "NewV1" suffix, declared in match_body_new_v1_members.h; the
-// engine reaches them through the dispatchers in match_body_dispatch.cpp.
+// goalkeeping, non-contact injuries), as inherited with the engine. Kept
+// frozen so the bodies being developed can be compared with it (see
+// match_body.h). Every function here is a MatchEngine member with the
+// "Aardvark" suffix, declared in match_body_aardvark_members.h; the engine
+// reaches them through the dispatchers in match_body_dispatch.cpp.
 //
-// Change behaviour freely here. A helper shared with the rest of the engine
-// (contests, the ball's flight, rules) is shared by every body: copy it into
-// this body (with the NewV1 suffix) before changing it. To keep this version
-// for comparison, freeze it and copy it to New v2 the same way.
+// Do not change behaviour here. A helper shared with the rest of the engine
+// (contests, the ball's flight, rules) is shared by every body, so a new body
+// copies it before changing it.
 
 #include <algorithm>
 #include <array>
@@ -26,79 +25,11 @@
 
 #include "model/match_engine.h"
 #include "model/match_engine_internal.h"
-#include "model/match_recorder.h"
 #include "model/match_rules.h"
-#include "model/player.h"
 
 using namespace MatchEngineInternal;
 
-namespace
-{
-// Arriving: a player at full effort slows at this share of his braking, the
-// average deceleration of a maximal stop from a sprint (about 4.2-5 m/s^2 in
-// team-sport athletes, Harper et al. 2020), against braking peaks of 6-8.
-// Lower effort slows more gently, never below the old fixed arrival rate.
-constexpr float ARRIVAL_BRAKING_SHARE = 0.7f;
-// He stops this close to his target rather than short of it.
-constexpr float ARRIVAL_TOLERANCE_METRES = 0.1f;
-// Pivoting: from a standstill he can push off in any direction; on the move
-// he speeds up or brakes along his run and turns within a lateral limit.
-// The second takes over gradually, fully from this speed (no cliff).
-constexpr float PIVOT_BLEND_SPEED = 1.2f;
-// A fully tired player brakes and turns this much less sharply. Fatigue is
-// reported to hurt changes of direction at least as much as straight-line
-// speed, so the same share as top speed for now (a guess to tune).
-constexpr float FATIGUE_BRAKING_LOSS = 0.14f;
-constexpr float FATIGUE_TURNING_LOSS = 0.14f;
-
-/** His grip: the Agility stat's multiplier on the lateral limit every
- * player has (0.9 for a part-timer, 1.1 for the elite). One value for both
- * feet: the body does not know which foot is down, so the outside foot's
- * stronger cut and the inside foot's weaker one average out. */
-inline float playerGrip(const MatchPlayer& player)
-{
-  return derivedPhysicalValue(DerivedStat::AGILITY,
-                              player.derivedStat(DerivedStat::AGILITY));
-}
-
-// Energy: two tanks (critical speed and D', the W' balance model of Skiba et
-// al. for intermittent running).
-// - Fuel (`stamina`, floor MINIMUM_STAMINA): the whole match's work, drained
-//   as before but by the fuel capacity stat, never refilled in play. A
-//   fully used fuel tank lowers the critical speed and the burst capacity
-//   by these shares (late-match tiredness: fewer, slower repeat efforts).
-constexpr float CRITICAL_SPEED_FUEL_LOSS = 0.10f;
-constexpr float BURST_FUEL_LOSS = 0.25f;
-// - Burst reserve (`sprintReserve`, a share of the fresh burst capacity):
-//   metres run above the critical speed drain it one for one; below it, it
-//   refills toward full with the recovery rate's time constant, slower the
-//   closer he still runs to his critical speed (x 2.8 at it: about 120 s
-//   after light and 340 s after heavy recovery in intermittent trials).
-constexpr float RECOVERY_EFFORT_SLOWING = 1.8f;
-// With the reserve empty he can still go this share of the way from his
-// critical speed to his top speed.
-constexpr float EMPTY_BURST_SHARE = 0.35f;
-
-/** The top speed his body allows now: fuel trims the top end; above his
- * critical speed, how much of the rest he can reach depends on the burst
- * reserve. */
-inline float burstTopSpeed(float maxSpeed, float fatigue, float reserve,
-                           float injury, float criticalSpeed)
-{
-  using P = MatchTuning::Player;
-  const float fresh = maxSpeed * (1.0f - P::FATIGUE_TOP_SPEED_LOSS * fatigue);
-  const float sustainable = std::min(
-      criticalSpeed * (1.0f - CRITICAL_SPEED_FUEL_LOSS * fatigue), fresh);
-  const float capacity = 1.0f - BURST_FUEL_LOSS * fatigue;
-  const float fullness = std::clamp(reserve / capacity, 0.0f, 1.0f);
-  return (sustainable +
-          (fresh - sustainable) *
-              (EMPTY_BURST_SHARE + (1.0f - EMPTY_BURST_SHARE) * fullness)) *
-         injury;
-}
-}  // namespace
-
-float MatchEngine::executionErrorScaleNewV1(const MatchPlayer& player) const
+float MatchEngine::executionErrorScaleAardvark(const MatchPlayer& player) const
 {
   // Tired players lose precision, and a home crowd lifts the home side a
   // little: both scale the technical error of passes and shots.
@@ -109,10 +40,10 @@ float MatchEngine::executionErrorScaleNewV1(const MatchPlayer& player) const
           weakFootPressure(player) * TacticsTuning::WEAK_FOOT_ERROR_GAIN);
 }
 
-void MatchEngine::moveControlledNewV1(MatchPlayer& player, Vector2F desired,
-                                 float desiredSpeed, float topSpeed,
-                                 float fatigue, float dt,
-                                 const MatchPlayer* faceToward)
+void MatchEngine::moveControlledAardvark(MatchPlayer& player, Vector2F desired,
+                                         float desiredSpeed, float topSpeed,
+                                         float fatigue, float dt,
+                                         const MatchPlayer* faceToward)
 {
   using C = MatchTuning::Control;
   // Finer sub-steps: the stick is followed with 20 ms kinematics while the
@@ -120,13 +51,13 @@ void MatchEngine::moveControlledNewV1(MatchPlayer& player, Vector2F desired,
   const float facing = player.facingAngle;
   const float subStep = dt / static_cast<float>(C::PHYSICS_SUBSTEPS);
   for (int step = 0; step < C::PHYSICS_SUBSTEPS; ++step)
-    stepKinematicsNewV1(player, desired, desiredSpeed, topSpeed, fatigue, subStep);
+    stepKinematicsAardvark(player, desired, desiredSpeed, topSpeed, fatigue,
+                           subStep);
   if (faceToward)
   {
     // A jockeying defender keeps his eyes (and hips) on the ball.
-    const float target =
-        fastAtan2(faceToward->position.y - player.position.y,
-                  faceToward->position.x - player.position.x);
+    const float target = fastAtan2(faceToward->position.y - player.position.y,
+                                   faceToward->position.x - player.position.x);
     float difference = target - facing;
     if (difference > std::numbers::pi_v<float>)
       difference -= TWO_PI;
@@ -142,30 +73,30 @@ void MatchEngine::moveControlledNewV1(MatchPlayer& player, Vector2F desired,
   }
 }
 
-float MatchEngine::currentTopSpeedNewV1(
-    const MatchPlayer& player) const
+float MatchEngine::currentTopSpeedAardvark(const MatchPlayer& player) const
 {
+  using P = MatchTuning::Player;
   const float fatigue =
       std::clamp((1.0f - player.stamina) * INVERSE_FATIGUE_RANGE, 0.0f, 1.0f);
+  const float reserve =
+      P::EMPTY_RESERVE_TOP_SPEED +
+      (1.0f - P::EMPTY_RESERVE_TOP_SPEED) * player.sprintReserve;
   const float injury =
       player.isInjured ? MatchTuning::Injury::INJURED_SPEED_SCALE : 1.0f;
-  return burstTopSpeed(
-      player.maxSpeed, fatigue, player.sprintReserve, injury,
-      derivedPhysicalValue(DerivedStat::ENDURANCE,
-                           player.derivedStat(DerivedStat::ENDURANCE)));
+  return player.maxSpeed * (1.0f - P::FATIGUE_TOP_SPEED_LOSS * fatigue) *
+         reserve * injury;
 }
 
-FM_KERNEL_CLONES void MatchEngine::integrateMovementsNewV1(const std::uint8_t* slots,
-                                                      std::size_t count,
-                                                      float dt, bool walking)
+FM_KERNEL_CLONES void MatchEngine::integrateMovementsAardvark(
+    const std::uint8_t* slots, std::size_t count, float dt, bool walking)
 {
   using P = MatchTuning::Player;
   using Pitch = MatchTuning::Pitch;
   constexpr float PI = std::numbers::pi_v<float>;
   // The movers are gathered into arrays and advanced with straight-line code
-  // (every branch of stepKinematicsNewV1() evaluated and selected per player), so
-  // the compiler can process several players at once. The arithmetic of each
-  // player is exactly that of stepKinematicsNewV1().
+  // (every branch of stepKinematicsAardvark() evaluated and selected per
+  // player), so the compiler can process several players at once. The
+  // arithmetic of each player is exactly that of stepKinematicsAardvark().
   constexpr std::size_t LANES = 32;
   alignas(16) std::array<float, LANES> offsetX;
   alignas(16) std::array<float, LANES> offsetY;
@@ -186,15 +117,9 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsNewV1(const std::uint8_t* s
   alignas(16) std::array<float, LANES> intentScale;
   alignas(16) std::array<float, LANES> urgencyDistance;
   alignas(16) std::array<float, LANES> maxUrgency;
-  alignas(16) std::array<float, LANES> pacing;
-  alignas(16) std::array<float, LANES> criticalSpeed;
-  alignas(16) std::array<float, LANES> burstSaving;
   alignas(16) std::array<float, LANES> talk;
   alignas(16) std::array<float, LANES> shout;
   alignas(16) std::array<float, LANES> turnRate;
-  alignas(16) std::array<float, LANES> grip;
-  alignas(16) std::array<float, LANES> targetVelocityX;
-  alignas(16) std::array<float, LANES> targetVelocityY;
   std::array<MatchPlayer*, LANES> movers;
   std::size_t moving = 0;
   for (std::size_t index = 0; index < count; ++index)
@@ -203,40 +128,27 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsNewV1(const std::uint8_t* s
     Vector2F target = walking ? player.movementTarget : player.tacticalTarget;
     target.x = std::clamp(target.x, Pitch::PLAYER_MIN_X, Pitch::PLAYER_MAX_X);
     target.y = std::clamp(target.y, Pitch::PLAYER_MIN_Y, Pitch::PLAYER_MAX_Y);
-    // A brain with a target lag has its players absorb a new target
-    // gradually (a side unfamiliar with its tactics more slowly); without one
-    // they head straight for it.
+    // Players react to a moving target with a perception/intent lag; a side
+    // unfamiliar with its tactics reacts later.
     const bool urgent = !walking && player.urgentMovement;
     const float targetBlend =
         targetBlends[(player.isHomeTeam ? 0U : 2U) + (urgent ? 1U : 0U)];
-    if (targetBlend >= 1.0f)
-    {
-      player.movementTarget = target;
-    }
-    else
-    {
-      player.movementTarget.x +=
-          (target.x - player.movementTarget.x) * targetBlend;
-      player.movementTarget.y +=
-          (target.y - player.movementTarget.y) * targetBlend;
-    }
+    player.movementTarget.x +=
+        (target.x - player.movementTarget.x) * targetBlend;
+    player.movementTarget.y +=
+        (target.y - player.movementTarget.y) * targetBlend;
     const Vector2F offset =
         toMetres({player.movementTarget.x - player.position.x,
                   player.movementTarget.y - player.position.y});
-    const Vector2F movingTarget =
-        walking ? Vector2F{0.0f, 0.0f} : player.targetVelocity;
     // A player standing on his spot stays put (the common case in stoppages).
     if (offset.x * offset.x + offset.y * offset.y <=
             P::ARRIVAL_DEAD_ZONE_METRES * P::ARRIVAL_DEAD_ZONE_METRES &&
-        player.velocity.x == 0.0f && player.velocity.y == 0.0f &&
-        movingTarget.x == 0.0f && movingTarget.y == 0.0f)
+        player.velocity.x == 0.0f && player.velocity.y == 0.0f)
       continue;
     const std::size_t lane = moving++;
     movers[lane] = &player;
     offsetX[lane] = offset.x;
     offsetY[lane] = offset.y;
-    targetVelocityX[lane] = movingTarget.x;
-    targetVelocityY[lane] = movingTarget.y;
     velocityX[lane] = player.velocity.x;
     velocityY[lane] = player.velocity.y;
     positionX[lane] = player.position.x;
@@ -252,22 +164,14 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsNewV1(const std::uint8_t* s
     // How hard he chooses to run is his side's brain's.
     const MovementStyle& style = movementStyle(player.isHomeTeam);
     intentScale[lane] =
-        walking ? style.restartWalkShare
-                : style.intentSpeedShares[static_cast<std::size_t>(player.intent)];
+        walking
+            ? style.restartWalkShare
+            : style.intentSpeedShares[static_cast<std::size_t>(player.intent)];
     urgencyDistance[lane] = style.urgencyDistanceMetres;
     maxUrgency[lane] = style.maxUrgencyShare;
-    pacing[lane] = style.fatigueWorkRateLoss;
-    // Whether he keeps something in reserve on this job is his brain's.
-    burstSaving[lane] =
-        !walking && style.savesBurst[static_cast<std::size_t>(player.intent)]
-            ? style.burstSavingReserve
-            : 0.0f;
-    criticalSpeed[lane] = derivedPhysicalValue(
-        DerivedStat::ENDURANCE, player.derivedStat(DerivedStat::ENDURANCE));
     talk[lane] = talkOf(player.isHomeTeam);
     shout[lane] = shoutWorkRate(player.isHomeTeam);
     turnRate[lane] = player.turnRate;
-    grip[lane] = playerGrip(player);
   }
 
   for (std::size_t lane = 0; lane < moving; ++lane)
@@ -278,63 +182,40 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsNewV1(const std::uint8_t* s
         std::sqrt(targetX * targetX + targetY * targetY);
     const float fatigue =
         std::clamp((1.0f - stamina[lane]) * INVERSE_FATIGUE_RANGE, 0.0f, 1.0f);
-    const float topSpeed = burstTopSpeed(maxSpeed[lane], fatigue, reserve[lane],
-                                         injury[lane], criticalSpeed[lane]);
+    const float topSpeed =
+        maxSpeed[lane] * (1.0f - P::FATIGUE_TOP_SPEED_LOSS * fatigue) *
+        (P::EMPTY_RESERVE_TOP_SPEED +
+         (1.0f - P::EMPTY_RESERVE_TOP_SPEED) * reserve[lane]) *
+        injury[lane];
     // Players jog while in position but run hard to recover a lost position.
-    // Intent speeds are shares of the fresh top speed; how much less hard a
-    // tired player chooses to run is his brain's pacing.
+    // Intent speeds are shares of the fresh top speed; tired players choose
+    // to run a little less hard and lose the top end.
     const float urgency =
-        walking
-            ? intentScale[lane]
-            : std::max(intentScale[lane],
-                       std::min(maxUrgency[lane],
-                                targetDistance / urgencyDistance[lane]));
-    // Tired legs brake and turn less sharply.
-    const float brake =
-        braking[lane] * (1.0f - FATIGUE_BRAKING_LOSS * fatigue);
-    const float effort = (1.0f - pacing[lane] * fatigue +
-                          talk[lane] + shout[lane]) *
-                         urgency;
-    // On a job where his brain saves the burst reserve, a low reserve keeps
-    // him closer to his critical speed (at an empty one, to it).
-    const float sustainable =
-        std::min(criticalSpeed[lane] *
-                     (1.0f - CRITICAL_SPEED_FUEL_LOSS * fatigue),
-                 topSpeed);
-    const float fullness = std::clamp(
-        reserve[lane] / (1.0f - BURST_FUEL_LOSS * fatigue), 0.0f, 1.0f);
-    const float saved =
-        burstSaving[lane] > 0.0f
-            ? std::clamp(fullness / std::max(burstSaving[lane], EPSILON), 0.0f,
-                         1.0f)
-            : 1.0f;
-    const float pacedTop = sustainable + (topSpeed - sustainable) * saved;
-    const float speedCap = std::min(pacedTop, maxSpeed[lane] * effort);
+        walking ? intentScale[lane]
+                : std::max(intentScale[lane],
+                           std::min(maxUrgency[lane],
+                                    targetDistance / urgencyDistance[lane]));
+    const float speedCap =
+        std::min(topSpeed, maxSpeed[lane] *
+                               (1.0f - P::FATIGUE_WORK_RATE_LOSS * fatigue +
+                                talk[lane] + shout[lane]) *
+                               urgency);
+    // Arrive without overshooting: the desired speed falls off so a
+    // comfortable deceleration stops the player on the target.
+    const float approach = targetDistance - P::ARRIVAL_DEAD_ZONE_METRES;
+    const float arrivalSpeed =
+        std::sqrt(2.0f * P::ARRIVAL_DECELERATION * std::max(approach, 0.0f));
+    const float desiredSpeed =
+        approach <= 0.0f ? 0.0f : std::min(speedCap, arrivalSpeed);
     // Quotients are formed for every lane and discarded where unused.
     const bool aimed = targetDistance > EPSILON;
     const float directionX = targetX / targetDistance;
     const float directionY = targetY / targetDistance;
-    // Arrive without overshooting: the desired speed falls off so he stops
-    // on the target, braking as hard as the effort he is putting in. A
-    // target moving away is closed on at that speed on top.
-    const float arrivalDeceleration =
-        std::max(P::ARRIVAL_DECELERATION,
-                 ARRIVAL_BRAKING_SHARE * brake * std::min(effort, 1.0f));
-    const float approach = targetDistance - ARRIVAL_TOLERANCE_METRES;
-    const float receding = std::max(
-        0.0f, aimed ? targetVelocityX[lane] * directionX +
-                          targetVelocityY[lane] * directionY
-                    : 0.0f);
-    const float arrivalSpeed =
-        std::sqrt(2.0f * arrivalDeceleration * std::max(approach, 0.0f)) +
-        receding;
-    const float desiredSpeed = std::min(speedCap, arrivalSpeed);
     const float desiredX = (aimed ? directionX : 0.0f) * desiredSpeed;
     const float desiredY = (aimed ? directionY : 0.0f) * desiredSpeed;
 
     // Acceleration-speed profile a(v) = A0 (1 - v / vmax), stronger braking,
-    // and a lateral limit (scaled by his grip) that forces a player to slow
-    // down to turn sharply.
+    // and a lateral limit that forces a player to slow down to turn sharply.
     const float push =
         acceleration[lane] * (1.0f - P::FATIGUE_ACCELERATION_LOSS * fatigue);
     const float oldX = velocityX[lane];
@@ -342,8 +223,9 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsNewV1(const std::uint8_t* s
     const float speed = std::sqrt(oldX * oldX + oldY * oldY);
     const float changeX = desiredX - oldX;
     const float changeY = desiredY - oldY;
+    const float brake = braking[lane];
     const float drive = push * std::max(0.05f, 1.0f - speed / topSpeed);
-    // From a standstill: push off straight toward the target.
+    // Starting from (almost) a standstill: move straight toward the target.
     const float limit = (desiredSpeed >= speed ? drive : brake) * dt;
     const float magnitude = std::sqrt(changeX * changeX + changeY * changeY);
     const float shortfall = limit / magnitude;
@@ -364,20 +246,13 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsNewV1(const std::uint8_t* s
         (P::LATERAL_ACCELERATION_SLOW +
          (P::LATERAL_ACCELERATION_FAST - P::LATERAL_ACCELERATION_SLOW) *
              speedShare) *
-        grip[lane] *
-        (1.0f - FATIGUE_TURNING_LOSS * fatigue) *
         dt;
     across = std::clamp(across, -lateral, lateral);
     const float fastX = oldX + (tangentX * along + normalX * across);
     const float fastY = oldY + (tangentY * along + normalY * across);
-    // The run's own rule takes over gradually with speed (none at a
-    // standstill, where the run has no direction).
-    const float pivot = std::min(speed / PIVOT_BLEND_SPEED, 1.0f);
-    const float runX = speed > 0.0f ? fastX : slowX;
-    const float runY = speed > 0.0f ? fastY : slowY;
     const bool stop = (desiredSpeed == 0.0f) & (speed <= brake * dt);
-    float nextVelocityX = stop ? 0.0f : slowX + (runX - slowX) * pivot;
-    float nextVelocityY = stop ? 0.0f : slowY + (runY - slowY) * pivot;
+    float nextVelocityX = stop ? 0.0f : speed < 0.5f ? slowX : fastX;
+    float nextVelocityY = stop ? 0.0f : speed < 0.5f ? slowY : fastY;
     const float squaredSpeed =
         nextVelocityX * nextVelocityX + nextVelocityY * nextVelocityY;
     const float capScale = topSpeed / std::sqrt(squaredSpeed);
@@ -441,65 +316,55 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsNewV1(const std::uint8_t* s
   }
 }
 
-[[gnu::always_inline]] inline void MatchEngine::stepKinematicsNewV1(
+[[gnu::always_inline]] inline void MatchEngine::stepKinematicsAardvark(
     MatchPlayer& player, Vector2F desired, float desiredSpeed, float topSpeed,
     float fatigue, float dt)
 {
   using P = MatchTuning::Player;
   // Acceleration-speed profile a(v) = A0 (1 - v / vmax), stronger braking,
-  // and a lateral limit (scaled by his grip) that forces a player to slow
-  // down to turn sharply.
+  // and a lateral limit that forces a player to slow down to turn sharply.
   const float acceleration =
       player.acceleration * (1.0f - P::FATIGUE_ACCELERATION_LOSS * fatigue);
-  // Tired legs brake and turn less sharply.
-  const float braking =
-      player.braking * (1.0f - FATIGUE_BRAKING_LOSS * fatigue);
   Vector2F velocity = player.velocity;
   const float speed = length(velocity);
   const Vector2F change{desired.x - velocity.x, desired.y - velocity.y};
-  if (desiredSpeed == 0.0f && speed <= braking * dt)
+  if (desiredSpeed == 0.0f && speed <= player.braking * dt)
   {
     velocity = {0.0f, 0.0f};
   }
-  else
+  else if (speed < 0.5f)
   {
-    // From a standstill: push off straight toward the target.
-    const float drive =
-        acceleration * std::max(0.05f, 1.0f - speed / topSpeed);
     const float limit =
-        (desiredSpeed >= speed ? drive : braking) * dt;
+        (desiredSpeed >= speed
+             ? acceleration * std::max(0.05f, 1.0f - speed / topSpeed)
+             : player.braking) *
+        dt;
     const float magnitude = length(change);
     const float shortfall = limit / magnitude;
     const float scale = magnitude > limit ? shortfall : 1.0f;
-    const Vector2F pushOff{velocity.x + change.x * scale,
-                           velocity.y + change.y * scale};
-    Vector2F run = pushOff;
-    if (speed > 0.0f)
-    {
-      // On the move: accelerate or brake along the run, turn within the
-      // limit.
-      const Vector2F tangent{velocity.x / speed, velocity.y / speed};
-      const Vector2F normal{-tangent.y, tangent.x};
-      float along = change.x * tangent.x + change.y * tangent.y;
-      float across = change.x * normal.x + change.y * normal.y;
-      along = along > 0.0f ? std::min(along, drive * dt)
-                           : std::max(along, -braking * dt);
-      const float speedShare = std::clamp(speed / player.maxSpeed, 0.0f, 1.0f);
-      const float lateral =
-          (P::LATERAL_ACCELERATION_SLOW +
-           (P::LATERAL_ACCELERATION_FAST - P::LATERAL_ACCELERATION_SLOW) *
-               speedShare) *
-          playerGrip(player) *
-          (1.0f - FATIGUE_TURNING_LOSS * fatigue) *
-          dt;
-      across = std::clamp(across, -lateral, lateral);
-      run = {velocity.x + tangent.x * along + normal.x * across,
-             velocity.y + tangent.y * along + normal.y * across};
-    }
-    // The run's own rule takes over gradually with speed.
-    const float pivot = std::min(speed / PIVOT_BLEND_SPEED, 1.0f);
-    velocity = {pushOff.x + (run.x - pushOff.x) * pivot,
-                pushOff.y + (run.y - pushOff.y) * pivot};
+    velocity.x += change.x * scale;
+    velocity.y += change.y * scale;
+  }
+  else
+  {
+    const Vector2F tangent{velocity.x / speed, velocity.y / speed};
+    const Vector2F normal{-tangent.y, tangent.x};
+    float along = change.x * tangent.x + change.y * tangent.y;
+    float across = change.x * normal.x + change.y * normal.y;
+    along =
+        along > 0.0f
+            ? std::min(along, acceleration *
+                                  std::max(0.05f, 1.0f - speed / topSpeed) * dt)
+            : std::max(along, -player.braking * dt);
+    const float speedShare = std::clamp(speed / player.maxSpeed, 0.0f, 1.0f);
+    const float lateral =
+        (P::LATERAL_ACCELERATION_SLOW +
+         (P::LATERAL_ACCELERATION_FAST - P::LATERAL_ACCELERATION_SLOW) *
+             speedShare) *
+        dt;
+    across = std::clamp(across, -lateral, lateral);
+    velocity.x += tangent.x * along + normal.x * across;
+    velocity.y += tangent.y * along + normal.y * across;
   }
   const float squaredSpeed = velocity.x * velocity.x + velocity.y * velocity.y;
   if (squaredSpeed > topSpeed * topSpeed)
@@ -540,90 +405,48 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsNewV1(const std::uint8_t* s
   }
 }
 
-void MatchEngine::spendEnergyNewV1(FitnessLanes& lanes, std::size_t begin,
-                              std::size_t end, float dt,
-                              bool /*homeTeam*/) const
+void MatchEngine::spendEnergyAardvark(FitnessLanes& lanes, std::size_t begin,
+                                      std::size_t end, float dt,
+                                      bool /*homeTeam*/) const
 {
-  auto& [fromX, fromY, toX, toY, topSpeed, endurance, pressingEffort,
-         sideDrain, stamina, reserve, stepMetres, nextStamina, nextReserve] =
-      lanes;
-  // The endurance stats, lane by lane (filled with these lanes).
-  const EnduranceLanes& physiology = enduranceLanes;
+  using L = MatchTuning::Load;
+  using F = MatchTuning::Fatigue;
+  auto& [fromX, fromY, toX, toY, topSpeed, endurance, pressingEffort, sideDrain,
+         stamina, reserve, stepMetres, nextStamina, nextReserve] = lanes;
   for (std::size_t lane = begin; lane < end; ++lane)
   {
     const float metresX = (fromX[lane] - toX[lane]) * PITCH_LENGTH;
     const float metresY = (fromY[lane] - toY[lane]) * PITCH_WIDTH;
     const float metres = std::sqrt(metresX * metresX + metresY * metresY);
     const float speed = metres / dt;
-    // Fuel: the whole match's work, with the fuel capacity stat in place of
-    // the Stamina attribute; never refilled in play.
-    const float drain =
-        MatchRules::staminaDrainPerSecond(
-            speed / std::max(topSpeed[lane], EPSILON),
-            physiology.fuelCapacity[lane], pressingEffort[lane]) +
-        sideDrain[lane];
+    const float drain = MatchRules::staminaDrainPerSecond(
+                            speed / std::max(topSpeed[lane], EPSILON),
+                            endurance[lane], pressingEffort[lane]) +
+                        sideDrain[lane];
     stepMetres[lane] = metres;
     nextStamina[lane] = std::clamp(stamina[lane] - drain * dt,
                                    MatchTuning::Player::MINIMUM_STAMINA, 1.0f);
-    // Burst reserve (a share of the fresh burst capacity): metres above the
-    // critical speed drain it; below it, it refills toward what the fuel
-    // left allows, slower the closer he still runs to his critical speed.
-    const float fatigue =
-        std::clamp((1.0f - stamina[lane]) * INVERSE_FATIGUE_RANGE, 0.0f, 1.0f);
-    const float critical = physiology.criticalSpeed[lane] *
-                           (1.0f - CRITICAL_SPEED_FUEL_LOSS * fatigue);
-    const float capacity = 1.0f - BURST_FUEL_LOSS * fatigue;
+    // Repeat-sprint reserve: emptied by high-intensity running, refilled
+    // while jogging or walking.
+    const float intensity = std::clamp(
+        (speed - L::HIGH_INTENSITY_SPEED) /
+            std::max(topSpeed[lane] - L::HIGH_INTENSITY_SPEED, EPSILON),
+        0.0f, 1.0f);
     const float drained =
-        std::max(0.0f, reserve[lane] - (speed - critical) * dt /
-                                           std::max(physiology.burstMetres[lane],
-                                                    EPSILON));
-    const float effortShare = speed / std::max(critical, EPSILON);
-    const float refillSeconds =
-        physiology.recoverySeconds[lane] *
-        (1.0f + RECOVERY_EFFORT_SLOWING * effortShare * effortShare);
-    const float refilled =
-        reserve[lane] +
-        (capacity - reserve[lane]) * (1.0f - std::exp(-dt / refillSeconds));
-    // A restart's repositioning jump is not running.
-    const bool ran = speed <= MatchTuning::Player::MAX_COUNTED_STEP_SPEED;
-    nextReserve[lane] =
-        ran ? std::min(speed > critical ? drained : refilled, capacity)
-            : reserve[lane];
+        std::max(0.0f, reserve[lane] - F::RESERVE_DRAIN_PER_SECOND * intensity *
+                                           intensity * dt);
+    const float refilled = reserve[lane] + (1.0f - reserve[lane]) * dt /
+                                               F::RESERVE_RECOVERY_SECONDS;
+    nextReserve[lane] = speed > L::HIGH_INTENSITY_SPEED ? drained : refilled;
   }
 }
 
-bool MatchEngine::updateDribbleNewV1(MatchPlayer& carrier, float dt)
+bool MatchEngine::updateDribbleAardvark(MatchPlayer& carrier, float dt)
 {
   using R = MatchTuning::Dribble;
   const bool inHands = carrier.isGoalkeeper &&
                        inPenaltyArea(carrier.position, carrier.isHomeTeam);
   const float speed = length(carrier.velocity);
-  if (!carrier.isGoalkeeper)
-  {
-    // An outfielder's ball is never tethered: however he came by it (a
-    // restart, a tackle, a drill), it is loose at his feet from here, moving
-    // with him, and he plays it on touch by touch (the ball's sweep).
-    const Vector2F ahead =
-        speed > EPSILON
-            ? Vector2F{carrier.velocity.x / speed, carrier.velocity.y / speed}
-            : ball.dribbleDirection;
-    const Vector2F offset = toPitch(
-        {ahead.x * R::FEET_METRES, ahead.y * R::FEET_METRES});
-    ball.position = {std::clamp(carrier.position.x + offset.x, 0.001f, 0.999f),
-                     std::clamp(carrier.position.y + offset.y, 0.001f, 0.999f)};
-    ball.z = 0.0f;
-    ball.velocity = carrier.velocity;
-    ball.inTouch = true;
-    ball.touchCollected = true;
-    ball.touchPasser = nullptr;
-    ball.ownTouchCooldown = 0.0f;
-    ball.dribbleGoal = carrier.tacticalTarget;
-    ball.touchGap = R::FEET_METRES;
-    ball.touchPeakGap = R::FEET_METRES;
-    ball.dribbleExposure = R::FEET_METRES;
-    ball.dribbleTouchLength = R::MAX_TOUCH_METRES;
-    return true;
-  }
   if (inHands)
   {
     ball.dribbleExposure = 0.0f;
@@ -657,7 +480,7 @@ bool MatchEngine::updateDribbleNewV1(MatchPlayer& carrier, float dt)
                                 (1.0f - carrier.dribbling) *
                                 std::min(1.0f, speed / carrier.maxSpeed) *
                                 (1.0f + pressure * R::HEAVY_TOUCH_PRESSURE) *
-                                executionErrorScaleNewV1(carrier);
+                                executionErrorScaleAardvark(carrier);
       if (randomFloat(0.0f, 1.0f) < heavyChance)
       {
         const float push = speed + randomFloat(R::MIN_HEAVY_PUSH_SPEED,
@@ -700,273 +523,11 @@ bool MatchEngine::updateDribbleNewV1(MatchPlayer& carrier, float dt)
   return true;
 }
 
-TouchResult MatchEngine::dribbleTouchNewV1(const MatchPlayer& player,
-                                           const TouchIntent& intent,
-                                           const TouchMoment& moment)
-{
-  // A dribble touch is a first touch on a ball he already has: the same two
-  // jobs, the same skill (First Touch).
-  return firstTouchNewV1(player, intent, moment, true);
-}
-TouchResult MatchEngine::firstTouchNewV1(const MatchPlayer& player,
-                                         const TouchIntent& intent,
-                                         const TouchMoment& moment, bool ownBall)
-{
-  using K = TouchKnob;
-  const FirstTouchKnobs& knob = touchKnobs;
-  constexpr float RIGHT_ANGLE = std::numbers::pi_v<float> * 0.5f;
-  // What he means to do: straight at the target spot, weighted with the
-  // rolling physics to arrive at the intended speed. A first touch is no
-  // pass; a dribble touch is no faster than a push ahead of his run.
-  const Vector2F gap = toMetres({intent.targetSpot.x - moment.contactPoint.x,
-                                 intent.targetSpot.y - moment.contactPoint.y});
-  const float metres = length(gap);
-  const Vector2F facing = normalized(
-      {std::cos(player.facingAngle) * MatchTuning::Pitch::LENGTH_METRES,
-       std::sin(player.facingAngle) * MatchTuning::Pitch::WIDTH_METRES});
-  const Vector2F aim =
-      metres > EPSILON ? Vector2F{gap.x / metres, gap.y / metres} : facing;
-  const float maxSpeed =
-      ownBall ? std::max(length(player.velocity), intent.arrivalSpeed) +
-                    MatchTuning::Dribble::LOOSE_MAX_SPEED_OVER_RUN
-              : knob[K::MAX_TOUCH_SPEED];
-  const float intendedSpeed =
-      metres > EPSILON
-          ? std::min(groundLaunchSpeed(metres, intent.arrivalSpeed), maxSpeed)
-          : 0.0f;
-
-  // The line it came on: sending it back along it (a cushion) or on along
-  // it (taking it on) is no turn; whichever is nearer what he means is the
-  // reference, so a turn is 0-90 degrees. A still ball has no line.
-  const float incomingSpeed = length(ball.velocity);
-  const bool moving = incomingSpeed > MatchTuning::Ball::STOP_SPEED;
-  const Vector2F incoming =
-      moving ? Vector2F{ball.velocity.x / incomingSpeed,
-                        ball.velocity.y / incomingSpeed}
-             : Vector2F{0.0f, 0.0f};
-  const bool rebound = moving && incoming.x * aim.x + incoming.y * aim.y < 0.0f;
-  const Vector2F line = !moving  ? aim
-                        : rebound ? Vector2F{-incoming.x, -incoming.y}
-                                  : incoming;
-  // The two jobs: the turn off that line (+ anticlockwise), inward when it
-  // brings the ball nearer the line straight out the way he faces; and the
-  // pace change (- taking pace off, + adding it).
-  const float turn = std::atan2(line.x * aim.y - line.y * aim.x,
-                                line.x * aim.x + line.y * aim.y);
-  const bool outward = aim.x * facing.x + aim.y * facing.y <
-                       line.x * facing.x + line.y * facing.y;
-  const float paceChange = intendedSpeed - (moving ? incomingSpeed : 0.0f);
-
-  // How hard each job is: its size, then the conditions (each 0-1). How
-  // fast it meets him and where from are read relative to him: a ball
-  // rolling ahead at his own pace is a slow ball met from the front.
-  const Vector2F toBall =
-      metricDirection(player.position, moment.contactPoint);
-  const Vector2F relative{ball.velocity.x - player.velocity.x,
-                          ball.velocity.y - player.velocity.y};
-  const float meetingSpeed = length(relative);
-  // Where it comes from: back along its path (relative to him), or where it
-  // lies if it keeps pace with him.
-  const Vector2F from =
-      meetingSpeed > MatchTuning::Ball::STOP_SPEED
-          ? Vector2F{-relative.x / meetingSpeed, -relative.y / meetingSpeed}
-          : toBall;
-  // Which side of him it is on (+ his right), for the weaker foot.
-  const float side = facing.y * toBall.x - facing.x * toBall.y;
-  const bool rightFooted =
-      !player.player || player.player->getFoot() == Foot::Right;
-  const float weakSide = rightFooted ? std::max(-side, 0.0f)
-                                     : std::max(side, 0.0f);
-  const auto clamp01 = [](float value) { return std::clamp(value, 0.0f, 1.0f); };
-  // His own dribbled ball never surprises him.
-  const float surprise =
-      ownBall       ? 0.0f
-      : !ball.isPass ? knob[K::LOOSE_BALL_SURPRISE]
-                     : (ball.intendedReceiver == player.player ? 0.0f : 1.0f);
-  struct Factor
-  {
-    const char* name;
-    TermSource source;
-    float value;
-    float angleWeight;
-    float weightWeight;
-  };
-  const std::array<Factor, 10> factors{{
-      {"pace to take off or add", TermSource::SITUATION,
-       clamp01(std::abs(paceChange) / knob[K::REFERENCE_SPEED]), 0.0f,
-       knob[K::PACE_CHANGE_WEIGHT]},
-      {outward ? "turning it outward" : "turning it inward",
-       TermSource::SITUATION, clamp01(std::abs(turn) / RIGHT_ANGLE),
-       knob[K::TURN_ANGLE] *
-           (outward ? knob[K::TURN_OUTWARD] : knob[K::TURN_INWARD]),
-       0.0f},
-      {"incoming pace", TermSource::SITUATION,
-       clamp01(meetingSpeed / knob[K::REFERENCE_SPEED]),
-       knob[K::INCOMING_SPEED_ANGLE], knob[K::INCOMING_SPEED_WEIGHT]},
-      {"coming from behind him", TermSource::SITUATION,
-       clamp01((1.0f - (from.x * facing.x + from.y * facing.y)) * 0.5f),
-       knob[K::APPROACH_ANGLE], knob[K::APPROACH_WEIGHT]},
-      {"his own speed", TermSource::SITUATION,
-       clamp01(length(player.velocity) / std::max(player.maxSpeed, EPSILON)),
-       knob[K::OWN_MOVEMENT_ANGLE], knob[K::OWN_MOVEMENT_WEIGHT]},
-      {"stretching for it", TermSource::SITUATION,
-       clamp01((moment.gap - knob[K::COMFORT_GAP]) /
-               std::max(moment.reach - knob[K::COMFORT_GAP], EPSILON)),
-       knob[K::STRETCH_ANGLE], knob[K::STRETCH_WEIGHT]},
-      {"on his weaker foot", TermSource::ATTRIBUTE, clamp01(weakSide),
-       knob[K::WEAK_FOOT_ANGLE], knob[K::WEAK_FOOT_WEIGHT]},
-      {"off the ground", TermSource::SITUATION,
-       clamp01(moment.height / MatchTuning::Ball::LOW_BALL_METRES),
-       knob[K::OFF_GROUND_ANGLE], knob[K::OFF_GROUND_WEIGHT]},
-      {"not expecting it", TermSource::SITUATION, surprise,
-       knob[K::SURPRISE_ANGLE], knob[K::SURPRISE_WEIGHT]},
-      {"pressure", TermSource::SITUATION,
-       clamp01(1.0f -
-               nearestOpponentDistance(player) / knob[K::PRESSURE_RADIUS]),
-       knob[K::PRESSURE_ANGLE], knob[K::PRESSURE_WEIGHT]},
-  }};
-  float angleSum = 0.0f;
-  float weightSum = 0.0f;
-  for (const Factor& factor : factors)
-  {
-    angleSum += factor.value * factor.angleWeight;
-    weightSum += factor.value * factor.weightWeight;
-  }
-  const float angleDifficulty = clamp01(angleSum);
-  const float weightDifficulty = clamp01(weightSum);
-
-  // His touch cuts the chance of a job going wrong (and a clean touch's
-  // jitter); tiredness, nerves and being shown onto his weaker foot raise
-  // it, as for his passes and shots (executionErrorScaleNewV1, with the
-  // touch's own gains). How badly a job goes wrong is the ball's doing.
-  const float skill = player.derivedStat(DerivedStat::FIRST_TOUCH);
-  const float fatigue =
-      1.0f + (1.0f - player.stamina) * knob[K::FATIGUE_ERROR_GAIN];
-  const float execution =
-      fatigue * std::max(0.5f, 1.0f - teamEdge(player.isHomeTeam)) *
-      (1.0f + weakFootPressure(player) * knob[K::SHOWN_WEAK_FOOT_GAIN]);
-  const float scale = (1.0f - skill * knob[K::SKILL_REDUCTION]) * execution;
-  const float angleFailChance = clamp01(
-      (knob[K::ANGLE_FAIL_BASE] + angleDifficulty * knob[K::ANGLE_FAIL_RANGE]) *
-      scale);
-  const float weightFailChance = clamp01(
-      (knob[K::WEIGHT_FAIL_BASE] + weightDifficulty * knob[K::WEIGHT_FAIL_RANGE]) *
-      scale);
-
-  // Each job: whether it went wrong, by what share of the job, which way
-  // (the usual way: heavy, under-turned), and a clean touch's jitter. The
-  // same draws every touch, so changing a knob keeps the random stream.
-  struct Job
-  {
-    bool failed = false;
-    /** Share of the job missed: + the usual way, - the other. */
-    float miss = 0.0f;
-    float jitter = 0.0f;
-  };
-  const auto carryOut = [this](float chance, float worstMiss, float usualShare,
-                               float jitterSigma)
-  {
-    const float failRoll = randomFloat(0.0f, 1.0f);
-    const float missRoll = randomFloat(0.0f, 1.0f);
-    const float wayRoll = randomFloat(0.0f, 1.0f);
-    // Near-normal (a sum of three uniforms), bounded at three sigma.
-    const float jitter = (randomFloat(0.0f, 1.0f) + randomFloat(0.0f, 1.0f) +
-                          randomFloat(0.0f, 1.0f) - 1.5f) *
-                         2.0f * jitterSigma;
-    Job job;
-    job.failed = failRoll < chance;
-    if (job.failed)
-      job.miss = std::min(missRoll * worstMiss, 1.0f) *
-                 (wayRoll < usualShare ? 1.0f : -1.0f);
-    job.jitter = jitter;
-    return job;
-  };
-  const Job angleJob = carryOut(
-      angleFailChance,
-      knob[K::ANGLE_MISS_BASE] + angleDifficulty * knob[K::ANGLE_MISS_RANGE],
-      knob[K::UNDER_TURN_SHARE], knob[K::ANGLE_JITTER] * scale);
-  const Job weightJob = carryOut(
-      weightFailChance,
-      knob[K::WEIGHT_MISS_BASE] + weightDifficulty * knob[K::WEIGHT_MISS_RANGE],
-      knob[K::HEAVY_SHARE], knob[K::WEIGHT_JITTER] * scale);
-
-  // What he actually did. The angle: the turn, short by the miss (or past
-  // it), plus the jitter in radians. The weight: heavier than meant by the
-  // miss's share of the pace change (or lighter), plus the jitter's share.
-  const float achievedTurn = turn * (1.0f - angleJob.miss) + angleJob.jitter;
-  float actualSpeed =
-      std::max(intendedSpeed + (weightJob.miss + weightJob.jitter) *
-                                   std::abs(paceChange),
-               0.0f);
-  // Within what a touch can do: back the way it came no faster than a
-  // rebound, on the way it came no faster than it arrived unless he meant
-  // to add pace.
-  if (rebound)
-    actualSpeed = std::min(
-        actualSpeed,
-        std::max(intendedSpeed, incomingSpeed * knob[K::REBOUND_SHARE]));
-  else if (moving && paceChange < 0.0f)
-    actualSpeed = std::min(actualSpeed, incomingSpeed);
-  const float cosine = std::cos(achievedTurn);
-  const float sine = std::sin(achievedTurn);
-  const Vector2F direction{line.x * cosine - line.y * sine,
-                           line.x * sine + line.y * cosine};
-
-  TouchResult result;
-  result.velocity = {direction.x * actualSpeed, direction.y * actualSpeed};
-  // Signed along the turn: - short of it, + past it.
-  result.angleError = (achievedTurn - turn) * (turn < 0.0f ? -1.0f : 1.0f);
-  result.weightError = actualSpeed - intendedSpeed;
-  result.angleDifficulty = angleDifficulty;
-  result.weightDifficulty = weightDifficulty;
-  result.angleFailed = angleJob.failed;
-  result.weightFailed = weightJob.failed;
-  result.turn = std::abs(turn);
-  result.outward = outward && std::abs(turn) > EPSILON;
-  result.paceChange = paceChange;
-
-  if (wantsDetail())
-  {
-    MatchDuelDetail duel;
-    duel.kind = MatchDuelDetail::Kind::FIRST_TOUCH;
-    duel.player = player.player ? player.player->getId() : 0;
-    duel.homeTeam = player.isHomeTeam;
-    duel.chance.total = angleDifficulty;
-    duel.foul.total = weightDifficulty;
-    for (const Factor& factor : factors)
-    {
-      if (factor.angleWeight != 0.0f)
-        duel.chance.add(factor.name, factor.source,
-                        factor.value * factor.angleWeight);
-      if (factor.weightWeight != 0.0f)
-        duel.foul.add(factor.name, factor.source,
-                      factor.value * factor.weightWeight);
-    }
-    for (ScoreBreakdown* breakdown : {&duel.chance, &duel.foul})
-      if (const float clamp = breakdown->residual(); std::abs(clamp) > 1e-6f)
-        breakdown->add("clamped to its range", TermSource::SITUATION, clamp);
-    duel.touchSkill = skill;
-    duel.intendedSpeed = intendedSpeed;
-    duel.actualSpeed = actualSpeed;
-    duel.turn = result.turn;
-    duel.outward = result.outward;
-    duel.paceChange = paceChange;
-    duel.angleError = result.angleError;
-    duel.angleFailChance = angleFailChance;
-    duel.angleFailed = angleJob.failed;
-    duel.weightError = result.weightError;
-    duel.weightFailChance = weightFailChance;
-    duel.weightFailed = weightJob.failed;
-    if (MatchRecorder* recorder = getRecorder())
-      recorder->onDuelDetail(*this, duel);
-  }
-  return result;
-}
-
-MatchEngine::Kick MatchEngine::kickPassNewV1(const MatchPlayer& passer,
-                                        const MatchPlayer& receiver,
-                                        Vector2F target, float passDistance,
-                                        bool lofted, bool delivery)
+MatchEngine::Kick MatchEngine::kickPassAardvark(const MatchPlayer& passer,
+                                                const MatchPlayer& receiver,
+                                                Vector2F target,
+                                                float passDistance, bool lofted,
+                                                bool delivery)
 {
   const float pressure =
       std::clamp((MatchTuning::Passing::PASS_PRESSURE_RADIUS_METRES -
@@ -984,7 +545,7 @@ MatchEngine::Kick MatchEngine::kickPassNewV1(const MatchPlayer& passer,
       ((1.0f - passer.passing) * MatchTuning::Passing::TECHNICAL_ERROR_METRES +
        pressure * MatchTuning::Passing::PRESSURE_ERROR_METRES +
        passDistance * MatchTuning::Passing::DISTANCE_ERROR) *
-      executionErrorScaleNewV1(passer) * care * randomFloat(-1.0f, 1.0f);
+      executionErrorScaleAardvark(passer) * care * randomFloat(-1.0f, 1.0f);
   const Vector2F miss = toPitch({-direct.y * error, direct.x * error});
   Kick kick;
   kick.target = {std::clamp(target.x + miss.x, 0.0f, 1.0f),
@@ -1023,8 +584,8 @@ MatchEngine::Kick MatchEngine::kickPassNewV1(const MatchPlayer& passer,
   return kick;
 }
 
-float MatchEngine::recoverySecondsNewV1(const MatchPlayer& /*player*/,
-                                   Recovery after)
+float MatchEngine::recoverySecondsAardvark(const MatchPlayer& /*player*/,
+                                           Recovery after)
 {
   // How long before he can act again.
   switch (after)
@@ -1039,8 +600,9 @@ float MatchEngine::recoverySecondsNewV1(const MatchPlayer& /*player*/,
                      MatchTuning::Passing::MAX_ACTION_COOLDOWN);
 }
 
-float MatchEngine::shotSpreadNewV1(const MatchPlayer& shooter, bool header,
-                              bool penalty, bool freeKick, float metres) const
+float MatchEngine::shotSpreadAardvark(const MatchPlayer& shooter, bool header,
+                                      bool penalty, bool freeKick,
+                                      float metres) const
 {
   const float pressure =
       std::clamp((MatchTuning::Shooting::PRESSURE_RADIUS_METRES -
@@ -1060,7 +622,7 @@ float MatchEngine::shotSpreadNewV1(const MatchPlayer& shooter, bool header,
        pressure * MatchTuning::Shooting::ERROR_PRESSURE_METRES) *
       std::max(metres / MatchTuning::Shooting::ERROR_REFERENCE_METRES,
                MatchTuning::Shooting::ERROR_MIN_DISTANCE_SCALE) *
-      executionErrorScaleNewV1(shooter);
+      executionErrorScaleAardvark(shooter);
   if (header) spread *= MatchTuning::Aerial::HEADER_ACCURACY_PENALTY;
   if (penalty)
     spread *= MatchTuning::Shooting::PENALTY_ERROR_SCALE;
@@ -1070,10 +632,9 @@ float MatchEngine::shotSpreadNewV1(const MatchPlayer& shooter, bool header,
   return spread;
 }
 
-MatchEngine::ShotStrike MatchEngine::strikeShotBodyNewV1(const MatchPlayer& shooter,
-                                                    float aimY, float aimZ,
-                                                    float spread, bool header,
-                                                    float powerScale)
+MatchEngine::ShotStrike MatchEngine::strikeShotBodyAardvark(
+    const MatchPlayer& shooter, float aimY, float aimZ, float spread,
+    bool header, float powerScale)
 {
   ShotStrike strike;
   strike.crossingY = aimY + gaussian(rng) * spread;
@@ -1091,8 +652,8 @@ MatchEngine::ShotStrike MatchEngine::strikeShotBodyNewV1(const MatchPlayer& shoo
   return strike;
 }
 
-void MatchEngine::readShotNewV1(const MatchPlayer& keeper,
-                           GoalkeeperControl& control)
+void MatchEngine::readShotAardvark(const MatchPlayer& keeper,
+                                   GoalkeeperControl& control)
 {
   // Predict where the shot crosses the keeper's plane and react after a
   // skill-dependent delay; defenders between ball and goal screen the shot.
@@ -1100,8 +661,7 @@ void MatchEngine::readShotNewV1(const MatchPlayer& keeper,
   const float span = goalX - ball.position.x;
   const float t =
       std::abs(span) > EPSILON
-          ? std::clamp((keeper.position.x - ball.position.x) / span, 0.0f,
-                       1.0f)
+          ? std::clamp((keeper.position.x - ball.position.x) / span, 0.0f, 1.0f)
           : 1.0f;
   const float predictedY =
       ball.position.y + (ball.shotTargetY - ball.position.y) * t;
@@ -1137,7 +697,7 @@ void MatchEngine::readShotNewV1(const MatchPlayer& keeper,
   control.reactionRemaining = reactionSeconds;
 }
 
-void MatchEngine::diveGoalkeeperNewV1(MatchPlayer& keeper, float dt)
+void MatchEngine::diveGoalkeeperAardvark(MatchPlayer& keeper, float dt)
 {
   GoalkeeperControl& control = keepers[keeper.isHomeTeam ? 0 : 1];
   control.timer += dt;
@@ -1163,7 +723,7 @@ void MatchEngine::diveGoalkeeperNewV1(MatchPlayer& keeper, float dt)
                              DIVE_CLOSING_GAIN /
                              MatchTuning::Pitch::WIDTH_METRES;
   const float maximumSpeed =
-      std::min(currentTopSpeedNewV1(keeper),
+      std::min(currentTopSpeedAardvark(keeper),
                (MatchTuning::Goalkeeper::DIVE_BASE_SPEED_METRES +
                 keeper.goalkeeping *
                     MatchTuning::Goalkeeper::DIVE_SKILL_SPEED_METRES) *
@@ -1189,7 +749,8 @@ void MatchEngine::diveGoalkeeperNewV1(MatchPlayer& keeper, float dt)
   keeper.isDiving = true;
 }
 
-MatchEngine::SaveAttempt MatchEngine::attemptSaveNewV1(const MatchPlayer& keeper)
+MatchEngine::SaveAttempt MatchEngine::attemptSaveAardvark(
+    const MatchPlayer& keeper)
 {
   const float span = ball.position.x - substepBallPosition.x;
   const float t =
@@ -1228,8 +789,8 @@ MatchEngine::SaveAttempt MatchEngine::attemptSaveNewV1(const MatchPlayer& keeper
   return {true, stretch, speedExcess, crossingHeight};
 }
 
-bool MatchEngine::holdsShotNewV1(const MatchPlayer& keeper, float stretch,
-                            float speedExcess)
+bool MatchEngine::holdsShotAardvark(const MatchPlayer& keeper, float stretch,
+                                    float speedExcess)
 {
   // A save he can hold rather than parry: good hands, close to him, not
   // hit too hard.
@@ -1243,8 +804,8 @@ bool MatchEngine::holdsShotNewV1(const MatchPlayer& keeper, float stretch,
   return randomFloat(0.0f, 1.0f) < holdChance;
 }
 
-MatchEngine::Spill MatchEngine::parrySpillNewV1(const MatchPlayer& keeper,
-                                           float speed)
+MatchEngine::Spill MatchEngine::parrySpillAardvark(const MatchPlayer& keeper,
+                                                   float speed)
 {
   // The ball spills back out off his hands, away from goal.
   const float outward = keeper.isHomeTeam ? 1.0f : -1.0f;
@@ -1257,7 +818,7 @@ MatchEngine::Spill MatchEngine::parrySpillNewV1(const MatchPlayer& keeper,
   return spill;
 }
 
-bool MatchEngine::blocksShotNewV1(const MatchPlayer& player, float stretch)
+bool MatchEngine::blocksShotAardvark(const MatchPlayer& player, float stretch)
 {
   // Getting a body in the way of a shot: easier for good defenders and
   // when it comes straight at him.
@@ -1267,8 +828,8 @@ bool MatchEngine::blocksShotNewV1(const MatchPlayer& player, float stretch)
              (1.0f - 0.5f * stretch);
 }
 
-bool MatchEngine::reachesBallNewV1(const MatchPlayer& player, float ballSpeed,
-                              float stretch)
+bool MatchEngine::reachesBallAardvark(const MatchPlayer& player,
+                                      float ballSpeed, float stretch)
 {
   // A ball not meant for him has to be read and reached: close balls are
   // met, fast wide ones fly past.
@@ -1282,7 +843,8 @@ bool MatchEngine::reachesBallNewV1(const MatchPlayer& player, float ballSpeed,
   return randomFloat(0.0f, 1.0f) < reaction + (1.0f - reaction) * closeness;
 }
 
-float MatchEngine::touchSkillNewV1(const MatchPlayer& player, bool hands) const
+float MatchEngine::touchSkillAardvark(const MatchPlayer& player,
+                                      bool hands) const
 {
   using B = MatchTuning::Ball;
   return hands ? player.goalkeeping
@@ -1293,8 +855,9 @@ float MatchEngine::touchSkillNewV1(const MatchPlayer& player, bool hands) const
                                : 0.0f});
 }
 
-bool MatchEngine::controlsBallNewV1(const MatchPlayer& /*player*/, float skill,
-                               float ballSpeed, float heightMetres)
+bool MatchEngine::controlsBallAardvark(const MatchPlayer& /*player*/,
+                                       float skill, float ballSpeed,
+                                       float heightMetres)
 {
   using B = MatchTuning::Ball;
   const float controlChance =
@@ -1305,18 +868,17 @@ bool MatchEngine::controlsBallNewV1(const MatchPlayer& /*player*/, float skill,
   return randomFloat(0.0f, 1.0f) <= controlChance;
 }
 
-Vector2F MatchEngine::heavyTouchVelocityNewV1(const MatchPlayer& player,
-                                         Vector2F velocity)
+Vector2F MatchEngine::heavyTouchVelocityAardvark(const MatchPlayer& player,
+                                                 Vector2F velocity)
 {
   using B = MatchTuning::Ball;
   const float angle =
       randomFloat(-std::numbers::pi_v<float>, std::numbers::pi_v<float>);
   const float popSpeed =
       randomFloat(B::MIN_HEAVY_TOUCH_SPEED, B::MAX_HEAVY_TOUCH_SPEED);
-  Vector2F popped{velocity.x * B::HEAVY_TOUCH_RETAINED +
-                      std::cos(angle) * popSpeed,
-                  velocity.y * B::HEAVY_TOUCH_RETAINED +
-                      std::sin(angle) * popSpeed};
+  Vector2F popped{
+      velocity.x * B::HEAVY_TOUCH_RETAINED + std::cos(angle) * popSpeed,
+      velocity.y * B::HEAVY_TOUCH_RETAINED + std::sin(angle) * popSpeed};
   // Near his own goal a player's heavy touch still goes away from it.
   const float ownDepth =
       player.isHomeTeam ? player.position.x : 1.0f - player.position.x;
@@ -1327,7 +889,7 @@ Vector2F MatchEngine::heavyTouchVelocityNewV1(const MatchPlayer& player,
   return popped;
 }
 
-bool MatchEngine::tryOwnGoalTouchNewV1(MatchPlayer& defender)
+bool MatchEngine::tryOwnGoalTouchAardvark(MatchPlayer& defender)
 {
   using S = MatchTuning::SetPiece;
   // Only a touch in front of his own goal can go in off a defender.
@@ -1359,19 +921,19 @@ bool MatchEngine::tryOwnGoalTouchNewV1(MatchPlayer& defender)
   return true;
 }
 
-float MatchEngine::clearanceSpeedNewV1(const MatchPlayer& /*defender*/)
+float MatchEngine::clearanceSpeedAardvark(const MatchPlayer& /*defender*/)
 {
   return MatchTuning::Defending::CLEARANCE_SPEED * randomFloat(0.85f, 1.0f);
 }
 
-float MatchEngine::headerClearanceSpeedNewV1(const MatchPlayer& /*header*/)
+float MatchEngine::headerClearanceSpeedAardvark(const MatchPlayer& /*header*/)
 {
   return MatchTuning::Aerial::HEADER_CLEARANCE_SPEED *
          randomFloat(MatchTuning::Aerial::MIN_CLEARANCE_SHARE, 1.0f);
 }
 
-Vector2F MatchEngine::knockDownPointNewV1(const MatchPlayer& /*header*/,
-                                     Vector2F aim)
+Vector2F MatchEngine::knockDownPointAardvark(const MatchPlayer& /*header*/,
+                                             Vector2F aim)
 {
   // A knock-down is never quite where it was meant to go.
   const float x = aim.x + randomFloat(-0.03f, 0.03f);
@@ -1379,8 +941,8 @@ Vector2F MatchEngine::knockDownPointNewV1(const MatchPlayer& /*header*/,
   return {x, y};
 }
 
-void MatchEngine::settleOnBallNewV1(MatchPlayer& player, float touchSkill,
-                               bool hands)
+void MatchEngine::settleOnBallAardvark(MatchPlayer& player, float touchSkill,
+                                       bool hands)
 {
   // The touch that brings the ball under control takes a moment, longer
   // for a poor touch; a keeper with it in his hands holds it a while.
@@ -1389,18 +951,18 @@ void MatchEngine::settleOnBallNewV1(MatchPlayer& player, float touchSkill,
   player.trapTimer =
       B::BASE_TRAP_TIME + (1.0f - touchSkill) * B::TRAP_SKILL_PENALTY;
   player.actionCooldown =
-      hands ? keeperHoldSecondsNewV1(player)
+      hands ? keeperHoldSecondsAardvark(player)
             : player.trapTimer +
                   randomFloat(B::MIN_POST_TOUCH_DELAY, B::MAX_POST_TOUCH_DELAY);
 }
 
-float MatchEngine::keeperHoldSecondsNewV1(const MatchPlayer& /*keeper*/)
+float MatchEngine::keeperHoldSecondsAardvark(const MatchPlayer& /*keeper*/)
 {
   return randomFloat(MatchTuning::Ball::MIN_KEEPER_HOLD_SECONDS,
                      MatchTuning::Ball::MAX_KEEPER_HOLD_SECONDS);
 }
 
-float MatchEngine::injuryChanceNewV1(const MatchPlayer& player) const
+float MatchEngine::injuryChanceAardvark(const MatchPlayer& player) const
 {
   // Non-contact risk grows with tiredness and with running hard.
   const float speedRatio =
@@ -1408,9 +970,8 @@ float MatchEngine::injuryChanceNewV1(const MatchPlayer& player) const
   const float tiredness = 1.0f - player.stamina;
   const float hazard =
       MatchTuning::Injury::BASE_HAZARD_PER_MINUTE *
-      (1.0f + tiredness * tiredness *
-                  MatchTuning::Injury::FATIGUE_HAZARD_MULTIPLIER) *
+      (1.0f +
+       tiredness * tiredness * MatchTuning::Injury::FATIGUE_HAZARD_MULTIPLIER) *
       (1.0f + speedRatio * MatchTuning::Injury::INTENSITY_HAZARD_MULTIPLIER);
-  return 1.0f -
-         std::exp(-hazard * MatchTuning::Injury::CHECK_INTERVAL_MINUTES);
+  return 1.0f - std::exp(-hazard * MatchTuning::Injury::CHECK_INTERVAL_MINUTES);
 }

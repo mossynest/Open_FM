@@ -20,13 +20,13 @@ void MatchEngine::integrateMovements(const std::uint8_t* slots,
   // The movers are all of one side (movePlayers).
   switch (bodyOf(count == 0 || players[slots[0]].isHomeTeam))
   {
-    case BodyId::ORIGINAL:
+    case BodyId::AARDVARK:
       break;
-    case BodyId::NEW_V1:
-      integrateMovementsNewV1(slots, count, dt, walking);
+    case BodyId::BINTURONG:
+      integrateMovementsBinturong(slots, count, dt, walking);
       return;
   }
-  integrateMovementsOriginal(slots, count, dt, walking);
+  integrateMovementsAardvark(slots, count, dt, walking);
 }
 
 void MatchEngine::moveControlled(MatchPlayer& player, Vector2F desired,
@@ -36,14 +36,14 @@ void MatchEngine::moveControlled(MatchPlayer& player, Vector2F desired,
 {
   switch (bodyOf(player.isHomeTeam))
   {
-    case BodyId::ORIGINAL:
+    case BodyId::AARDVARK:
       break;
-    case BodyId::NEW_V1:
-      moveControlledNewV1(player, desired, desiredSpeed, topSpeed, fatigue, dt,
-                          faceToward);
+    case BodyId::BINTURONG:
+      moveControlledBinturong(player, desired, desiredSpeed, topSpeed, fatigue,
+                              dt, faceToward);
       return;
   }
-  moveControlledOriginal(player, desired, desiredSpeed, topSpeed, fatigue, dt,
+  moveControlledAardvark(player, desired, desiredSpeed, topSpeed, fatigue, dt,
                          faceToward);
 }
 
@@ -52,61 +52,61 @@ void MatchEngine::spendEnergy(FitnessLanes& lanes, std::size_t begin,
 {
   switch (bodyOf(homeTeam))
   {
-    case BodyId::ORIGINAL:
+    case BodyId::AARDVARK:
       break;
-    case BodyId::NEW_V1:
-      spendEnergyNewV1(lanes, begin, end, dt, homeTeam);
+    case BodyId::BINTURONG:
+      spendEnergyBinturong(lanes, begin, end, dt, homeTeam);
       return;
   }
-  spendEnergyOriginal(lanes, begin, end, dt, homeTeam);
+  spendEnergyAardvark(lanes, begin, end, dt, homeTeam);
 }
 
 float MatchEngine::injuryChance(const MatchPlayer& player) const
 {
   switch (bodyOf(player.isHomeTeam))
   {
-    case BodyId::ORIGINAL:
+    case BodyId::AARDVARK:
       break;
-    case BodyId::NEW_V1:
-      return injuryChanceNewV1(player);
+    case BodyId::BINTURONG:
+      return injuryChanceBinturong(player);
   }
-  return injuryChanceOriginal(player);
+  return injuryChanceAardvark(player);
 }
 
 float MatchEngine::currentTopSpeed(const MatchPlayer& player) const
 {
   switch (bodyOf(player.isHomeTeam))
   {
-    case BodyId::ORIGINAL:
+    case BodyId::AARDVARK:
       break;
-    case BodyId::NEW_V1:
-      return currentTopSpeedNewV1(player);
+    case BodyId::BINTURONG:
+      return currentTopSpeedBinturong(player);
   }
-  return currentTopSpeedOriginal(player);
+  return currentTopSpeedAardvark(player);
 }
 
 float MatchEngine::executionErrorScale(const MatchPlayer& player) const
 {
   switch (bodyOf(player.isHomeTeam))
   {
-    case BodyId::ORIGINAL:
+    case BodyId::AARDVARK:
       break;
-    case BodyId::NEW_V1:
-      return executionErrorScaleNewV1(player);
+    case BodyId::BINTURONG:
+      return executionErrorScaleBinturong(player);
   }
-  return executionErrorScaleOriginal(player);
+  return executionErrorScaleAardvark(player);
 }
 
 bool MatchEngine::updateDribble(MatchPlayer& carrier, float dt)
 {
   switch (bodyOf(carrier.isHomeTeam))
   {
-    case BodyId::ORIGINAL:
+    case BodyId::AARDVARK:
       break;
-    case BodyId::NEW_V1:
-      return updateDribbleNewV1(carrier, dt);
+    case BodyId::BINTURONG:
+      return updateDribbleBinturong(carrier, dt);
   }
-  return updateDribbleOriginal(carrier, dt);
+  return updateDribbleAardvark(carrier, dt);
 }
 
 MatchEngine::Kick MatchEngine::kickPass(const MatchPlayer& passer,
@@ -116,13 +116,13 @@ MatchEngine::Kick MatchEngine::kickPass(const MatchPlayer& passer,
 {
   switch (bodyOf(passer.isHomeTeam))
   {
-    case BodyId::ORIGINAL:
+    case BodyId::AARDVARK:
       break;
-    case BodyId::NEW_V1:
-      return kickPassNewV1(passer, receiver, target, passDistance, lofted,
-                           delivery);
+    case BodyId::BINTURONG:
+      return kickPassBinturong(passer, receiver, target, passDistance, lofted,
+                               delivery);
   }
-  return kickPassOriginal(passer, receiver, target, passDistance, lofted,
+  return kickPassAardvark(passer, receiver, target, passDistance, lofted,
                           delivery);
 }
 
@@ -130,12 +130,12 @@ float MatchEngine::recoverySeconds(const MatchPlayer& player, Recovery after)
 {
   switch (bodyOf(player.isHomeTeam))
   {
-    case BodyId::ORIGINAL:
+    case BodyId::AARDVARK:
       break;
-    case BodyId::NEW_V1:
-      return recoverySecondsNewV1(player, after);
+    case BodyId::BINTURONG:
+      return recoverySecondsBinturong(player, after);
   }
-  return recoverySecondsOriginal(player, after);
+  return recoverySecondsAardvark(player, after);
 }
 
 float MatchEngine::shotSpread(const MatchPlayer& shooter, bool header,
@@ -143,12 +143,12 @@ float MatchEngine::shotSpread(const MatchPlayer& shooter, bool header,
 {
   switch (bodyOf(shooter.isHomeTeam))
   {
-    case BodyId::ORIGINAL:
+    case BodyId::AARDVARK:
       break;
-    case BodyId::NEW_V1:
-      return shotSpreadNewV1(shooter, header, penalty, freeKick, metres);
+    case BodyId::BINTURONG:
+      return shotSpreadBinturong(shooter, header, penalty, freeKick, metres);
   }
-  return shotSpreadOriginal(shooter, header, penalty, freeKick, metres);
+  return shotSpreadAardvark(shooter, header, penalty, freeKick, metres);
 }
 
 MatchEngine::ShotStrike MatchEngine::strikeShotBody(const MatchPlayer& shooter,
@@ -158,13 +158,13 @@ MatchEngine::ShotStrike MatchEngine::strikeShotBody(const MatchPlayer& shooter,
 {
   switch (bodyOf(shooter.isHomeTeam))
   {
-    case BodyId::ORIGINAL:
+    case BodyId::AARDVARK:
       break;
-    case BodyId::NEW_V1:
-      return strikeShotBodyNewV1(shooter, aimY, aimZ, spread, header,
-                                 powerScale);
+    case BodyId::BINTURONG:
+      return strikeShotBodyBinturong(shooter, aimY, aimZ, spread, header,
+                                     powerScale);
   }
-  return strikeShotBodyOriginal(shooter, aimY, aimZ, spread, header,
+  return strikeShotBodyAardvark(shooter, aimY, aimZ, spread, header,
                                 powerScale);
 }
 
@@ -172,36 +172,36 @@ float MatchEngine::clearanceSpeed(const MatchPlayer& defender)
 {
   switch (bodyOf(defender.isHomeTeam))
   {
-    case BodyId::ORIGINAL:
+    case BodyId::AARDVARK:
       break;
-    case BodyId::NEW_V1:
-      return clearanceSpeedNewV1(defender);
+    case BodyId::BINTURONG:
+      return clearanceSpeedBinturong(defender);
   }
-  return clearanceSpeedOriginal(defender);
+  return clearanceSpeedAardvark(defender);
 }
 
 float MatchEngine::headerClearanceSpeed(const MatchPlayer& header)
 {
   switch (bodyOf(header.isHomeTeam))
   {
-    case BodyId::ORIGINAL:
+    case BodyId::AARDVARK:
       break;
-    case BodyId::NEW_V1:
-      return headerClearanceSpeedNewV1(header);
+    case BodyId::BINTURONG:
+      return headerClearanceSpeedBinturong(header);
   }
-  return headerClearanceSpeedOriginal(header);
+  return headerClearanceSpeedAardvark(header);
 }
 
 Vector2F MatchEngine::knockDownPoint(const MatchPlayer& header, Vector2F aim)
 {
   switch (bodyOf(header.isHomeTeam))
   {
-    case BodyId::ORIGINAL:
+    case BodyId::AARDVARK:
       break;
-    case BodyId::NEW_V1:
-      return knockDownPointNewV1(header, aim);
+    case BodyId::BINTURONG:
+      return knockDownPointBinturong(header, aim);
   }
-  return knockDownPointOriginal(header, aim);
+  return knockDownPointAardvark(header, aim);
 }
 
 void MatchEngine::settleOnBall(MatchPlayer& player, float touchSkill,
@@ -209,37 +209,37 @@ void MatchEngine::settleOnBall(MatchPlayer& player, float touchSkill,
 {
   switch (bodyOf(player.isHomeTeam))
   {
-    case BodyId::ORIGINAL:
+    case BodyId::AARDVARK:
       break;
-    case BodyId::NEW_V1:
-      settleOnBallNewV1(player, touchSkill, hands);
+    case BodyId::BINTURONG:
+      settleOnBallBinturong(player, touchSkill, hands);
       return;
   }
-  settleOnBallOriginal(player, touchSkill, hands);
+  settleOnBallAardvark(player, touchSkill, hands);
 }
 
 float MatchEngine::keeperHoldSeconds(const MatchPlayer& keeper)
 {
   switch (bodyOf(keeper.isHomeTeam))
   {
-    case BodyId::ORIGINAL:
+    case BodyId::AARDVARK:
       break;
-    case BodyId::NEW_V1:
-      return keeperHoldSecondsNewV1(keeper);
+    case BodyId::BINTURONG:
+      return keeperHoldSecondsBinturong(keeper);
   }
-  return keeperHoldSecondsOriginal(keeper);
+  return keeperHoldSecondsAardvark(keeper);
 }
 
 bool MatchEngine::blocksShot(const MatchPlayer& player, float stretch)
 {
   switch (bodyOf(player.isHomeTeam))
   {
-    case BodyId::ORIGINAL:
+    case BodyId::AARDVARK:
       break;
-    case BodyId::NEW_V1:
-      return blocksShotNewV1(player, stretch);
+    case BodyId::BINTURONG:
+      return blocksShotBinturong(player, stretch);
   }
-  return blocksShotOriginal(player, stretch);
+  return blocksShotAardvark(player, stretch);
 }
 
 bool MatchEngine::reachesBall(const MatchPlayer& player, float ballSpeed,
@@ -247,24 +247,24 @@ bool MatchEngine::reachesBall(const MatchPlayer& player, float ballSpeed,
 {
   switch (bodyOf(player.isHomeTeam))
   {
-    case BodyId::ORIGINAL:
+    case BodyId::AARDVARK:
       break;
-    case BodyId::NEW_V1:
-      return reachesBallNewV1(player, ballSpeed, stretch);
+    case BodyId::BINTURONG:
+      return reachesBallBinturong(player, ballSpeed, stretch);
   }
-  return reachesBallOriginal(player, ballSpeed, stretch);
+  return reachesBallAardvark(player, ballSpeed, stretch);
 }
 
 float MatchEngine::touchSkill(const MatchPlayer& player, bool hands) const
 {
   switch (bodyOf(player.isHomeTeam))
   {
-    case BodyId::ORIGINAL:
+    case BodyId::AARDVARK:
       break;
-    case BodyId::NEW_V1:
-      return touchSkillNewV1(player, hands);
+    case BodyId::BINTURONG:
+      return touchSkillBinturong(player, hands);
   }
-  return touchSkillOriginal(player, hands);
+  return touchSkillAardvark(player, hands);
 }
 
 bool MatchEngine::controlsBall(const MatchPlayer& player, float skill,
@@ -272,12 +272,12 @@ bool MatchEngine::controlsBall(const MatchPlayer& player, float skill,
 {
   switch (bodyOf(player.isHomeTeam))
   {
-    case BodyId::ORIGINAL:
+    case BodyId::AARDVARK:
       break;
-    case BodyId::NEW_V1:
-      return controlsBallNewV1(player, skill, ballSpeed, heightMetres);
+    case BodyId::BINTURONG:
+      return controlsBallBinturong(player, skill, ballSpeed, heightMetres);
   }
-  return controlsBallOriginal(player, skill, ballSpeed, heightMetres);
+  return controlsBallAardvark(player, skill, ballSpeed, heightMetres);
 }
 
 Vector2F MatchEngine::heavyTouchVelocity(const MatchPlayer& player,
@@ -285,37 +285,37 @@ Vector2F MatchEngine::heavyTouchVelocity(const MatchPlayer& player,
 {
   switch (bodyOf(player.isHomeTeam))
   {
-    case BodyId::ORIGINAL:
+    case BodyId::AARDVARK:
       break;
-    case BodyId::NEW_V1:
-      return heavyTouchVelocityNewV1(player, velocity);
+    case BodyId::BINTURONG:
+      return heavyTouchVelocityBinturong(player, velocity);
   }
-  return heavyTouchVelocityOriginal(player, velocity);
+  return heavyTouchVelocityAardvark(player, velocity);
 }
 
 bool MatchEngine::tryOwnGoalTouch(MatchPlayer& defender)
 {
   switch (bodyOf(defender.isHomeTeam))
   {
-    case BodyId::ORIGINAL:
+    case BodyId::AARDVARK:
       break;
-    case BodyId::NEW_V1:
-      return tryOwnGoalTouchNewV1(defender);
+    case BodyId::BINTURONG:
+      return tryOwnGoalTouchBinturong(defender);
   }
-  return tryOwnGoalTouchOriginal(defender);
+  return tryOwnGoalTouchAardvark(defender);
 }
 
 void MatchEngine::diveGoalkeeper(MatchPlayer& keeper, float dt)
 {
   switch (bodyOf(keeper.isHomeTeam))
   {
-    case BodyId::ORIGINAL:
+    case BodyId::AARDVARK:
       break;
-    case BodyId::NEW_V1:
-      diveGoalkeeperNewV1(keeper, dt);
+    case BodyId::BINTURONG:
+      diveGoalkeeperBinturong(keeper, dt);
       return;
   }
-  diveGoalkeeperOriginal(keeper, dt);
+  diveGoalkeeperAardvark(keeper, dt);
 }
 
 void MatchEngine::readShot(const MatchPlayer& keeper,
@@ -323,25 +323,25 @@ void MatchEngine::readShot(const MatchPlayer& keeper,
 {
   switch (bodyOf(keeper.isHomeTeam))
   {
-    case BodyId::ORIGINAL:
+    case BodyId::AARDVARK:
       break;
-    case BodyId::NEW_V1:
-      readShotNewV1(keeper, control);
+    case BodyId::BINTURONG:
+      readShotBinturong(keeper, control);
       return;
   }
-  readShotOriginal(keeper, control);
+  readShotAardvark(keeper, control);
 }
 
 MatchEngine::SaveAttempt MatchEngine::attemptSave(const MatchPlayer& keeper)
 {
   switch (bodyOf(keeper.isHomeTeam))
   {
-    case BodyId::ORIGINAL:
+    case BodyId::AARDVARK:
       break;
-    case BodyId::NEW_V1:
-      return attemptSaveNewV1(keeper);
+    case BodyId::BINTURONG:
+      return attemptSaveBinturong(keeper);
   }
-  return attemptSaveOriginal(keeper);
+  return attemptSaveAardvark(keeper);
 }
 
 bool MatchEngine::holdsShot(const MatchPlayer& keeper, float stretch,
@@ -349,12 +349,12 @@ bool MatchEngine::holdsShot(const MatchPlayer& keeper, float stretch,
 {
   switch (bodyOf(keeper.isHomeTeam))
   {
-    case BodyId::ORIGINAL:
+    case BodyId::AARDVARK:
       break;
-    case BodyId::NEW_V1:
-      return holdsShotNewV1(keeper, stretch, speedExcess);
+    case BodyId::BINTURONG:
+      return holdsShotBinturong(keeper, stretch, speedExcess);
   }
-  return holdsShotOriginal(keeper, stretch, speedExcess);
+  return holdsShotAardvark(keeper, stretch, speedExcess);
 }
 
 MatchEngine::Spill MatchEngine::parrySpill(const MatchPlayer& keeper,
@@ -362,10 +362,10 @@ MatchEngine::Spill MatchEngine::parrySpill(const MatchPlayer& keeper,
 {
   switch (bodyOf(keeper.isHomeTeam))
   {
-    case BodyId::ORIGINAL:
+    case BodyId::AARDVARK:
       break;
-    case BodyId::NEW_V1:
-      return parrySpillNewV1(keeper, speed);
+    case BodyId::BINTURONG:
+      return parrySpillBinturong(keeper, speed);
   }
-  return parrySpillOriginal(keeper, speed);
+  return parrySpillAardvark(keeper, speed);
 }

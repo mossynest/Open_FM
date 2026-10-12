@@ -196,19 +196,20 @@ int main(int argc, char* argv[])
       }
       continue;
     }
-    std::cerr << "Usage: " << argv[0]
-              << " [--world-seed N] [--brains HOME,AWAY] [--bodies HOME,AWAY]"
-                 " [--handshake H] [--home-advantage X] [--kick-off] [--drill NAME]"
-                 " [--check [MATCHES]]\n"
-                 "  (--brains, --bodies: original or new-v1 per side, one name "
-                 "for both; before --measure or --shot-map)\n"
-                 "  (--home-advantage: 0 neutral venue (default) to 2, 1 the "
-                 "game's full home edge; --check defaults to 1)\n"
-                 "  [--measure DRILL --sweep \"Pace=40:95:12\" [--by \"Who runs\"]\n"
-                 "   [--set NAME=VALUE]... [--repeats N] [--seed N] [--csv [PATH]]]\n"
-                 "  [--shot-map [--line A:B:N] [--side A:B:N] [--repeats N]\n"
-                 "   [--set NAME=VALUE]... [--csv [PATH]]]\n"
-                 "  [--measure-view DRILL] [--shot-map-view]\n";
+    std::cerr
+        << "Usage: " << argv[0]
+        << " [--world-seed N] [--brains HOME,AWAY] [--bodies HOME,AWAY]"
+           " [--handshake H] [--home-advantage X] [--kick-off] [--drill NAME]"
+           " [--check [MATCHES]]\n"
+           "  (--brains, --bodies: aardvark or binturong per side, one name "
+           "for both; before --measure or --shot-map)\n"
+           "  (--home-advantage: 0 neutral venue (default) to 2, 1 the "
+           "game's full home edge; --check defaults to 1)\n"
+           "  [--measure DRILL --sweep \"Pace=40:95:12\" [--by \"Who runs\"]\n"
+           "   [--set NAME=VALUE]... [--repeats N] [--seed N] [--csv [PATH]]]\n"
+           "  [--shot-map [--line A:B:N] [--side A:B:N] [--repeats N]\n"
+           "   [--set NAME=VALUE]... [--csv [PATH]]]\n"
+           "  [--measure-view DRILL] [--shot-map-view]\n";
     return 2;
   }
 
@@ -230,12 +231,12 @@ int main(int argc, char* argv[])
     if (measureDrill)
       return runMeasureCommand(controller.getStatsConfig(), *measureDrill,
                                measureArguments);
-    // The window opens on Team 66 v Team 66, Original against New v1, so
+    // The window opens on Team 66 v Team 66, Aardvark against Binturong, so
     // the two engines meet on equal players. The headless commands above
-    // keep the plain world and Original for both.
+    // keep the plain world and Aardvark for both.
     addSandboxTestTeams(*controller.getGameData());
-    if (!brainsGiven) sandboxBrains() = {BrainId::ORIGINAL, BrainId::NEW_V1};
-    if (!bodiesGiven) sandboxBodies() = {BodyId::ORIGINAL, BodyId::NEW_V1};
+    if (!brainsGiven) sandboxBrains() = {BrainId::AARDVARK, BrainId::BINTURONG};
+    if (!bodiesGiven) sandboxBodies() = {BodyId::AARDVARK, BodyId::BINTURONG};
     GUIView view(controller);
     view.run(
         [kickOff, drill, drillView](GUIView* gui)

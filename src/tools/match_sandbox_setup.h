@@ -29,15 +29,15 @@ class MatchEngine;
 
 /**
  * The brains (home, away) new sandbox matches, checks and drills start with:
- * the sandbox's --brains option, else Original for both sides (the window
- * opens on Original v New v1 instead; see match_sandbox_main.cpp).
+ * the sandbox's --brains option, else Aardvark for both sides (the window
+ * opens on Aardvark v Binturong instead; see match_sandbox_main.cpp).
  */
 std::array<BrainId, 2>& sandboxBrains();
-/** The same for bodies: the --bodies option, else Original for both (the
- * window: Original v New v1). */
+/** The same for bodies: the --bodies option, else Aardvark for both (the
+ * window: Aardvark v Binturong). */
 std::array<BodyId, 2>& sandboxBodies();
 /** The handshake new sandbox matches, checks and drills are built with:
- * the --handshake option, else Original. */
+ * the --handshake option, else Aardvark. */
 HandshakeId& sandboxHandshake();
 /** The home advantage new sandbox matches, checks and drills are played
  * with (MatchContext::homeAdvantageScale: 0 a neutral venue, 1 the game's
@@ -81,12 +81,12 @@ struct MatchSetup
   std::vector<std::pair<PlayerID, std::uint8_t>> medicalFlags;
   /** Whether the AI makes each side's substitutions. */
   std::array<bool, 2> autoSubstitutions{false, true};
-  /** Each side's brain (recordings made before brains existed: Original). */
-  std::array<BrainId, 2> brains{BrainId::ORIGINAL, BrainId::ORIGINAL};
-  /** Each side's body (recordings made before bodies existed: Original). */
-  std::array<BodyId, 2> bodies{BodyId::ORIGINAL, BodyId::ORIGINAL};
-  /** The match's handshake (older recordings: Original). */
-  HandshakeId handshake = HandshakeId::ORIGINAL;
+  /** Each side's brain (recordings made before brains existed: Aardvark). */
+  std::array<BrainId, 2> brains{BrainId::AARDVARK, BrainId::AARDVARK};
+  /** Each side's body (recordings made before bodies existed: Aardvark). */
+  std::array<BodyId, 2> bodies{BodyId::AARDVARK, BodyId::AARDVARK};
+  /** The match's handshake (older recordings: Aardvark). */
+  HandshakeId handshake = HandshakeId::AARDVARK;
   /** The match's home advantage (older recordings: 1, the full edge). */
   float homeAdvantage = 1.0f;
 

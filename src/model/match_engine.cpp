@@ -2974,7 +2974,7 @@ bool MatchEngine::attemptTakeOn(MatchPlayer& carrier, MatchPlayer& defender)
   ball.touchTimer = R::MAX_TOUCH_INTERVAL;
   if (ball.inTouch)
   {
-    // A loose ball (New v1 body) is pushed past him for real, into the
+    // A loose ball (Binturong body) is pushed past him for real, into the
     // space he runs on to.
     const float speed = length(carrier.velocity);
     const float push = groundLaunchSpeed(
@@ -4532,7 +4532,7 @@ void MatchEngine::clearBall(MatchPlayer& defender)
   const float speed = clearanceSpeed(defender);
   ++statsOf(defender).clearances;
   clearFlightState();
-  // A loose ball (New v1 body) is struck where it lies.
+  // A loose ball (Binturong body) is struck where it lies.
   launchBall(defender, ball.inTouch ? ball.position : defender.position, target,
              speed, loftVerticalSpeed(clearanceMetres, speed, 0.0f, 0.0f), 0.0f);
   if (getRecorder())
@@ -4714,17 +4714,18 @@ bool MatchEngine::possessionConsistent() const
 bool MatchEngine::playsFirstTouch(const MatchPlayer& player, bool hands,
                                   float heightMetres) const
 {
-  // Feet only, outfielders only, New v1 bodies only: chest control and
+  // Feet only, outfielders only, Binturong bodies only: chest control and
   // goalkeepers keep the old trap for now (first-touch plan, §1).
-  return bodyOf(player.isHomeTeam) == BodyId::NEW_V1 && !player.isGoalkeeper &&
-         !hands && heightMetres <= MatchTuning::Ball::LOW_BALL_METRES;
+  return bodyOf(player.isHomeTeam) == BodyId::BINTURONG &&
+         !player.isGoalkeeper && !hands &&
+         heightMetres <= MatchTuning::Ball::LOW_BALL_METRES;
 }
 
 float MatchEngine::feetReach(const MatchPlayer& player) const
 {
   // The knob reaches only the bodies with the new first touch, so the
-  // Original body keeps its reach.
-  return bodyOf(player.isHomeTeam) == BodyId::NEW_V1 && !player.isGoalkeeper
+  // Aardvark body keeps its reach.
+  return bodyOf(player.isHomeTeam) == BodyId::BINTURONG && !player.isGoalkeeper
              ? touchKnobs[TouchKnob::FEET_REACH]
              : MatchTuning::Ball::OUTFIELD_CONTROL_RADIUS_METRES;
 }
@@ -4751,7 +4752,7 @@ void MatchEngine::playFirstTouch(MatchPlayer& player, const TouchMoment& moment)
   if (!receivingPass) recordPassCompletion(player);
   const TouchIntent intent = chooseFirstTouch(player, moment);
   // Read before setPossession clears the flight (whose pass it was).
-  const TouchResult touch = firstTouchNewV1(player, intent, moment);
+  const TouchResult touch = firstTouchBinturong(player, intent, moment);
 
   // He owns it from the touch (phases, transitions, touches), but the ball
   // carries on from where he met it instead of being placed at his feet.
@@ -4916,7 +4917,7 @@ void MatchEngine::playDribbleTouch(MatchPlayer& player, const TouchMoment& momen
   // His own ball, played on from where he meets it: no possession change,
   // just a new roll.
   const TouchIntent intent = dribbleTouchIntent(player, moment);
-  const TouchResult touch = dribbleTouchNewV1(player, intent, moment);
+  const TouchResult touch = dribbleTouchBinturong(player, intent, moment);
   ++dribbleTouches;
   dribbleContactGapSum += moment.gap;
   trackTouch(player);

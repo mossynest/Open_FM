@@ -24,8 +24,8 @@ void brain(const char* id, BrainId& brain, float width)
   }
   if (ImGui::IsItemHovered())
     ImGui::SetTooltip(
-        "The decision-making this side plays with: Original is the inherited "
-        "engine, kept as it was; New v1 is the version being developed. "
+        "The decision-making this side plays with: Aardvark is the inherited "
+        "engine, kept as it was; Binturong is the version being developed. "
         "Physics and rules are the same for both.");
 }
 
@@ -43,7 +43,7 @@ void body(const char* id, BodyId& body, float width)
     ImGui::SetTooltip(
         "How this side's players' bodies carry out what their brain chose: "
         "movement, fitness, kicking, first touch, goalkeeping, injuries. "
-        "Original is the inherited engine; New v1 is being developed. "
+        "Aardvark is the inherited engine; Binturong is being developed. "
         "Contests between players, the ball and the rules are the same for "
         "both.");
 }

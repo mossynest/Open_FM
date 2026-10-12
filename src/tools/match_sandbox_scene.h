@@ -110,9 +110,9 @@ class MatchSandboxScene : public GUIScene
                      std::optional<HandshakeId> handshake = {});
   /** The brains and bodies chosen for "Replay with" in the Recordings
    * window. */
-  std::array<BrainId, 2> replay_brains{BrainId::NEW_V1, BrainId::NEW_V1};
-  std::array<BodyId, 2> replay_bodies{BodyId::ORIGINAL, BodyId::ORIGINAL};
-  HandshakeId replay_handshake = HandshakeId::ORIGINAL;
+  std::array<BrainId, 2> replay_brains{BrainId::BINTURONG, BrainId::BINTURONG};
+  std::array<BodyId, 2> replay_bodies{BodyId::AARDVARK, BodyId::AARDVARK};
+  HandshakeId replay_handshake = HandshakeId::AARDVARK;
 
   /** What the current (or last) match was built from. */
   std::optional<MatchSetup> match_setup;

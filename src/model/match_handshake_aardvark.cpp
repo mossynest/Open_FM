@@ -6,24 +6,16 @@
 //  See the LICENSE file in the project root.
 // -----------------------------------------------------------------------------
 
-// The New v1 handshake: how the game's inputs become the match engine's
-// state, the version being developed - the attribute scale (level shift
+// The Aardvark handshake: how the game's inputs become the match engine's
+// state, as inherited with the engine - the attribute scale (level shift
 // and stretch), physical limits, the home lift, slot roles, base positions,
 // the match context, referee strictness, condition, familiarity and team
-// talks. It started as an exact copy of the Original handshake
-// (match_handshake_original.cpp; see match_handshake.h). Every function here
-// is a MatchEngine member with the "NewV1" suffix, declared in
-// match_handshake_new_v1_members.h; the engine reaches them through
-// match_handshake_dispatch.cpp.
+// talks. Kept frozen so the handshakes being developed can be compared with
+// it (see match_handshake.h). Every function here is a MatchEngine member
+// with the "Aardvark" suffix, declared in match_handshake_aardvark_members.h;
+// the engine reaches them through match_handshake_dispatch.cpp.
 //
-// Change behaviour freely here. To keep this version for comparison, freeze
-// it and copy it to New v2.
-//
-// Changes from the Original:
-// - attributeNewV1: attributes are the stat / 100 (clamped to
-//   MIN_ATTRIBUTE..1), with no stretch and no level shift.
-// - computeLevelNewV1: levelShift 0 and levelPrecision 1: the match's
-//   level changes nothing.
+// Do not change behaviour here.
 
 #include <algorithm>
 #include <array>
@@ -39,7 +31,23 @@
 
 using namespace MatchEngineInternal;
 
-float MatchEngine::drawRefereeStrictnessNewV1() const
+namespace
+{
+/** Attributes are stretched around a typical professional level (see
+ * MatchTuning::Player::ATTRIBUTE_PIVOT). */
+float stretchAttribute(float raw)
+{
+  using P = MatchTuning::Player;
+  return std::clamp(
+      P::ATTRIBUTE_PIVOT +
+          P::ATTRIBUTE_SATURATION *
+              std::tanh((raw - P::ATTRIBUTE_PIVOT) * P::ATTRIBUTE_CONTRAST /
+                        P::ATTRIBUTE_SATURATION),
+      P::MIN_ATTRIBUTE, 1.0f);
+}
+}  // namespace
+
+float MatchEngine::drawRefereeStrictnessAardvark() const
 {
   using D = MatchTuning::Discipline;
   const float mean = matchContext.refereeStrictnessMean;
@@ -47,7 +55,7 @@ float MatchEngine::drawRefereeStrictnessNewV1() const
                     D::MIN_STRICTNESS * mean, D::MAX_STRICTNESS * mean);
 }
 
-void MatchEngine::convertMatchContextNewV1(const MatchContext& context)
+void MatchEngine::convertMatchContextAardvark(const MatchContext& context)
 {
   // Out-of-range or missing values fall back to the neutral defaults.
   const auto finite = [](float value, float fallback)
@@ -71,32 +79,24 @@ void MatchEngine::convertMatchContextNewV1(const MatchContext& context)
                                 MatchTuning::Context::FINISHING_EXPONENT);
 }
 
-const DerivedRecipes& MatchEngine::derivedRecipesNewV1()
-{
-  // New v1's own derived-stat recipes (match_derived_stats.h); the defaults
-  // for now: agility mirrors acceleration, the endurance stats echo Stamina,
-  // first touch blends Dribbling and Passing.
-  static constexpr DerivedRecipes recipes = DEFAULT_DERIVED_RECIPES;
-  return recipes;
-}
-
-float MatchEngine::convertConditionNewV1(float condition) const
+float MatchEngine::convertConditionAardvark(float condition) const
 {
   return std::clamp(condition, MatchTuning::Player::MINIMUM_STAMINA, 1.0f);
 }
 
-float MatchEngine::convertFamiliarityNewV1(float familiarity) const
+float MatchEngine::convertFamiliarityAardvark(float familiarity) const
 {
   return std::clamp(familiarity, 0.0f, 1.0f);
 }
 
-float MatchEngine::convertTeamTalkNewV1(float modifier) const
+float MatchEngine::convertTeamTalkAardvark(float modifier) const
 {
   return std::clamp(modifier, -MatchTuning::Touchline::MAX_TEAM_TALK_MODIFIER,
                     MatchTuning::Touchline::MAX_TEAM_TALK_MODIFIER);
 }
 
-void MatchEngine::initializePlayersNewV1(const Lineup& lineup, bool isHomeTeam)
+void MatchEngine::initializePlayersAardvark(const Lineup& lineup,
+                                            bool isHomeTeam)
 {
   const auto addPlayer = [&](const Player* player, Vector2F position,
                              std::vector<MatchPlayer>& destination)
@@ -112,7 +112,7 @@ void MatchEngine::initializePlayersNewV1(const Lineup& lineup, bool isHomeTeam)
     matchPlayer.movementTarget = position;
     matchPlayer.facingAngle = isHomeTeam ? 0.0f : std::numbers::pi_v<float>;
     matchPlayer.targetAngle = matchPlayer.facingAngle;
-    loadAttributesNewV1(matchPlayer, player);
+    loadAttributesAardvark(matchPlayer, player);
     matchPlayer.statsIndex = addPlayerStats(matchPlayer, true);
     destination.push_back(matchPlayer);
   };
@@ -134,22 +134,22 @@ void MatchEngine::initializePlayersNewV1(const Lineup& lineup, bool isHomeTeam)
   }
 }
 
-void MatchEngine::loadAttributesNewV1(MatchPlayer& matchPlayer,
-                                 const Player* player) const
+void MatchEngine::loadAttributesAardvark(MatchPlayer& matchPlayer,
+                                         const Player* player) const
 {
   // Cache the named career stats once, after match-level normalization. The
   // hot movement/decision loops read these fields, never a string-keyed map.
   // A new simulation attribute needs an explicit consumer as well as a field
   // here; adding a name to stats_config.json alone creates no new behavior.
-  matchPlayer.pace = attributeNewV1(player, "Pace");
-  matchPlayer.shooting = attributeNewV1(player, "Shooting");
-  matchPlayer.passing = attributeNewV1(player, "Passing");
-  matchPlayer.dribbling = attributeNewV1(player, "Dribbling");
-  matchPlayer.defending = attributeNewV1(player, "Defending");
-  matchPlayer.goalkeeping = attributeNewV1(player, "Goalkeeping");
-  matchPlayer.physicality = attributeNewV1(player, "Physicality");
-  matchPlayer.endurance = attributeNewV1(player, "Stamina");
-  matchPlayer.vision = attributeNewV1(player, "Vision");
+  matchPlayer.pace = attributeAardvark(player, "Pace");
+  matchPlayer.shooting = attributeAardvark(player, "Shooting");
+  matchPlayer.passing = attributeAardvark(player, "Passing");
+  matchPlayer.dribbling = attributeAardvark(player, "Dribbling");
+  matchPlayer.defending = attributeAardvark(player, "Defending");
+  matchPlayer.goalkeeping = attributeAardvark(player, "Goalkeeping");
+  matchPlayer.physicality = attributeAardvark(player, "Physicality");
+  matchPlayer.endurance = attributeAardvark(player, "Stamina");
+  matchPlayer.vision = attributeAardvark(player, "Vision");
   if (matchPlayer.isHomeTeam)
   {
     const float BONUS = MatchTuning::Rules::HOME_ATTRIBUTE_BONUS *
@@ -172,7 +172,7 @@ void MatchEngine::loadAttributesNewV1(MatchPlayer& matchPlayer,
       P::BRAKING_BASE + matchPlayer.physicality * P::BRAKING_PHYSICALITY;
 }
 
-void MatchEngine::placeFormationNewV1(bool homeTeam)
+void MatchEngine::placeFormationAardvark(bool homeTeam)
 {
   const auto& formation = formations[homeTeam ? 0 : 1];
   int sideSize = 0;
@@ -199,7 +199,7 @@ void MatchEngine::placeFormationNewV1(bool homeTeam)
   }
 }
 
-void MatchEngine::computeUnderdogSharesNewV1()
+void MatchEngine::computeUnderdogSharesAardvark()
 {
   // Mean outfield quality of the starting elevens, without the home lift.
   std::array<float, 2> quality{};
@@ -212,7 +212,7 @@ void MatchEngine::computeUnderdogSharesNewV1()
     for (const std::string_view name :
          {"Pace", "Shooting", "Passing", "Dribbling", "Defending",
           "Physicality", "Vision"})
-      sum += attributeNewV1(player.player, name);
+      sum += attributeAardvark(player.player, name);
     quality[side] += sum / 7.0f;
     ++counted[side];
   }
@@ -228,7 +228,7 @@ void MatchEngine::computeUnderdogSharesNewV1()
   underdogShares = {share(gap), share(-gap)};
 }
 
-void MatchEngine::resolveTacticsNewV1(bool homeTeam)
+void MatchEngine::resolveTacticsAardvark(bool homeTeam)
 {
   // Compile stored slot instructions into match-local numeric profiles. The
   // anchor identifies a formation job, not its current occupant: substitutes
@@ -258,8 +258,8 @@ void MatchEngine::resolveTacticsNewV1(bool homeTeam)
   oppositionOrders[side] = strategy.getOppositionOrders();
 }
 
-float MatchEngine::rawAttributeNewV1(const Player* player,
-                                std::string_view name) const
+float MatchEngine::rawAttributeAardvark(const Player* player,
+                                        std::string_view name) const
 {
   const auto stat = player->getStats().find(std::string(name));
   if (stat != player->getStats().end())
@@ -268,21 +268,37 @@ float MatchEngine::rawAttributeNewV1(const Player* player,
          MatchTuning::Player::RATING_SCALE;
 }
 
-float MatchEngine::attributeNewV1(const Player* player, std::string_view name) const
+float MatchEngine::attributeAardvark(const Player* player,
+                                     std::string_view name) const
 {
-  // New v1: a straight line. A stat of 60 is 0.60 in every match: no stretch
-  // around a typical professional, no shift toward the match's level.
   if (!player) return MatchTuning::Player::DEFAULT_ATTRIBUTE;
-  return std::clamp(rawAttributeNewV1(player, name),
-                    MatchTuning::Player::MIN_ATTRIBUTE, 1.0f);
+  return stretchAttribute(rawAttributeAardvark(player, name) + levelShift);
 }
 
-void MatchEngine::computeLevelNewV1(const Lineup& /*home*/,
-                                    const Lineup& /*away*/)
+void MatchEngine::computeLevelAardvark(const Lineup& home, const Lineup& away)
 {
-  // New v1: the match's level changes nothing. No shift toward a reference
-  // level (attributes are what the stats say, see attributeNewV1) and no
-  // finishing precision by level (finishing comes from Shooting).
-  levelShift = 0.0f;
-  levelPrecision = 1.0f;
+  // Mean raw outfield quality of both elevens.
+  float sum = 0.0f;
+  int counted = 0;
+  for (const Lineup* lineup : {&home, &away})
+  {
+    for (const auto& positioned : lineup->getOutfieldPlayers())
+    {
+      if (!positioned.player) continue;
+      for (const std::string_view name :
+           {"Pace", "Shooting", "Passing", "Dribbling", "Defending",
+            "Physicality", "Vision"})
+        sum += rawAttributeAardvark(positioned.player, name);
+      counted += 7;
+    }
+  }
+  if (counted == 0) return;
+  using P = MatchTuning::Player;
+  const float level = sum / static_cast<float>(counted);
+  levelShift = P::LEVEL_NORMALISATION * (P::REFERENCE_LEVEL - level);
+  const float fromReference = level - P::REFERENCE_LEVEL;
+  levelPrecision = std::max(
+      P::MIN_LEVEL_PRECISION,
+      1.0f + fromReference * (fromReference < 0.0f ? P::LEVEL_FINISHING_GAIN
+                                                   : P::ELITE_FINISHING_GAIN));
 }

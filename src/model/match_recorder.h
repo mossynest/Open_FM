@@ -270,7 +270,7 @@ struct MatchDuelDetail
     ENGAGE,
     TAKE_ON,
     TACKLE,
-    /** A first touch (New v1 body): `chance` is the angle difficulty and
+    /** A first touch (Binturong body): `chance` is the angle difficulty and
      * `foul` the weight difficulty; no roll. */
     FIRST_TOUCH
   };

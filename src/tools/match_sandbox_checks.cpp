@@ -527,7 +527,7 @@ bool runPossessionChecks(const std::vector<const Team*>& clubs,
 }
 
 /** First touch: every pairing of brain and body on the same fixtures. For
- * the New v1 bodies: how touches end and how long they take, that a touched
+ * the Binturong bodies: how touches end and how long they take, that a touched
  * ball only ever moves under physics (never further in a step than its
  * speed carries it), how close to his centre he meets the ball, and that a
  * player who waits for it never loses it. Passes for all four, for
@@ -587,10 +587,11 @@ bool runFirstTouchChecks(const std::vector<const Team*>& clubs,
     std::array<int, 3> passes{};
   };
   std::array<Setup, 4> setups{{
-      {"Original brain + Original body", BrainId::ORIGINAL, BodyId::ORIGINAL},
-      {"Original brain + New v1 body", BrainId::ORIGINAL, BodyId::NEW_V1},
-      {"New v1 brain + Original body", BrainId::NEW_V1, BodyId::ORIGINAL},
-      {"New v1 brain + New v1 body", BrainId::NEW_V1, BodyId::NEW_V1},
+      {"Aardvark brain + Aardvark body", BrainId::AARDVARK, BodyId::AARDVARK},
+      {"Aardvark brain + Binturong body", BrainId::AARDVARK, BodyId::BINTURONG},
+      {"Binturong brain + Aardvark body", BrainId::BINTURONG, BodyId::AARDVARK},
+      {"Binturong brain + Binturong body", BrainId::BINTURONG,
+       BodyId::BINTURONG},
   }};
 
   for (Setup& setup : setups)
@@ -770,7 +771,7 @@ bool runFirstTouchChecks(const std::vector<const Team*>& clubs,
                              "{} intercepted\n",
                              setup.name, setup.passes[0], completion,
                              setup.passes[2]);
-    if (setup.body != BodyId::NEW_V1) continue;
+    if (setup.body != BodyId::BINTURONG) continue;
     const Outcomes& all = setup.outcomes[0];
     const bool physical = setup.worstExcess <= 0.0f;
     const double started = std::max(1.0, static_cast<double>(all.started));
@@ -1157,9 +1158,10 @@ int runSandboxChecks(GameController& controller, int matches)
         exact = replay.match && !replay.divergedAt &&
                 !replay.firstDifferentDecision;
         // Side by side with the brain being developed (information only:
-        // identical while New v1 is still a copy of the Original brain).
+        // identical while Binturong is still a copy of the Aardvark brain).
         const Recordings::Replay withNew = Recordings::replay(
-            *loaded, controller, std::array{BrainId::NEW_V1, BrainId::NEW_V1});
+            *loaded, controller,
+            std::array{BrainId::BINTURONG, BrainId::BINTURONG});
         newBrainReplay =
             !withNew.match ? "failed: " + withNew.error
             : !withNew.divergedAt && !withNew.firstDifferentDecision
@@ -1167,9 +1169,9 @@ int runSandboxChecks(GameController& controller, int matches)
                 : std::format("differs from tick {}",
                               withNew.divergedAt.value_or(0));
         // The same with the body being developed (information only too).
-        const Recordings::Replay withNewBody =
-            Recordings::replay(*loaded, controller, std::nullopt,
-                               std::array{BodyId::NEW_V1, BodyId::NEW_V1});
+        const Recordings::Replay withNewBody = Recordings::replay(
+            *loaded, controller, std::nullopt,
+            std::array{BodyId::BINTURONG, BodyId::BINTURONG});
         newBodyReplay =
             !withNewBody.match ? "failed: " + withNewBody.error
             : !withNewBody.divergedAt && !withNewBody.firstDifferentDecision
@@ -1179,7 +1181,7 @@ int runSandboxChecks(GameController& controller, int matches)
         // And with the handshake being developed (information only too).
         const Recordings::Replay withNewHandshake =
             Recordings::replay(*loaded, controller, std::nullopt, std::nullopt,
-                               HandshakeId::NEW_V1);
+                               HandshakeId::BINTURONG);
         newHandshakeReplay =
             !withNewHandshake.match ? "failed: " + withNewHandshake.error
             : !withNewHandshake.divergedAt &&
@@ -1211,13 +1213,13 @@ int runSandboxChecks(GameController& controller, int matches)
           tickFound ? "yes" : "NO", decisionFound ? "yes" : "NO",
           error.empty() ? "" : "  (" + error + ")");
       std::cout << std::format(
-          "Replay with brains New v1 v New v1 (recorded with {}): {}\n",
+          "Replay with brains Binturong v Binturong (recorded with {}): {}\n",
           brainPairName(recording.setup.brains), newBrainReplay);
       std::cout << std::format(
-          "Replay with bodies New v1 v New v1 (recorded with {}): {}\n",
+          "Replay with bodies Binturong v Binturong (recorded with {}): {}\n",
           bodyPairName(recording.setup.bodies), newBodyReplay);
       std::cout << std::format(
-          "Replay with handshake New v1 (recorded with {}): {}\n",
+          "Replay with handshake Binturong (recorded with {}): {}\n",
           handshakeName(recording.setup.handshake), newHandshakeReplay);
     }
     std::cout << std::format(

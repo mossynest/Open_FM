@@ -243,7 +243,7 @@ struct MatchTuning final
   };
 
   /**
-   * First touch (New v1 body, feet): the touch plays the ball on under real
+   * First touch (Binturong body, feet): the touch plays the ball on under real
    * physics and the player runs onto it. He owns it from the touch (a
    * claimed ball) until an opponent plays it or play stops (see Notes and
    * plans/match_engine_first_touch_plan.md and
@@ -265,7 +265,7 @@ struct MatchTuning final
     static constexpr float CHASE_HORIZON_SECONDS = 2.0f;
     static constexpr float CHASE_STEP_SECONDS = 0.1f;
 
-    // When to touch (New v1 brain): at the closest comfortable point the
+    // When to touch (Binturong brain): at the closest comfortable point the
     // ball will pass, not the moment it comes into reach.
     /** About a foot from his centre: any closer is as good as it gets. */
     static constexpr float COMFORT_GAP_METRES = 0.3f;
@@ -276,7 +276,7 @@ struct MatchTuning final
     /** How far ahead he reads the ball and his own run. */
     static constexpr float TIMING_LOOKAHEAD_SECONDS = 0.3f;
 
-    // What touch (New v1 brain).
+    // What touch (Binturong brain).
     /** A set touch goes where he will be this long after it. */
     static constexpr float SET_LEAD_SECONDS = 0.3f;
     /** Into stride: the ball is played this far ahead along his run (his
@@ -287,7 +287,7 @@ struct MatchTuning final
     static constexpr float STRIDE_SPEED_SHARE = 0.9f;
     static constexpr float STRIDE_CLEARANCE_METRES = 4.0f;
 
-    // How well he carries it out (New v1 body; Notes and plans/
+    // How well he carries it out (Binturong body; Notes and plans/
     // match_engine_first_touch_jobs_plan.md). The touch is two jobs: the
     // weight (the pace change) and the angle (the turn off the line the
     // ball came on). Each has its own difficulty, chance of going wrong and
@@ -398,8 +398,9 @@ struct MatchTuning final
     static constexpr float BEATEN_SECONDS = 1.1f;
     static constexpr float BEATEN_VELOCITY_RETAINED = 0.25f;
 
-    // The loose dribble (New v1 body): the ball is never tethered; each touch
-    // plays it on under physics and he runs onto it (dribble touches plan).
+    // The loose dribble (Binturong body): the ball is never tethered; each
+    // touch plays it on under physics and he runs onto it (dribble touches
+    // plan).
     /** A touch into stride puts the ball where he will be this long later
      * at the pace he wants (less for a better dribbler)... */
     static constexpr float LOOSE_LEAD_SECONDS = 0.6f;

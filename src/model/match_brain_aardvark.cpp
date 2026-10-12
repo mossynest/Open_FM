@@ -6,17 +6,15 @@
 //  See the LICENSE file in the project root.
 // -----------------------------------------------------------------------------
 
-// The New v1 brain: the player decision-making being developed (see
-// match_brain.h). It started as an exact copy of the Original brain
-// (match_brain_original.cpp). Every function here is a MatchEngine member
-// with the "NewV1" suffix, declared in match_brain_new_v1_members.h; the
-// engine reaches them through the dispatchers in match_brain_dispatch.cpp.
+// The Aardvark brain: the player decision-making inherited with the engine,
+// kept frozen so the brains being developed can be compared with it (see
+// match_brain.h). Every function here is a MatchEngine member with the
+// "Aardvark" suffix, declared in match_brain_aardvark_members.h; the engine
+// reaches them through the dispatchers in match_brain_dispatch.cpp.
 //
-// Change behaviour freely here. A brain-only helper this file calls has its
-// own NewV1 copy; a helper shared with the body (match_engine.cpp) is shared
-// by every brain, so copy it into this brain (with the NewV1 suffix) before
-// changing it. To keep this version for comparison, freeze it and copy it to
-// New v2 the same way this one was made.
+// Do not change behaviour here. A brain-only helper this file calls has its
+// own Aardvark copy; a helper shared with the body (match_engine.cpp) is
+// shared by every brain, so a new brain copies it before changing it.
 
 #include <algorithm>
 #include <array>
@@ -72,38 +70,28 @@ float movementSpeedScale(PlayerIntent intent)
 }
 }  // namespace
 
-const MatchEngine::MovementStyle& MatchEngine::movementStyleNewV1()
+const MatchEngine::MovementStyle& MatchEngine::movementStyleAardvark()
 {
   using P = MatchTuning::Player;
   static const MovementStyle style = []
   {
     MovementStyle built;
-    // No target lag: players head for the latest plan at once.
-    built.smoothsTargets = false;
+    built.tacticalResponsePerSecond = P::TACTICAL_TARGET_RESPONSE_PER_SECOND;
+    built.urgentResponsePerSecond = P::URGENT_TARGET_RESPONSE_PER_SECOND;
+    built.familiarityResponseLoss = P::FAMILIARITY_RESPONSE_LOSS;
     for (std::size_t intent = 0; intent < PLAYER_INTENT_COUNT; ++intent)
       built.intentSpeedShares[intent] =
           movementSpeedScale(static_cast<PlayerIntent>(intent));
     built.restartWalkShare = P::RESTART_WALK_SPEED_SCALE;
     built.urgencyDistanceMetres = P::URGENCY_DISTANCE_METRES;
     built.maxUrgencyShare = P::MAX_URGENCY_SPEED_SCALE;
-    // Pacing: a tired player chooses to ease off, and on jobs that can wait
-    // keeps his burst reserve for the moments that matter (pressing, loose
-    // balls, runs, receiving, marking): below half a reserve he closes in
-    // on his critical speed.
-    built.fatigueWorkRateLoss = P::FATIGUE_WORK_RATE_LOSS;
-    for (const PlayerIntent intent :
-         {PlayerIntent::HOLD_SHAPE, PlayerIntent::OFFER_SUPPORT,
-          PlayerIntent::RECOVER_SHAPE, PlayerIntent::COVER_PRESS,
-          PlayerIntent::BLOCK_PASSING_LANE})
-      built.savesBurst[static_cast<std::size_t>(intent)] = true;
-    built.burstSavingReserve = 0.5f;
     return built;
   }();
   return style;
 }
 
-void MatchEngine::applyTeamMentalityNewV1(StrategySliders& sliders,
-                                     bool homeTeam) const
+void MatchEngine::applyTeamMentalityAardvark(StrategySliders& sliders,
+                                             bool homeTeam) const
 {
   // Score effects: a side in front sits deeper and takes fewer risks, a side
   // behind pushes on, more so as the match runs out.
@@ -152,7 +140,7 @@ void MatchEngine::applyTeamMentalityNewV1(StrategySliders& sliders,
   }
 }
 
-float MatchEngine::shoutShotBiasNewV1(bool homeTeam) const
+float MatchEngine::shoutShotBiasAardvark(bool homeTeam) const
 {
   const MatchShout shout = shouts[homeTeam ? 0 : 1].shout;
   const float bias = shout == MatchShout::SHOOT_ON_SIGHT       ? 1.0f
@@ -162,7 +150,7 @@ float MatchEngine::shoutShotBiasNewV1(bool homeTeam) const
          getShoutStrength(homeTeam);
 }
 
-void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
+void MatchEngine::refreshTacticalTargetsAardvark(float dt, bool planHome)
 {
   // Team planning happens in two passes: choose shared assignments (pressers,
   // runners, support and marks), then give each player a target and intent.
@@ -192,11 +180,6 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
   const auto lineFor = [&offsideLines](bool attackingHome)
   { return offsideLines[attackingHome ? 0 : 1]; };
   const Vector2F pressurePosition = carrier ? carrier->position : ball.position;
-  // The team shape reads the play where it is heading: while a pass
-  // travels, where it is going, so the block shifts once instead of
-  // sliding with the ball. Pressing and loose balls still go to the ball.
-  const Vector2F shapeAnchor =
-      !carrier && ball.isPass ? ball.passTarget : pressurePosition;
   const StrategySliders homeSliders = getEffectiveSliders(true);
   const StrategySliders awaySliders = getEffectiveSliders(false);
 
@@ -217,8 +200,9 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
                      velocityTowardTarget *
                          MatchTuning::Player::CURRENT_VELOCITY_PURSUIT_WEIGHT,
                  MatchTuning::Player::MINIMUM_PURSUIT_SPEED);
-    float arrivalTime = std::max(0.0f, targetDistance / pursuitSpeed -
-                                           pressEagernessNewV1(candidate, carrier));
+    float arrivalTime =
+        std::max(0.0f, targetDistance / pursuitSpeed -
+                           pressEagernessAardvark(candidate, carrier));
     if (candidate.intent == PlayerIntent::PRESS_BALL ||
         candidate.intent == PlayerIntent::CLAIM_LOOSE_BALL)
     {
@@ -585,11 +569,13 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
       for (std::size_t index = 0; index < plan.runners.size(); ++index)
       {
         plan.runners[index] = idOf(runners[index]);
-        if (runners[index]) plan.runPriority[index] = runPriority(*runners[index]);
+        if (runners[index])
+          plan.runPriority[index] = runPriority(*runners[index]);
       }
       plan.midfieldArrival =
           idOf(homeTeam ? homeMidfieldArrival : awayMidfieldArrival);
-      plan.farPostRunner = idOf(homeTeam ? homeFarPostRunner : awayFarPostRunner);
+      plan.farPostRunner =
+          idOf(homeTeam ? homeFarPostRunner : awayFarPostRunner);
       plan.overlappingFullback =
           idOf(homeTeam ? homeOverlappingFullback : awayOverlappingFullback);
       const auto& supporters = homeTeam ? homeSupporters : awaySupporters;
@@ -659,7 +645,8 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
             rolePriority = MatchTuning::Shape::WINGER_RUN_PRIORITY;
             break;
           case PlayerRole::CAM:
-            rolePriority = MatchTuning::Shape::ATTACKING_MIDFIELDER_RUN_PRIORITY;
+            rolePriority =
+                MatchTuning::Shape::ATTACKING_MIDFIELDER_RUN_PRIORITY;
             break;
           case PlayerRole::CDM:
             rolePriority = MatchTuning::Shape::HOLDING_MIDFIELDER_RUN_PRIORITY;
@@ -688,9 +675,9 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
                   candidate.isMakingRun
                       ? MatchTuning::Shape::RUN_CONTINUITY_PRIORITY
                       : 0.0f);
-        score.add("role's run bias", TermSource::SLOT_ROLE,
-                  roleProfileOf(candidate).runBias *
-                      TacticsTuning::RUN_BIAS_WEIGHT);
+        score.add(
+            "role's run bias", TermSource::SLOT_ROLE,
+            roleProfileOf(candidate).runBias * TacticsTuning::RUN_BIAS_WEIGHT);
         return score;
       };
       {
@@ -736,9 +723,7 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
                 : lastControlledTeamHome &&
                       *lastControlledTeamHome == player.isHomeTeam;
     Vector2F target =
-        ownControl ? possessionAnchorNewV1(player) : player.basePosition;
-    // How fast the target itself moves, when it is pinned to a moving man.
-    Vector2F targetVelocity{0.0f, 0.0f};
+        ownControl ? possessionAnchorAardvark(player) : player.basePosition;
     player.intent = PlayerIntent::HOLD_SHAPE;
     player.isPressing = false;
     player.isMakingRun = false;
@@ -751,12 +736,12 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
         sliders.widthUsage * MatchTuning::Shape::WIDTH_SLIDER_SCALE;
     target.y = MatchTuning::Pitch::CENTRE +
                (target.y - MatchTuning::Pitch::CENTRE) * widthScale;
-    target.x += (shapeAnchor.x - MatchTuning::Pitch::CENTRE) *
+    target.x += (pressurePosition.x - MatchTuning::Pitch::CENTRE) *
                 (MatchTuning::Shape::BASE_LONGITUDINAL_SHIFT +
                  sliders.compactness *
                      MatchTuning::Shape::COMPACTNESS_LONGITUDINAL_SHIFT);
     target.y +=
-        (shapeAnchor.y - MatchTuning::Pitch::CENTRE) *
+        (pressurePosition.y - MatchTuning::Pitch::CENTRE) *
         (MatchTuning::Shape::BASE_LATERAL_SHIFT +
          sliders.compactness * MatchTuning::Shape::COMPACTNESS_LATERAL_SHIFT);
 
@@ -773,7 +758,7 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
       using S = MatchTuning::Shape;
       const auto ownGoalDepth = [&](float x)
       { return player.isHomeTeam ? x : 1.0f - x; };
-      const float ballDepth = ownGoalDepth(shapeAnchor.x);
+      const float ballDepth = ownGoalDepth(pressurePosition.x);
       const float lineDepth = std::clamp(
           S::BLOCK_LINE_BASE + ballDepth * S::BLOCK_LINE_BALL_FACTOR +
               sliders.pressing * S::BLOCK_LINE_PRESSING,
@@ -796,15 +781,74 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
                  (player.basePosition.y - MatchTuning::Pitch::CENTRE) *
                      (S::BLOCK_WIDTH_SCALE -
                       sliders.compactness * S::BLOCK_COMPACTNESS_NARROWING) +
-                 (shapeAnchor.y - MatchTuning::Pitch::CENTRE) *
+                 (pressurePosition.y - MatchTuning::Pitch::CENTRE) *
                      S::BLOCK_BALL_SIDE_SHIFT;
-      target.x += defensiveRoleShiftNewV1(player);
+      target.x += defensiveRoleShiftAardvark(player);
     }
 
     if (&player == carrier)
     {
       player.intent = PlayerIntent::CARRY_BALL;
-      target = carryTargetNewV1(player);
+      target = player.position;
+      target.x +=
+          attackDirection *
+          (MatchTuning::Shape::CARRIER_BASE_ADVANCE +
+           player.dribbling * MatchTuning::Shape::CARRIER_DRIBBLING_ADVANCE +
+           sliders.riskTaking * MatchTuning::Shape::CARRIER_RISK_ADVANCE);
+      if (teamPhase == TeamPhase::ATTACKING_TRANSITION)
+      {
+        target.x += attackDirection *
+                    MatchTuning::Shape::ATTACKING_TRANSITION_CARRIER_ADVANCE;
+      }
+
+      // Carry away from the nearest defender instead of running directly
+      // through them, while gradually looking for a central shooting lane.
+      const MatchPlayer* closestOpponent = nullptr;
+      float closestDistance = std::numeric_limits<float>::max();
+      for (const MatchPlayer* const opponent : onPitch(!player.isHomeTeam))
+      {
+        const float opponentDistance =
+            distance(opponent->position, player.position);
+        if (opponentDistance < closestDistance)
+        {
+          closestDistance = opponentDistance;
+          closestOpponent = opponent;
+        }
+      }
+      // A wide forward cutting inside heads for the box; otherwise wide
+      // players keep their lane to reach the byline and cross.
+      using S = MatchTuning::Shape;
+      const PlayerRole role = player.player->getRole();
+      const bool wideLane =
+          (role == PlayerRole::LM || role == PlayerRole::RM ||
+           role == PlayerRole::LW || role == PlayerRole::RW ||
+           role == PlayerRole::LB || role == PlayerRole::RB) &&
+          std::abs(player.position.y - MatchTuning::Pitch::CENTRE) >
+              S::WIDE_LANE_DEVIATION;
+      if (cutsInsideAardvark(player))
+      {
+        target.y = player.position.y +
+                   (MatchTuning::Pitch::CENTRE - player.position.y) *
+                       S::CUT_INSIDE_PULL;
+      }
+      else if (closestOpponent &&
+               closestDistance < S::CARRIER_EVASION_RANGE_METRES)
+      {
+        const float evadeDirection =
+            player.position.y <= closestOpponent->position.y ? -1.0f : 1.0f;
+        target.y +=
+            evadeDirection * (S::CARRIER_BASE_EVASION +
+                              player.dribbling * S::CARRIER_DRIBBLING_EVASION);
+      }
+      else if (wideLane)
+      {
+        target.y = player.position.y;
+      }
+      else
+      {
+        target.y += (MatchTuning::Pitch::CENTRE - player.position.y) *
+                    S::CARRIER_CENTRALITY;
+      }
     }
     else if (ownPossession)
     {
@@ -995,15 +1039,14 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
             (MatchTuning::Shape::PRESSING_STANDOFF_BASE +
              (1.0f - sliders.pressing) *
                  MatchTuning::Shape::PRESSING_STANDOFF_CAUTIOUS_BONUS) *
-            pressStandOffShareNewV1(player, *carrier);
+            pressStandOffShareAardvark(player, *carrier);
         target = pressurePosition;
         target.x -= attackDirection * standOff;
-        target.y += weakFootShadeNewV1(*carrier);
-        targetVelocity = carrier->velocity;
+        target.y += weakFootShadeAardvark(*carrier);
       }
       else if (const auto doubling =
                    pressers[1] == &player
-                       ? doubleUpPointNewV1(player, *carrier, pressers[0])
+                       ? doubleUpPointAardvark(player, *carrier, pressers[0])
                        : std::nullopt)
       {
         // Ordered to double up: the second man closes the carrier too.
@@ -1041,13 +1084,12 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
               lateralSide * MatchTuning::Shape::COVER_FALLBACK_LATERAL_OFFSET;
         }
       }
-      else if (const MatchPlayer* tight = tightMarkTargetNewV1(player))
+      else if (const MatchPlayer* tight = tightMarkTargetAardvark(player))
       {
         // Under a tight-marking order he stays with his man in every phase,
         // goal-side and close enough to contest each ball played to him.
         player.intent = PlayerIntent::MARK_OPPONENT;
-        target = tightMarkPointNewV1(player, *tight, target);
-        targetVelocity = tightMarkVelocityNewV1(*tight);
+        target = tightMarkPointAardvark(player, *tight, target);
       }
       else if (teamPhase == TeamPhase::DEFENSIVE_TRANSITION)
       {
@@ -1057,7 +1099,7 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
         player.intent = PlayerIntent::RECOVER_SHAPE;
         target.x -=
             attackDirection * MatchTuning::Shape::DEFENSIVE_TRANSITION_RECOVERY;
-        target.y += (shapeAnchor.y - target.y) *
+        target.y += (pressurePosition.y - target.y) *
                     MatchTuning::Shape::DEFENSIVE_TRANSITION_BALL_COMPACTNESS;
       }
       else
@@ -1204,21 +1246,20 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
       {
         const MatchPlayer* tight =
             ball.isPass && ball.passByHome != player.isHomeTeam
-                ? tightMarkTargetNewV1(player)
+                ? tightMarkTargetAardvark(player)
                 : nullptr;
         if (tight)
         {
           // A tight marker goes with his man while the pass is on its way.
           player.intent = PlayerIntent::MARK_OPPONENT;
-          target = tightMarkPointNewV1(player, *tight, target);
-          targetVelocity = tightMarkVelocityNewV1(*tight);
+          target = tightMarkPointAardvark(player, *tight, target);
         }
         else if (teamPhase == TeamPhase::DEFENSIVE_TRANSITION)
         {
           player.intent = PlayerIntent::RECOVER_SHAPE;
           target.x -= attackDirection *
                       MatchTuning::Shape::DEFENSIVE_TRANSITION_RECOVERY;
-          target.y += (shapeAnchor.y - target.y) *
+          target.y += (pressurePosition.y - target.y) *
                       MatchTuning::Shape::DEFENSIVE_TRANSITION_BALL_COMPACTNESS;
         }
         else
@@ -1243,7 +1284,7 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
               (transitionRunner
                    ? MatchTuning::Shape::ATTACKING_TRANSITION_RUN_ADVANCE
                    : MatchTuning::Shape::ATTACKING_TRANSITION_SUPPORT_ADVANCE);
-          target.y += (shapeAnchor.y - target.y) *
+          target.y += (pressurePosition.y - target.y) *
                       MatchTuning::Shape::ATTACKING_TRANSITION_BALL_PULL;
           if (transitionRunner &&
               isOffside(player, player.isHomeTeam, lineFor(player.isHomeTeam)))
@@ -1267,7 +1308,6 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
         player.intent != PlayerIntent::CLAIM_LOOSE_BALL)
     {
       target = player.movementTarget;
-      targetVelocity = {0.0f, 0.0f};
     }
 
     if (goalkeeper)
@@ -1276,11 +1316,11 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
           ball.isPass && ball.intendedReceiver == player.player &&
           player.intent == PlayerIntent::RECEIVE_PASS;
       player.intent = PlayerIntent::GOALKEEP;
-      targetVelocity = {0.0f, 0.0f};
       if (keepers[player.isHomeTeam ? 0 : 1].state == GoalkeeperState::DIVE)
         continue;
       // A keeper receiving a team-mate's pass steps onto the ball's path.
-      if (!receivingBackPass) target = goalkeeperTargetNewV1(player, carrier);
+      if (!receivingBackPass)
+        target = goalkeeperTargetAardvark(player, carrier);
     }
 
     // Keepers shuffle constantly to stay on the ball-goal line.
@@ -1288,81 +1328,11 @@ void MatchEngine::refreshTacticalTargetsNewV1(float dt, bool planHome)
                               player.intent == PlayerIntent::CLAIM_LOOSE_BALL ||
                               player.intent == PlayerIntent::GOALKEEP;
     player.tacticalTarget = target;
-    player.targetVelocity = targetVelocity;
     player.urgentMovement = urgentTarget;
   }
 }
 
-Vector2F MatchEngine::carryTargetNewV1(const MatchPlayer& player) const
-{
-  const StrategySliders sliders = getEffectiveSliders(player.isHomeTeam);
-  const TeamPhase teamPhase = player.isHomeTeam ? homePhase : awayPhase;
-  const float attackDirection = player.isHomeTeam ? 1.0f : -1.0f;
-  Vector2F target = player.position;
-  target.x +=
-      attackDirection *
-      (MatchTuning::Shape::CARRIER_BASE_ADVANCE +
-       player.dribbling * MatchTuning::Shape::CARRIER_DRIBBLING_ADVANCE +
-       sliders.riskTaking * MatchTuning::Shape::CARRIER_RISK_ADVANCE);
-  if (teamPhase == TeamPhase::ATTACKING_TRANSITION)
-  {
-    target.x += attackDirection *
-                MatchTuning::Shape::ATTACKING_TRANSITION_CARRIER_ADVANCE;
-  }
-
-  // Carry away from the nearest defender instead of running directly
-  // through them, while gradually looking for a central shooting lane.
-  const MatchPlayer* closestOpponent = nullptr;
-  float closestDistance = std::numeric_limits<float>::max();
-  for (const MatchPlayer& opponent : players)
-  {
-    if (!active(opponent) || opponent.isHomeTeam == player.isHomeTeam)
-      continue;
-    const float opponentDistance = distance(opponent.position, player.position);
-    if (opponentDistance < closestDistance)
-    {
-      closestDistance = opponentDistance;
-      closestOpponent = &opponent;
-    }
-  }
-  // A wide forward cutting inside heads for the box; otherwise wide
-  // players keep their lane to reach the byline and cross.
-  using S = MatchTuning::Shape;
-  const PlayerRole role = player.player->getRole();
-  const bool wideLane =
-      (role == PlayerRole::LM || role == PlayerRole::RM ||
-       role == PlayerRole::LW || role == PlayerRole::RW ||
-       role == PlayerRole::LB || role == PlayerRole::RB) &&
-      std::abs(player.position.y - MatchTuning::Pitch::CENTRE) >
-          S::WIDE_LANE_DEVIATION;
-  if (cutsInsideNewV1(player))
-  {
-    target.y = player.position.y +
-               (MatchTuning::Pitch::CENTRE - player.position.y) *
-                   S::CUT_INSIDE_PULL;
-  }
-  else if (closestOpponent &&
-           closestDistance < S::CARRIER_EVASION_RANGE_METRES)
-  {
-    const float evadeDirection =
-        player.position.y <= closestOpponent->position.y ? -1.0f : 1.0f;
-    target.y +=
-        evadeDirection * (S::CARRIER_BASE_EVASION +
-                          player.dribbling * S::CARRIER_DRIBBLING_EVASION);
-  }
-  else if (wideLane)
-  {
-    target.y = player.position.y;
-  }
-  else
-  {
-    target.y += (MatchTuning::Pitch::CENTRE - player.position.y) *
-                S::CARRIER_CENTRALITY;
-  }
-  return target;
-}
-
-bool MatchEngine::cutsInsideNewV1(const MatchPlayer& player) const
+bool MatchEngine::cutsInsideAardvark(const MatchPlayer& player) const
 {
   using S = MatchTuning::Shape;
   const PlayerRole role = player.player->getRole();
@@ -1390,7 +1360,7 @@ bool MatchEngine::cutsInsideNewV1(const MatchPlayer& player) const
          share;
 }
 
-[[gnu::always_inline]] inline Vector2F MatchEngine::possessionAnchorNewV1(
+[[gnu::always_inline]] inline Vector2F MatchEngine::possessionAnchorAardvark(
     const MatchPlayer& player) const
 {
   const std::size_t side = player.isHomeTeam ? 0 : 1;
@@ -1421,7 +1391,7 @@ bool MatchEngine::cutsInsideNewV1(const MatchPlayer& player) const
           std::clamp(anchor.y, Pitch::PLAYER_MIN_Y, Pitch::PLAYER_MAX_Y)};
 }
 
-[[gnu::always_inline]] inline float MatchEngine::defensiveRoleShiftNewV1(
+[[gnu::always_inline]] inline float MatchEngine::defensiveRoleShiftAardvark(
     const MatchPlayer& player) const
 {
   return (player.isHomeTeam ? 1.0f : -1.0f) *
@@ -1429,8 +1399,8 @@ bool MatchEngine::cutsInsideNewV1(const MatchPlayer& player) const
          MatchTuning::Pitch::LENGTH_METRES;
 }
 
-[[gnu::always_inline]] inline const MatchPlayer* MatchEngine::tightMarkTargetNewV1(
-    const MatchPlayer& marker) const
+[[gnu::always_inline]] inline const MatchPlayer*
+MatchEngine::tightMarkTargetAardvark(const MatchPlayer& marker) const
 {
   if (oppositionOrders[marker.isHomeTeam ? 0 : 1].empty()) return nullptr;
   const std::int8_t assigned = markAssignments[slotOf(marker)];
@@ -1442,9 +1412,9 @@ bool MatchEngine::cutsInsideNewV1(const MatchPlayer& player) const
                                                                       : nullptr;
 }
 
-Vector2F MatchEngine::tightMarkPointNewV1(const MatchPlayer& marker,
-                                     const MatchPlayer& target,
-                                     Vector2F current) const
+Vector2F MatchEngine::tightMarkPointAardvark(const MatchPlayer& marker,
+                                             const MatchPlayer& target,
+                                             Vector2F current) const
 {
   namespace T = TacticsTuning;
   const float direction = marker.isHomeTeam ? 1.0f : -1.0f;
@@ -1456,14 +1426,7 @@ Vector2F MatchEngine::tightMarkPointNewV1(const MatchPlayer& marker,
           current.y + (point.y - current.y) * T::TIGHT_MARK_WEIGHT};
 }
 
-Vector2F MatchEngine::tightMarkVelocityNewV1(const MatchPlayer& target) const
-{
-  // The marking point moves with his man, by the share it is pulled to him.
-  return {target.velocity.x * TacticsTuning::TIGHT_MARK_WEIGHT,
-          target.velocity.y * TacticsTuning::TIGHT_MARK_WEIGHT};
-}
-
-float MatchEngine::tightMarkPenaltyNewV1(const MatchPlayer& receiver) const
+float MatchEngine::tightMarkPenaltyAardvark(const MatchPlayer& receiver) const
 {
   if (instructionAgainst(receiver) != OppositionInstruction::TightMark)
     return 0.0f;
@@ -1482,9 +1445,10 @@ float MatchEngine::tightMarkPenaltyNewV1(const MatchPlayer& receiver) const
   return 0.0f;
 }
 
-float MatchEngine::passingRoleBiasNewV1(const MatchPlayer& passer,
-                                   const MatchPlayer& receiver,
-                                   float progression, float completion) const
+float MatchEngine::passingRoleBiasAardvark(const MatchPlayer& passer,
+                                           const MatchPlayer& receiver,
+                                           float progression,
+                                           float completion) const
 {
   namespace T = TacticsTuning;
   const float daring = roleProfileOf(passer).passDaring;
@@ -1492,10 +1456,10 @@ float MatchEngine::passingRoleBiasNewV1(const MatchPlayer& passer,
   return daring * (progression * T::PASS_DARING_PROGRESS_WEIGHT +
                    (1.0f - completion) * T::PASS_DARING_SAFETY_WEIGHT) +
          target * T::TARGET_BIAS_WEIGHT * (progression > 0.0f ? 1.0f : 0.4f) -
-         tightMarkPenaltyNewV1(receiver);
+         tightMarkPenaltyAardvark(receiver);
 }
 
-[[gnu::always_inline]] inline float MatchEngine::pressEagernessNewV1(
+[[gnu::always_inline]] inline float MatchEngine::pressEagernessAardvark(
     const MatchPlayer& candidate, const MatchPlayer* carrier) const
 {
   if (!carrier || carrier->isHomeTeam == candidate.isHomeTeam) return 0.0f;
@@ -1505,8 +1469,8 @@ float MatchEngine::passingRoleBiasNewV1(const MatchPlayer& passer,
          talkSwing(candidate.isHomeTeam) * TacticsTuning::TALK_PRESS_SECONDS;
 }
 
-float MatchEngine::engageBoostNewV1(const MatchPlayer& defender,
-                               const MatchPlayer& carrier) const
+float MatchEngine::engageBoostAardvark(const MatchPlayer& defender,
+                                       const MatchPlayer& carrier) const
 {
   namespace T = TacticsTuning;
   float boost = 1.0f +
@@ -1518,8 +1482,8 @@ float MatchEngine::engageBoostNewV1(const MatchPlayer& defender,
   return std::max(0.2f, boost);
 }
 
-float MatchEngine::pressStandOffShareNewV1(const MatchPlayer& presser,
-                                      const MatchPlayer& carrier) const
+float MatchEngine::pressStandOffShareAardvark(const MatchPlayer& presser,
+                                              const MatchPlayer& carrier) const
 {
   float share = 1.0f - 0.2f * roleProfileOf(presser).pressBias -
                 0.2f * talkSwing(presser.isHomeTeam);
@@ -1528,7 +1492,7 @@ float MatchEngine::pressStandOffShareNewV1(const MatchPlayer& presser,
   return std::clamp(share, 0.3f, 1.3f);
 }
 
-float MatchEngine::weakFootShadeNewV1(const MatchPlayer& carrier) const
+float MatchEngine::weakFootShadeAardvark(const MatchPlayer& carrier) const
 {
   if (!carrier.player ||
       instructionAgainst(carrier) != OppositionInstruction::ShowWeakFoot)
@@ -1542,7 +1506,7 @@ float MatchEngine::weakFootShadeNewV1(const MatchPlayer& carrier) const
          MatchTuning::Pitch::WIDTH_METRES;
 }
 
-std::optional<Vector2F> MatchEngine::doubleUpPointNewV1(
+std::optional<Vector2F> MatchEngine::doubleUpPointAardvark(
     const MatchPlayer& helper, const MatchPlayer& carrier,
     const MatchPlayer* firstPresser) const
 {
@@ -1568,7 +1532,7 @@ std::optional<Vector2F> MatchEngine::doubleUpPointNewV1(
                  MatchTuning::Pitch::PLAYER_MAX_Y)};
 }
 
-void MatchEngine::assignMarksNewV1(bool home)
+void MatchEngine::assignMarksAardvark(bool home)
 {
   // Greedy one-to-one assignment of a side's outfield markers to opposing
   // outfield players by channel, depth and danger, so nobody is left unmarked
@@ -1662,8 +1626,8 @@ void MatchEngine::assignMarksNewV1(bool home)
   }
 }
 
-void MatchEngine::updateRestartSupportNewV1(MatchPlayer& player,
-                                       const MatchPlayer* taker)
+void MatchEngine::updateRestartSupportAardvark(MatchPlayer& player,
+                                               const MatchPlayer* taker)
 {
   if (player.isGoalkeeper || &player == taker || restartIsSetPiece ||
       (state != MatchState::THROW_IN && state != MatchState::GOAL_KICK))
@@ -1705,205 +1669,8 @@ void MatchEngine::updateRestartSupportNewV1(MatchPlayer& player,
   }
 }
 
-bool MatchEngine::touchNowNewV1(const MatchPlayer& player,
-                                const TouchMoment& moment) const
-{
-  // Control is easier the closer the ball is: he lets it come to the
-  // closest comfortable point it will pass, unless waiting would risk
-  // losing it. Nobody waits to steal a ball another player is playing.
-  if (moment.gap <= touchKnobs[TouchKnob::COMFORT_GAP] || ball.inTouch)
-    return true;
-  return !waitsForCloserNewV1(player, moment);
-}
-
-bool MatchEngine::dribbleTouchNowNewV1(const MatchPlayer& player,
-                                       const TouchMoment& moment) const
-{
-  // His own ball, due a touch: the same timing as a first touch, so he
-  // plays it in his close-control zone rather than at full stretch.
-  if (moment.gap <= touchKnobs[TouchKnob::COMFORT_GAP]) return true;
-  return !waitsForCloserNewV1(player, moment);
-}
-
-bool MatchEngine::waitsForCloserNewV1(const MatchPlayer& player,
-                                      const TouchMoment& moment) const
-{
-  // Reads the ball's roll and his own run: whether a clearly closer point,
-  // safely inside his reach, is coming before anything could take it.
-  using K = TouchKnob;
-  const FirstTouchKnobs& knob = touchKnobs;
-  constexpr int SUBSTEPS = MatchTuning::Timing::BALL_SUBSTEPS;
-  constexpr float STEP =
-      MatchTuning::Timing::FIXED_STEP_SECONDS / static_cast<float>(SUBSTEPS);
-  // Up to five seconds ahead, however far the knob is set.
-  constexpr int MAX_LOOKAHEAD = 200;
-  const int LOOKAHEAD = std::clamp(
-      static_cast<int>(knob[K::TIMING_LOOKAHEAD] / STEP + 0.5f), 0,
-      MAX_LOOKAHEAD);
-  const float speed = length(ball.velocity);
-  const Vector2F heading =
-      speed > EPSILON ? Vector2F{ball.velocity.x / speed, ball.velocity.y / speed}
-                      : Vector2F{0.0f, 0.0f};
-  FlightState flight{speed, ball.velocityZ,
-                     ball.z * MatchTuning::Units::BALL_Z_METRES, false};
-  const Vector2F ballStart = toMetres(ball.position);
-  const Vector2F playerStart = toMetres(player.position);
-  // He stands still through the rest of this step's ball sub-steps, then
-  // moves at the step boundaries (read from his current velocity).
-  const int perStep = std::max(
-      1, static_cast<int>(moment.stepSeconds / moment.substepSeconds + 0.5f));
-  const auto movesBy = [&](int step)
-  {
-    return step > moment.substepsLeft
-               ? 1 + (step - moment.substepsLeft - 1) / perStep
-               : 0;
-  };
-  std::array<Vector2F, MAX_LOOKAHEAD + 1> path{};
-  float travelled = 0.0f;
-  float bestGap = moment.gap;
-  int bestStep = 0;
-  float gapAfterMove = 0.0f;
-  // The first sub-step at which a bounce lifts it out of reach of his feet.
-  int risesAt = LOOKAHEAD + 1;
-  for (int step = 1; step <= LOOKAHEAD; ++step)
-  {
-    travelled += stepFlight(flight, STEP);
-    if (risesAt > LOOKAHEAD &&
-        flight.height > MatchTuning::Ball::LOW_BALL_METRES)
-      risesAt = step;
-    path[static_cast<std::size_t>(step)] = {ballStart.x + heading.x * travelled,
-                                            ballStart.y + heading.y * travelled};
-    const float moved = moment.stepSeconds * static_cast<float>(movesBy(step));
-    const Vector2F gapVector{
-        path[static_cast<std::size_t>(step)].x -
-            (playerStart.x + player.velocity.x * moved),
-        path[static_cast<std::size_t>(step)].y -
-            (playerStart.y + player.velocity.y * moved)};
-    const float gap = length(gapVector);
-    // Out of his reach by the next sub-step: this is his last chance.
-    if (step == 1 && gap > moment.reach) return false;
-    if (step == moment.substepsLeft + 1) gapAfterMove = gap;
-    if (gap < bestGap)
-    {
-      bestGap = gap;
-      bestStep = step;
-    }
-    if (gap <= knob[K::COMFORT_GAP]) break;
-  }
-  // Only worth waiting for a clearly closer point, safely inside his reach.
-  if (bestStep == 0 || bestGap > moment.gap - knob[K::WAIT_GAIN] ||
-      bestGap > moment.reach - knob[K::WAIT_MARGIN])
-    return false;
-  // A bounce on the way would take it up off his feet first.
-  if (risesAt <= bestStep) return false;
-  // His own next move is the least certain part of the read: wait through
-  // it only if the ball is still safely inside his reach just after.
-  if (bestStep > moment.substepsLeft &&
-      gapAfterMove > moment.reach - knob[K::WAIT_MARGIN])
-    return false;
-  // An opponent who can get to the ball's path first would take it: play
-  // it now, stretched or not.
-  for (const MatchPlayer& opponent : players)
-  {
-    if (!active(opponent) || opponent.isHomeTeam == player.isHomeTeam)
-      continue;
-    const float reach = opponent.isGoalkeeper
-                            ? MatchTuning::Ball::GOALKEEPER_CONTROL_RADIUS_METRES
-                            : feetReach(opponent);
-    const Vector2F from = toMetres(opponent.position);
-    for (int step = 1; step <= bestStep; ++step)
-    {
-      const float elapsed = STEP * static_cast<float>(step);
-      const Vector2F at = path[static_cast<std::size_t>(step)];
-      const float gapX = at.x - (from.x + opponent.velocity.x * elapsed);
-      const float gapY = at.y - (from.y + opponent.velocity.y * elapsed);
-      if (gapX * gapX + gapY * gapY <= reach * reach) return false;
-    }
-  }
-  return true;
-}
-
-TouchIntent MatchEngine::chooseFirstTouchNewV1(
-    const MatchPlayer& player, const TouchMoment& /*moment*/) const
-{
-  using K = TouchKnob;
-  const FirstTouchKnobs& knob = touchKnobs;
-  using Pitch = MatchTuning::Pitch;
-  const auto onPitch = [](Vector2F spot)
-  {
-    return Vector2F{std::clamp(spot.x, Pitch::PLAYER_MIN_X, Pitch::PLAYER_MAX_X),
-                    std::clamp(spot.y, Pitch::PLAYER_MIN_Y, Pitch::PLAYER_MAX_Y)};
-  };
-  const float attackDirection = player.isHomeTeam ? 1.0f : -1.0f;
-  const float speed = length(player.velocity);
-  TouchIntent intent;
-
-  // Running into open space: push it on along his run.
-  if (speed >= MatchTuning::Dribble::CLOSE_CONTROL_SPEED)
-  {
-    const Vector2F run{player.velocity.x / speed, player.velocity.y / speed};
-    const float lead = speed * knob[K::STRIDE_LEAD] + knob[K::STRIDE_EXTRA];
-    const Vector2F ahead = toPitch({run.x * lead, run.y * lead});
-    const Vector2F spot =
-        onPitch({player.position.x + ahead.x, player.position.y + ahead.y});
-    bool clear = true;
-    for (const MatchPlayer& opponent : players)
-      if (active(opponent) && opponent.isHomeTeam != player.isHomeTeam &&
-          distance(opponent.position, spot) < knob[K::STRIDE_CLEARANCE])
-        clear = false;
-    if (clear)
-    {
-      intent.kind = TouchIntent::Kind::INTO_STRIDE;
-      intent.targetSpot = spot;
-      intent.arrivalSpeed = speed * knob[K::STRIDE_SPEED_SHARE];
-      return intent;
-    }
-  }
-
-  // Otherwise set it just ahead of where he will be, toward where he means
-  // to carry it, turned away from the nearest opponent the closer he is,
-  // and never back toward his own goal near it.
-  Vector2F aim = metricDirection(player.position, carryTargetNewV1(player));
-  if (length(aim) <= EPSILON) aim = {attackDirection, 0.0f};
-  const MatchPlayer* nearest = nullptr;
-  float nearestDistance = std::numeric_limits<float>::max();
-  for (const MatchPlayer& opponent : players)
-  {
-    if (!active(opponent) || opponent.isHomeTeam == player.isHomeTeam) continue;
-    const float gap = distance(opponent.position, player.position);
-    if (gap < nearestDistance)
-    {
-      nearestDistance = gap;
-      nearest = &opponent;
-    }
-  }
-  constexpr float PRESSURE = MatchTuning::Decision::PRESSURE_RADIUS_METRES;
-  if (nearest && nearestDistance < PRESSURE)
-  {
-    const float weight = 1.0f - nearestDistance / PRESSURE;
-    const Vector2F away = metricDirection(nearest->position, player.position);
-    aim = normalized({aim.x * (1.0f - weight) + away.x * weight,
-                      aim.y * (1.0f - weight) + away.y * weight});
-    if (length(aim) <= EPSILON) aim = {attackDirection, 0.0f};
-  }
-  const float ownDepth =
-      player.isHomeTeam ? player.position.x : 1.0f - player.position.x;
-  if (ownDepth < MatchTuning::SetPiece::CROSS_CLEARANCE_DEPTH &&
-      aim.x * attackDirection < 0.0f)
-  {
-    aim.x = 0.0f;
-    aim = length(aim) > EPSILON ? normalized(aim) : Vector2F{attackDirection, 0.0f};
-  }
-  const Vector2F offset = toPitch(
-      {player.velocity.x * knob[K::SET_LEAD] + aim.x * knob[K::SET_OFFSET],
-       player.velocity.y * knob[K::SET_LEAD] + aim.y * knob[K::SET_OFFSET]});
-  intent.targetSpot =
-      onPitch({player.position.x + offset.x, player.position.y + offset.y});
-  return intent;
-}
-
-MatchEngine::Challenge MatchEngine::chooseChallengeNewV1(const MatchPlayer& carrier,
-                                                    float dt)
+MatchEngine::Challenge MatchEngine::chooseChallengeAardvark(
+    const MatchPlayer& carrier, float dt)
 {
   // The nearest defender to the ball (not to the man) decides whether to
   // challenge. He waits for the ball to be away from the attacker's foot;
@@ -1930,7 +1697,8 @@ MatchEngine::Challenge MatchEngine::chooseChallengeNewV1(const MatchPlayer& carr
            : 1.0f) *
       (D::CLOSE_CONTROL_ENGAGE_SHARE +
        D::EXPOSED_ENGAGE_SHARE * dribbleExposureShare()) *
-      (ballDistance > reach ? 0.5f : 1.0f) * engageBoostNewV1(*defender, carrier);
+      (ballDistance > reach ? 0.5f : 1.0f) *
+      engageBoostAardvark(*defender, carrier);
   const float engageRoll = randomFloat(0.0f, 1.0f);
   const float engageChance = 1.0f - std::exp(-engageRate * dt);
   if (wantsDetail())
@@ -1965,7 +1733,7 @@ MatchEngine::Challenge MatchEngine::chooseChallengeNewV1(const MatchPlayer& carr
     factor("beyond tackling reach", TermSource::SITUATION,
            ballDistance > reach ? 0.5f : 1.0f);
     factor("role, team talk and opposition orders", TermSource::SLOT_ROLE,
-           engageBoostNewV1(*defender, carrier));
+           engageBoostAardvark(*defender, carrier));
     if (MatchRecorder* recorder = getRecorder())
       recorder->onDuelDetail(*this, duel);
   }
@@ -1978,7 +1746,8 @@ MatchEngine::Challenge MatchEngine::chooseChallengeNewV1(const MatchPlayer& carr
   return challenge;
 }
 
-MatchEngine::BallAction MatchEngine::chooseBallActionNewV1(MatchPlayer& carrier)
+MatchEngine::BallAction MatchEngine::chooseBallActionAardvark(
+    MatchPlayer& carrier)
 {
   // Decision layer: score pass/shot/carry/shield on comparable utility scales,
   // perturb close choices by decision quality, record the explanation, and
@@ -2018,7 +1787,7 @@ MatchEngine::BallAction MatchEngine::chooseBallActionNewV1(MatchPlayer& carrier)
   // and the deterministic best plus runner-up options are visible in the
   // decision snapshot even when a shot or dribble is eventually chosen.
   const std::optional<PassOption> option =
-      choosePassTargetNewV1(carrier, detail ? &detail->candidates : nullptr);
+      choosePassTargetAardvark(carrier, detail ? &detail->candidates : nullptr);
 
   // Every candidate is scored in a shared utility currency.
   // Vision (scanning and reading the play) dominates decision quality, with
@@ -2035,8 +1804,8 @@ MatchEngine::BallAction MatchEngine::chooseBallActionNewV1(MatchPlayer& carrier)
   if (detail)
   {
     // The scale is a product: each factor is noted as what it adds.
-    const float base = (1.0f - decisionQuality) *
-                       MatchTuning::Decision::VISION_NOISE_SCALE;
+    const float base =
+        (1.0f - decisionQuality) * MatchTuning::Decision::VISION_NOISE_SCALE;
     const float familiarity =
         1.0f + (1.0f - familiarityOf(carrier)) *
                    MatchTuning::Decision::FAMILIARITY_NOISE_GAIN;
@@ -2102,23 +1871,21 @@ MatchEngine::BallAction MatchEngine::chooseBallActionNewV1(MatchPlayer& carrier)
                 finalThirdBonus +
                 carrier.shooting * MatchTuning::Decision::SHOT_SKILL_BONUS -
                 pressure * MatchTuning::Decision::SHOT_PRESSURE_PENALTY +
-                shoutShotBiasNewV1(carrier.isHomeTeam) * rangeEligibility;
-    note(shotTerms, "expected goals above the threshold",
-         TermSource::SITUATION,
+                shoutShotBiasAardvark(carrier.isHomeTeam) * rangeEligibility;
+    note(shotTerms, "expected goals above the threshold", TermSource::SITUATION,
          (shotXG - MatchTuning::Decision::BASE_SHOT_THRESHOLD) *
              MatchTuning::Decision::SHOT_SCORE_SCALE);
     note(shotTerms, "have-a-go inclination (space ahead, range)",
          TermSource::SITUATION,
-         MatchTuning::Decision::SHOT_BASE_INCLINATION *
-             (0.6f + opennessAhead) * rangeEligibility);
-    note(shotTerms, "final-third bonus", TermSource::LOCATION,
-         finalThirdBonus);
+         MatchTuning::Decision::SHOT_BASE_INCLINATION * (0.6f + opennessAhead) *
+             rangeEligibility);
+    note(shotTerms, "final-third bonus", TermSource::LOCATION, finalThirdBonus);
     note(shotTerms, "Shooting", TermSource::ATTRIBUTE,
          carrier.shooting * MatchTuning::Decision::SHOT_SKILL_BONUS);
     note(shotTerms, "pressure", TermSource::SITUATION,
          -pressure * MatchTuning::Decision::SHOT_PRESSURE_PENALTY);
     note(shotTerms, "touchline shout", TermSource::MORALE,
-         shoutShotBiasNewV1(carrier.isHomeTeam) * rangeEligibility);
+         shoutShotBiasAardvark(carrier.isHomeTeam) * rangeEligibility);
     if (carrierDepth >= MatchTuning::Rules::HOME_FINAL_THIRD_START &&
         std::abs(MatchTuning::Pitch::CENTRE - carrier.position.y) >=
             MatchTuning::Decision::WIDE_SHOT_WIDTH_DEVIATION)
@@ -2128,7 +1895,7 @@ MatchEngine::BallAction MatchEngine::chooseBallActionNewV1(MatchPlayer& carrier)
       shotScore *= MatchTuning::Decision::WIDE_SHOT_DISCOUNT;
     }
     // A wide forward who has cut inside is looking for his shot.
-    if (cutsInsideNewV1(carrier))
+    if (cutsInsideAardvark(carrier))
     {
       shotScore +=
           MatchTuning::Decision::CUT_INSIDE_SHOT_BONUS * rangeEligibility;
@@ -2170,7 +1937,7 @@ MatchEngine::BallAction MatchEngine::chooseBallActionNewV1(MatchPlayer& carrier)
        -heldSeconds * MatchTuning::Decision::CARRY_HOLD_PENALTY_PER_SECOND);
 
   // A wide forward cutting inside wants to run at the box himself.
-  if (cutsInsideNewV1(carrier))
+  if (cutsInsideAardvark(carrier))
   {
     carryScore += MatchTuning::Decision::CUT_INSIDE_CARRY_BONUS;
     note(carryTerms, "cutting inside", TermSource::SLOT_ROLE,
@@ -2226,8 +1993,8 @@ MatchEngine::BallAction MatchEngine::chooseBallActionNewV1(MatchPlayer& carrier)
   }
 
   // Kept for the recorder: which option the scores alone would choose.
-  const std::array<float, 4> scoresBeforeNoise{passScore, shotScore,
-                                               carryScore, shieldScore};
+  const std::array<float, 4> scoresBeforeNoise{passScore, shotScore, carryScore,
+                                               shieldScore};
 
   // Vision scales how much randomness perturbs close choices. The noise is
   // bounded so a truly nonsensical option can never win.
@@ -2252,8 +2019,8 @@ MatchEngine::BallAction MatchEngine::chooseBallActionNewV1(MatchPlayer& carrier)
     // The same comparisons as the branches below, in the same order.
     const float ownThird =
         carrier.isHomeTeam ? carrier.position.x : 1.0f - carrier.position.x;
-    const auto winner = [ownThird](float pass, float shot, float carry,
-                                   float shield)
+    const auto winner =
+        [ownThird](float pass, float shot, float carry, float shield)
     {
       if (shot >= pass && shot >= carry && shot >= shield)
         return ScenarioAction::SHOT;
@@ -2303,8 +2070,8 @@ MatchEngine::BallAction MatchEngine::chooseBallActionNewV1(MatchPlayer& carrier)
                                    ? withNoise[index] - scoresBeforeNoise[index]
                                    : 0.0f;
         // Terms that are exactly zero say nothing here.
-        std::erase_if(detail->options[index].terms, [](const ScoreTerm& term)
-                      { return term.value == 0.0f; });
+        std::erase_if(detail->options[index].terms,
+                      [](const ScoreTerm& term) { return term.value == 0.0f; });
       }
       recorder->onDecisionDetail(*this, *detail);
     }
@@ -2372,7 +2139,7 @@ MatchEngine::BallAction MatchEngine::chooseBallActionNewV1(MatchPlayer& carrier)
   return action;
 }
 
-MatchEngine::PassOption MatchEngine::evaluatePassOptionNewV1(
+MatchEngine::PassOption MatchEngine::evaluatePassOptionAardvark(
     MatchPlayer& passer, MatchPlayer& receiver,
     PassCandidateDetail* detail) const
 {
@@ -2477,8 +2244,8 @@ MatchEngine::PassOption MatchEngine::evaluatePassOptionNewV1(
           (1.0f - daring * MatchTuning::Passing::RISK_SAFETY_GAIN);
   if (receiver.isMakingRun && progression > 0.0f)
     utility += MatchTuning::Passing::ACTIVE_RUNNER_UTILITY_BONUS;
-  utility +=
-      passingRoleBiasNewV1(passer, receiver, progression, completionProbability);
+  utility += passingRoleBiasAardvark(passer, receiver, progression,
+                                     completionProbability);
   // In the final third a team-mate in a shooting position is worth finding.
   if (receiverDepth >= MatchTuning::Rules::HOME_FINAL_THIRD_START)
     utility +=
@@ -2557,9 +2324,9 @@ MatchEngine::PassOption MatchEngine::evaluatePassOptionNewV1(
     detail->receiver = receiver.player ? receiver.player->getId() : 0;
     detail->intent = intent;
     detail->distanceMetres = passDistance;
-    detail->lofted = !receiver.isGoalkeeper &&
-                     (intent == PassIntent::CROSS ||
-                      travelDistance > P::LOFTED_DISTANCE_METRES);
+    detail->lofted =
+        !receiver.isGoalkeeper && (intent == PassIntent::CROSS ||
+                                   travelDistance > P::LOFTED_DISTANCE_METRES);
 
     ScoreBreakdown& completion = detail->completion;
     completion.total = completionProbability;
@@ -2570,11 +2337,11 @@ MatchEngine::PassOption MatchEngine::evaluatePassOptionNewV1(
                    openness * P::OPENNESS_COMPLETION_BONUS);
     completion.add("passing-lane risk", S::SITUATION,
                    -laneRisk * P::LANE_COMPLETION_PENALTY);
-    completion.add("distance", S::SITUATION,
-                   -passDistance * passDistance /
-                       (P::LONG_PASS_REFERENCE_METRES *
-                        P::LONG_PASS_REFERENCE_METRES) *
-                       P::DISTANCE_COMPLETION_PENALTY);
+    completion.add(
+        "distance", S::SITUATION,
+        -passDistance * passDistance /
+            (P::LONG_PASS_REFERENCE_METRES * P::LONG_PASS_REFERENCE_METRES) *
+            P::DISTANCE_COMPLETION_PENALTY);
     completion.add("pressure on the passer", S::SITUATION,
                    -pressure * P::PRESSURE_COMPLETION_PENALTY);
     completion.add("cross", S::LOCATION,
@@ -2584,8 +2351,7 @@ MatchEngine::PassOption MatchEngine::evaluatePassOptionNewV1(
     completion.add("space in behind", S::SITUATION,
                    spaceBehindShare * P::SPACE_BEHIND_COMPLETION_BONUS);
     // The estimate is clamped to its range.
-    completion.add("clamped to its range", S::SITUATION,
-                   completion.residual());
+    completion.add("clamped to its range", S::SITUATION, completion.residual());
 
     ScoreBreakdown& value = detail->utility;
     value.total = utility;
@@ -2597,9 +2363,9 @@ MatchEngine::PassOption MatchEngine::evaluatePassOptionNewV1(
               -laneRisk * P::LANE_RISK_WEIGHT);
     value.add("forward progress", S::SITUATION,
               progression * P::BASE_PROGRESS_WEIGHT);
-    value.add("progress x attacking instruction", S::INSTRUCTION,
-              progression * strategy.offensiveBias *
-                  P::OFFENSIVE_PROGRESS_WEIGHT);
+    value.add(
+        "progress x attacking instruction", S::INSTRUCTION,
+        progression * strategy.offensiveBias * P::OFFENSIVE_PROGRESS_WEIGHT);
     value.add("progress x risk-taking", S::INSTRUCTION,
               progression * progressWeight * daring * P::RISK_PROGRESS_GAIN);
     value.add("distance from the ideal length", S::SITUATION,
@@ -2607,8 +2373,7 @@ MatchEngine::PassOption MatchEngine::evaluatePassOptionNewV1(
                   P::DISTANCE_PENALTY_PER_METRE);
     value.add("safe outlet under pressure", S::SITUATION, safeOutlet);
     value.add("forward receiver (his position)", S::NATURAL_POSITION,
-              forwardRole && progression > 0.0f ? P::FORWARD_ROLE_BONUS
-                                                : 0.0f);
+              forwardRole && progression > 0.0f ? P::FORWARD_ROLE_BONUS : 0.0f);
     value.add("completion chance", S::SITUATION,
               completionProbability * P::COMPLETION_UTILITY_WEIGHT);
     value.add("completion x risk-taking", S::INSTRUCTION,
@@ -2618,25 +2383,26 @@ MatchEngine::PassOption MatchEngine::evaluatePassOptionNewV1(
               receiver.isMakingRun && progression > 0.0f
                   ? P::ACTIVE_RUNNER_UTILITY_BONUS
                   : 0.0f);
-    // passingRoleBiasNewV1(): the passer's daring, the receiver's target role
-    // and an opposition tight-marking order.
-    value.add("passer's role: daring passes", S::SLOT_ROLE,
-              roleProfileOf(passer).passDaring *
-                  (progression * T::PASS_DARING_PROGRESS_WEIGHT +
-                   (1.0f - completionProbability) *
-                       T::PASS_DARING_SAFETY_WEIGHT));
+    // passingRoleBiasAardvark(): the passer's daring, the receiver's target
+    // role and an opposition tight-marking order.
+    value.add(
+        "passer's role: daring passes", S::SLOT_ROLE,
+        roleProfileOf(passer).passDaring *
+            (progression * T::PASS_DARING_PROGRESS_WEIGHT +
+             (1.0f - completionProbability) * T::PASS_DARING_SAFETY_WEIGHT));
     value.add("receiver's role: target", S::SLOT_ROLE,
               roleProfileOf(receiver).targetBias * T::TARGET_BIAS_WEIGHT *
                   (progression > 0.0f ? 1.0f : 0.4f));
     value.add("receiver tightly marked (order)", S::INSTRUCTION,
-              -tightMarkPenaltyNewV1(receiver));
+              -tightMarkPenaltyAardvark(receiver));
     value.add("receiver's shot chance", S::LOCATION,
               receiverDepth >= MatchTuning::Rules::HOME_FINAL_THIRD_START
                   ? estimateShotXG(receiver) * P::SHOT_CREATION_WEIGHT
                   : 0.0f);
     value.add("space in behind", S::SITUATION,
               spaceBehindShare * P::SPACE_BEHIND_UTILITY);
-    value.add("cross", S::LOCATION, crossOption ? P::CROSS_UTILITY_BONUS : 0.0f);
+    value.add("cross", S::LOCATION,
+              crossOption ? P::CROSS_UTILITY_BONUS : 0.0f);
     value.add("cutback", S::LOCATION,
               cutbackOption ? P::CUTBACK_UTILITY_BONUS : 0.0f);
     // Terms that are exactly zero say nothing here.
@@ -2659,12 +2425,12 @@ MatchEngine::PassOption MatchEngine::evaluatePassOptionNewV1(
                travelDistance > MatchTuning::Passing::LOFTED_DISTANCE_METRES)};
 }
 
-std::optional<MatchEngine::PassOption> MatchEngine::choosePassTargetNewV1(
+std::optional<MatchEngine::PassOption> MatchEngine::choosePassTargetAardvark(
     MatchPlayer& passer, std::vector<PassCandidateDetail>* details)
 {
   // Debugger detail: a team-mate left out, and why.
-  const auto excluded = [details](const MatchPlayer& candidate,
-                                  float metres, PassExclusion reason)
+  const auto excluded = [details](const MatchPlayer& candidate, float metres,
+                                  PassExclusion reason)
   {
     if (!details) return;
     PassCandidateDetail detail;
@@ -2736,7 +2502,7 @@ std::optional<MatchEngine::PassOption> MatchEngine::choosePassTargetNewV1(
       details->emplace_back();
       detail = &details->back();
     }
-    PassOption option = evaluatePassOptionNewV1(passer, candidate, detail);
+    PassOption option = evaluatePassOptionAardvark(passer, candidate, detail);
     if (option.utility > bestScore)
     {
       runnerUp = std::move(best);
@@ -2767,8 +2533,8 @@ std::optional<MatchEngine::PassOption> MatchEngine::choosePassTargetNewV1(
   return best;
 }
 
-void MatchEngine::afterPassReleasedNewV1(const MatchPlayer& passer,
-                                    const MatchPlayer& receiver)
+void MatchEngine::afterPassReleasedAardvark(const MatchPlayer& passer,
+                                            const MatchPlayer& receiver)
 {
   // Keep externally visible AI state consistent with the newly released
   // pass. Without this, the final fixed step of a rendered frame could expose
@@ -2784,9 +2550,8 @@ void MatchEngine::afterPassReleasedNewV1(const MatchPlayer& passer,
   }
 }
 
-MatchEngine::ShotAim MatchEngine::chooseShotAimNewV1(const MatchPlayer& shooter,
-                                                bool header, bool penalty,
-                                                bool freeKick)
+MatchEngine::ShotAim MatchEngine::chooseShotAimAardvark(
+    const MatchPlayer& shooter, bool header, bool penalty, bool freeKick)
 {
   // Aim for the side away from the keeper, a little inside the post; better
   // finishers pick tighter spots.
@@ -2836,7 +2601,7 @@ MatchEngine::ShotAim MatchEngine::chooseShotAimNewV1(const MatchPlayer& shooter,
   return aim;
 }
 
-float MatchEngine::choosePenaltyGuessNewV1(const MatchPlayer& keeper)
+float MatchEngine::choosePenaltyGuessAardvark(const MatchPlayer& keeper)
 {
   // He picks a side, and a good keeper reads the taker a little more often.
   const float shotSide =
@@ -2853,8 +2618,8 @@ float MatchEngine::choosePenaltyGuessNewV1(const MatchPlayer& keeper)
   return guess;
 }
 
-Vector2F MatchEngine::goalkeeperTargetNewV1(MatchPlayer& keeper,
-                                       const MatchPlayer* carrier)
+Vector2F MatchEngine::goalkeeperTargetAardvark(MatchPlayer& keeper,
+                                               const MatchPlayer* carrier)
 {
   GoalkeeperControl& control = keepers[keeper.isHomeTeam ? 0 : 1];
   const auto setState = [&control](GoalkeeperState next)
@@ -3011,13 +2776,13 @@ Vector2F MatchEngine::goalkeeperTargetNewV1(MatchPlayer& keeper,
                      MatchTuning::Pitch::GOALKEEPER_MAX_Y)};
 }
 
-bool MatchEngine::choosesToBlockNewV1(const MatchPlayer& /*player*/)
+bool MatchEngine::choosesToBlockAardvark(const MatchPlayer& /*player*/)
 {
   // Every outfielder in the path tries; whether he gets there is the body's.
   return true;
 }
 
-bool MatchEngine::choosesToPutBlockBehindNewV1(const MatchPlayer& player)
+bool MatchEngine::choosesToPutBlockBehindAardvark(const MatchPlayer& player)
 {
   // Deep in his own half a blocker knocks the loose ball out of play.
   const float ownDepth =
@@ -3026,14 +2791,16 @@ bool MatchEngine::choosesToPutBlockBehindNewV1(const MatchPlayer& player)
          randomFloat(0.0f, 1.0f) < MatchTuning::SetPiece::BLOCK_BEHIND_CHANCE;
 }
 
-bool MatchEngine::choosesToClearCrossBehindNewV1(const MatchPlayer& /*player*/)
+bool MatchEngine::choosesToClearCrossBehindAardvark(
+    const MatchPlayer& /*player*/)
 {
   // Meeting a delivery close to his own goal line, he often plays safe.
   return randomFloat(0.0f, 1.0f) <
          MatchTuning::SetPiece::CLEARANCE_BEHIND_CHANCE;
 }
 
-Vector2F MatchEngine::chooseClearBehindTargetNewV1(const MatchPlayer& defender)
+Vector2F MatchEngine::chooseClearBehindTargetAardvark(
+    const MatchPlayer& defender)
 {
   // Over the own goal line, wide of the posts on his side.
   const float goalX = defender.isHomeTeam ? 0.0f : 1.0f;
@@ -3046,7 +2813,7 @@ Vector2F MatchEngine::chooseClearBehindTargetNewV1(const MatchPlayer& defender)
                                  0.45f)};
 }
 
-MatchEngine::ClearanceAim MatchEngine::chooseClearanceAimNewV1(
+MatchEngine::ClearanceAim MatchEngine::chooseClearanceAimAardvark(
     const MatchPlayer& defender)
 {
   // A long, high clearance upfield and towards the nearer touchline.
@@ -3066,7 +2833,7 @@ MatchEngine::ClearanceAim MatchEngine::chooseClearanceAimNewV1(
   return aim;
 }
 
-MatchEngine::HeaderAttempt MatchEngine::chooseHeaderAttemptNewV1(
+MatchEngine::HeaderAttempt MatchEngine::chooseHeaderAttemptAardvark(
     const MatchPlayer& header, bool fromTeammate)
 {
   const float depth =
@@ -3085,7 +2852,7 @@ MatchEngine::HeaderAttempt MatchEngine::chooseHeaderAttemptNewV1(
   return HeaderAttempt::PLAY;
 }
 
-MatchEngine::HeaderPlay MatchEngine::chooseHeaderPlayNewV1(
+MatchEngine::HeaderPlay MatchEngine::chooseHeaderPlayAardvark(
     const MatchPlayer& header, bool fromTeammate)
 {
   const float attackDirection = header.isHomeTeam ? 1.0f : -1.0f;
@@ -3139,7 +2906,8 @@ MatchEngine::HeaderPlay MatchEngine::chooseHeaderPlayNewV1(
   return play;
 }
 
-MatchPlayer* MatchEngine::bestSetPieceTakerNewV1(bool homeTeam, bool shooting)
+MatchPlayer* MatchEngine::bestSetPieceTakerAardvark(bool homeTeam,
+                                                    bool shooting)
 {
   MatchPlayer* best = nullptr;
   float bestScore = -std::numeric_limits<float>::infinity();
@@ -3161,7 +2929,7 @@ MatchPlayer* MatchEngine::bestSetPieceTakerNewV1(bool homeTeam, bool shooting)
   return best;
 }
 
-MatchPlayer* MatchEngine::dutyTakerNewV1(bool homeTeam, SetPieceDuty duty)
+MatchPlayer* MatchEngine::dutyTakerAardvark(bool homeTeam, SetPieceDuty duty)
 {
   const PlayerID designated =
       designations[homeTeam ? 0 : 1][static_cast<std::size_t>(duty)];
@@ -3179,16 +2947,16 @@ MatchPlayer* MatchEngine::dutyTakerNewV1(bool homeTeam, SetPieceDuty duty)
   {
     case SetPieceDuty::Penalties:
     case SetPieceDuty::FreeKicks:
-      return bestSetPieceTakerNewV1(homeTeam, true);
+      return bestSetPieceTakerAardvark(homeTeam, true);
     case SetPieceDuty::CornersLeft:
     case SetPieceDuty::CornersRight:
-      return bestSetPieceTakerNewV1(homeTeam, false);
+      return bestSetPieceTakerAardvark(homeTeam, false);
     default:
       return nullptr;
   }
 }
 
-MatchEngine::SetPieceAttackers MatchEngine::arrangeSetPieceAttackNewV1(
+MatchEngine::SetPieceAttackers MatchEngine::arrangeSetPieceAttackAardvark(
     bool attackingHome, Vector2F ballPosition)
 {
   // Box targets for the attacking side, in metres from the goal line and
@@ -3269,9 +3037,9 @@ MatchEngine::SetPieceAttackers MatchEngine::arrangeSetPieceAttackNewV1(
   return inBox;
 }
 
-void MatchEngine::arrangeSetPieceDefenceNewV1(bool defendingHome,
-                                         Vector2F ballPosition,
-                                         const SetPieceAttackers& attackers)
+void MatchEngine::arrangeSetPieceDefenceAardvark(
+    bool defendingHome, Vector2F ballPosition,
+    const SetPieceAttackers& attackers)
 {
   // Spots measured from the defended goal, as the attackers' are.
   const float goalX = defendingHome ? 0.0f : 1.0f;
@@ -3329,8 +3097,10 @@ void MatchEngine::arrangeSetPieceDefenceNewV1(bool defendingHome,
   }
 }
 
-MatchPlayer* MatchEngine::chooseRestartTakerNewV1(MatchState restart, bool homeTeam,
-                                             Vector2F spot, bool topCorner)
+MatchPlayer* MatchEngine::chooseRestartTakerAardvark(MatchState restart,
+                                                     bool homeTeam,
+                                                     Vector2F spot,
+                                                     bool topCorner)
 {
   switch (restart)
   {
@@ -3342,16 +3112,17 @@ MatchPlayer* MatchEngine::chooseRestartTakerNewV1(MatchState restart, bool homeT
       if (MatchPlayer* keeper = findGoalkeeper(homeTeam)) return keeper;
       return findClosestPlayer(spot, homeTeam, true);
     case MatchState::PENALTY:
-      return dutyTakerNewV1(homeTeam, SetPieceDuty::Penalties);
+      return dutyTakerAardvark(homeTeam, SetPieceDuty::Penalties);
     case MatchState::CORNER_KICK:
-      if (MatchPlayer* taker = dutyTakerNewV1(
+      if (MatchPlayer* taker = dutyTakerAardvark(
               homeTeam, topCorner ? SetPieceDuty::CornersLeft
                                   : SetPieceDuty::CornersRight))
         return taker;
       return findClosestPlayer(spot, homeTeam, false);
     case MatchState::FREE_KICK:
       if (restartIsSetPiece)
-        if (MatchPlayer* taker = dutyTakerNewV1(homeTeam, SetPieceDuty::FreeKicks))
+        if (MatchPlayer* taker =
+                dutyTakerAardvark(homeTeam, SetPieceDuty::FreeKicks))
           return taker;
       return findClosestPlayer(spot, homeTeam, false);
     case MatchState::THROW_IN:
@@ -3360,7 +3131,8 @@ MatchPlayer* MatchEngine::chooseRestartTakerNewV1(MatchState restart, bool homeT
       // third; elsewhere (and without one) the nearest player does.
       const float attackingDepth = homeTeam ? spot.x : 1.0f - spot.x;
       if (attackingDepth >= MatchTuning::Rules::HOME_FINAL_THIRD_START)
-        if (MatchPlayer* taker = dutyTakerNewV1(homeTeam, SetPieceDuty::LongThrows))
+        if (MatchPlayer* taker =
+                dutyTakerAardvark(homeTeam, SetPieceDuty::LongThrows))
           return taker;
       return findClosestPlayer(spot, homeTeam, false);
     }
@@ -3369,10 +3141,11 @@ MatchPlayer* MatchEngine::chooseRestartTakerNewV1(MatchState restart, bool homeT
   }
 }
 
-MatchEngine::RestartPlay MatchEngine::chooseRestartPlayNewV1(MatchPlayer& taker,
-                                                        MatchState restartState)
+MatchEngine::RestartPlay MatchEngine::chooseRestartPlayAardvark(
+    MatchPlayer& taker, MatchState restartState)
 {
-  if (restartState == MatchState::CORNER_KICK) return chooseCornerPlayNewV1(taker);
+  if (restartState == MatchState::CORNER_KICK)
+    return chooseCornerPlayAardvark(taker);
   if (restartState == MatchState::FREE_KICK && restartIsSetPiece)
   {
     const Vector2F goal{taker.isHomeTeam ? 1.0f : 0.0f,
@@ -3395,10 +3168,10 @@ MatchEngine::RestartPlay MatchEngine::chooseRestartPlayNewV1(MatchPlayer& taker,
     const bool wide =
         lateralMetres > MatchTuning::SetPiece::CROSS_MIN_WIDTH_METRES ||
         goalMetres > MatchTuning::SetPiece::DIRECT_FREE_KICK_METRES;
-    if (wide) return chooseCornerPlayNewV1(taker);
+    if (wide) return chooseCornerPlayAardvark(taker);
   }
 
-  std::optional<PassOption> passOption = choosePassTargetNewV1(taker);
+  std::optional<PassOption> passOption = choosePassTargetAardvark(taker);
   if (!passOption && playHalfMinutes > 0)
   {
     // A restart must release the ball even when no lane meets the AI's
@@ -3417,7 +3190,7 @@ MatchEngine::RestartPlay MatchEngine::chooseRestartPlayNewV1(MatchPlayer& taker,
         nearest = gap;
       }
     }
-    if (outlet) passOption = evaluatePassOptionNewV1(taker, *outlet);
+    if (outlet) passOption = evaluatePassOptionAardvark(taker, *outlet);
   }
   if (passOption)
     return {RestartPlay::Kind::PASS, passOption,
@@ -3425,7 +3198,8 @@ MatchEngine::RestartPlay MatchEngine::chooseRestartPlayNewV1(MatchPlayer& taker,
   return {RestartPlay::Kind::HOLD, std::nullopt, false};
 }
 
-MatchEngine::RestartPlay MatchEngine::chooseCornerPlayNewV1(MatchPlayer& taker)
+MatchEngine::RestartPlay MatchEngine::chooseCornerPlayAardvark(
+    MatchPlayer& taker)
 {
   // Routine: short, near post, far post or penalty spot, delivered at head
   // height to the attacker assigned to that zone.
@@ -3433,7 +3207,7 @@ MatchEngine::RestartPlay MatchEngine::chooseCornerPlayNewV1(MatchPlayer& taker)
   const float roll = randomFloat(0.0f, 1.0f);
   if (roll < MatchTuning::SetPiece::SHORT_CORNER_CHANCE)
   {
-    std::optional<PassOption> shortOption = choosePassTargetNewV1(taker);
+    std::optional<PassOption> shortOption = choosePassTargetAardvark(taker);
     if (shortOption &&
         shortOption->passDistance <
             MatchTuning::SetPiece::SHORT_CORNER_MAX_DISTANCE_METRES)
@@ -3475,11 +3249,11 @@ MatchEngine::RestartPlay MatchEngine::chooseCornerPlayNewV1(MatchPlayer& taker)
   }
   if (!target)
   {
-    std::optional<PassOption> fallback = choosePassTargetNewV1(taker);
+    std::optional<PassOption> fallback = choosePassTargetAardvark(taker);
     if (fallback) return {RestartPlay::Kind::PASS, fallback, true};
     return {RestartPlay::Kind::HOLD, std::nullopt, false};
   }
-  PassOption delivery = evaluatePassOptionNewV1(taker, *target);
+  PassOption delivery = evaluatePassOptionAardvark(taker, *target);
   delivery.targetPoint = target->movementTarget;
   delivery.passDistance = distance(taker.position, delivery.targetPoint);
   delivery.lofted = true;

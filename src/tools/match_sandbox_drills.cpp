@@ -1981,7 +1981,7 @@ class ShotDrill final : public Drill
 // --- First touch -----------------------------------------------------------
 
 /**
- * One ball played to one receiver (New v1 body): how well his first touch
+ * One ball played to one receiver (Binturong body): how well his first touch
  * comes off, with every variable of the ball, the receiver and the touch's
  * tuning knobs as a setting (see Notes and plans/
  * match_engine_first_touch_tuning_plan.md).
@@ -2001,7 +2001,7 @@ class FirstTouchDrill final : public Drill
   const char* name() const override { return "First touch"; }
   const char* summary() const override
   {
-    return "One ball played to a receiver with the New v1 body: its pace, "
+    return "One ball played to a receiver with the Binturong body: its pace, "
            "the angle it comes from, how far he has to go to it, bounce, his "
            "own pass or a loose ball, a pressing defender. Measures how his "
            "first touch comes off (errors, heavy touches, the ball lost), "
@@ -2064,10 +2064,10 @@ class FirstTouchDrill final : public Drill
     add(foot, "Receiver");
     DrillParameter brain =
         setting("Brain", &brainChoice, 0.0f, 1.0f, true,
-                "New v1: he times the touch and chooses it (set or into "
-                "stride).\nOriginal: he plays it at first contact, set "
+                "Binturong: he times the touch and chooses it (set or into "
+                "stride).\nAardvark: he plays it at first contact, set "
                 "ahead of him.");
-    brain.choices = {"New v1 (timed)", "Original (first contact)"};
+    brain.choices = {"Binturong (timed)", "Aardvark (first contact)"};
     add(brain, "Receiver");
 
     DrillParameter defender =
@@ -2161,11 +2161,12 @@ class FirstTouchDrill final : public Drill
     receiverId = ids[0];
     hasDefender = defenderChoice > 0.5f;
     defenderId = hasDefender ? ids[1] : 0;
-    // The new first touch is the New v1 body's; the brain is a setting.
-    const BrainId brain = brainChoice < 0.5f ? BrainId::NEW_V1 : BrainId::ORIGINAL;
+    // The new first touch is the Binturong body's; the brain is a setting.
+    const BrainId brain =
+        brainChoice < 0.5f ? BrainId::BINTURONG : BrainId::AARDVARK;
     for (const bool home : {true, false})
     {
-      engine.setBody(home, BodyId::NEW_V1);
+      engine.setBody(home, BodyId::BINTURONG);
       engine.setBrain(home, brain);
     }
     engine.setFirstTouchKnobs(knobs);

@@ -17,13 +17,13 @@ void MatchEngine::computeLevel(const Lineup& home, const Lineup& away)
 {
   switch (handshakeId)
   {
-    case HandshakeId::ORIGINAL:
+    case HandshakeId::AARDVARK:
       break;
-    case HandshakeId::NEW_V1:
-      computeLevelNewV1(home, away);
+    case HandshakeId::BINTURONG:
+      computeLevelBinturong(home, away);
       return;
   }
-  computeLevelOriginal(home, away);
+  computeLevelAardvark(home, away);
 }
 
 float MatchEngine::rawAttribute(const Player* player,
@@ -31,24 +31,24 @@ float MatchEngine::rawAttribute(const Player* player,
 {
   switch (handshakeId)
   {
-    case HandshakeId::ORIGINAL:
+    case HandshakeId::AARDVARK:
       break;
-    case HandshakeId::NEW_V1:
-      return rawAttributeNewV1(player, name);
+    case HandshakeId::BINTURONG:
+      return rawAttributeBinturong(player, name);
   }
-  return rawAttributeOriginal(player, name);
+  return rawAttributeAardvark(player, name);
 }
 
 float MatchEngine::attribute(const Player* player, std::string_view name) const
 {
   switch (handshakeId)
   {
-    case HandshakeId::ORIGINAL:
+    case HandshakeId::AARDVARK:
       break;
-    case HandshakeId::NEW_V1:
-      return attributeNewV1(player, name);
+    case HandshakeId::BINTURONG:
+      return attributeBinturong(player, name);
   }
-  return attributeOriginal(player, name);
+  return attributeAardvark(player, name);
 }
 
 void MatchEngine::loadAttributes(MatchPlayer& matchPlayer,
@@ -56,11 +56,11 @@ void MatchEngine::loadAttributes(MatchPlayer& matchPlayer,
 {
   switch (handshakeId)
   {
-    case HandshakeId::ORIGINAL:
-      loadAttributesOriginal(matchPlayer, player);
+    case HandshakeId::AARDVARK:
+      loadAttributesAardvark(matchPlayer, player);
       break;
-    case HandshakeId::NEW_V1:
-      loadAttributesNewV1(matchPlayer, player);
+    case HandshakeId::BINTURONG:
+      loadAttributesBinturong(matchPlayer, player);
       break;
   }
   deriveStats(matchPlayer);
@@ -70,11 +70,11 @@ void MatchEngine::initializePlayers(const Lineup& lineup, bool isHomeTeam)
 {
   switch (handshakeId)
   {
-    case HandshakeId::ORIGINAL:
-      initializePlayersOriginal(lineup, isHomeTeam);
+    case HandshakeId::AARDVARK:
+      initializePlayersAardvark(lineup, isHomeTeam);
       break;
-    case HandshakeId::NEW_V1:
-      initializePlayersNewV1(lineup, isHomeTeam);
+    case HandshakeId::BINTURONG:
+      initializePlayersBinturong(lineup, isHomeTeam);
       break;
   }
   // The handshakes load their players directly; derive the side's stats.
@@ -86,12 +86,12 @@ const DerivedRecipes& MatchEngine::derivedRecipes() const
 {
   switch (handshakeId)
   {
-    case HandshakeId::ORIGINAL:
+    case HandshakeId::AARDVARK:
       break;
-    case HandshakeId::NEW_V1:
-      return derivedRecipesNewV1();
+    case HandshakeId::BINTURONG:
+      return derivedRecipesBinturong();
   }
-  // The Original handshake has no recipes of its own.
+  // The Aardvark handshake has no recipes of its own.
   return DEFAULT_DERIVED_RECIPES;
 }
 
@@ -117,98 +117,98 @@ void MatchEngine::resolveTactics(bool homeTeam)
 {
   switch (handshakeId)
   {
-    case HandshakeId::ORIGINAL:
+    case HandshakeId::AARDVARK:
       break;
-    case HandshakeId::NEW_V1:
-      resolveTacticsNewV1(homeTeam);
+    case HandshakeId::BINTURONG:
+      resolveTacticsBinturong(homeTeam);
       return;
   }
-  resolveTacticsOriginal(homeTeam);
+  resolveTacticsAardvark(homeTeam);
 }
 
 void MatchEngine::placeFormation(bool homeTeam)
 {
   switch (handshakeId)
   {
-    case HandshakeId::ORIGINAL:
+    case HandshakeId::AARDVARK:
       break;
-    case HandshakeId::NEW_V1:
-      placeFormationNewV1(homeTeam);
+    case HandshakeId::BINTURONG:
+      placeFormationBinturong(homeTeam);
       return;
   }
-  placeFormationOriginal(homeTeam);
+  placeFormationAardvark(homeTeam);
 }
 
 float MatchEngine::drawRefereeStrictness() const
 {
   switch (handshakeId)
   {
-    case HandshakeId::ORIGINAL:
+    case HandshakeId::AARDVARK:
       break;
-    case HandshakeId::NEW_V1:
-      return drawRefereeStrictnessNewV1();
+    case HandshakeId::BINTURONG:
+      return drawRefereeStrictnessBinturong();
   }
-  return drawRefereeStrictnessOriginal();
+  return drawRefereeStrictnessAardvark();
 }
 
 void MatchEngine::computeUnderdogShares()
 {
   switch (handshakeId)
   {
-    case HandshakeId::ORIGINAL:
+    case HandshakeId::AARDVARK:
       break;
-    case HandshakeId::NEW_V1:
-      computeUnderdogSharesNewV1();
+    case HandshakeId::BINTURONG:
+      computeUnderdogSharesBinturong();
       return;
   }
-  computeUnderdogSharesOriginal();
+  computeUnderdogSharesAardvark();
 }
 
 void MatchEngine::convertMatchContext(const MatchContext& context)
 {
   switch (handshakeId)
   {
-    case HandshakeId::ORIGINAL:
+    case HandshakeId::AARDVARK:
       break;
-    case HandshakeId::NEW_V1:
-      convertMatchContextNewV1(context);
+    case HandshakeId::BINTURONG:
+      convertMatchContextBinturong(context);
       return;
   }
-  convertMatchContextOriginal(context);
+  convertMatchContextAardvark(context);
 }
 
 float MatchEngine::convertCondition(float condition) const
 {
   switch (handshakeId)
   {
-    case HandshakeId::ORIGINAL:
+    case HandshakeId::AARDVARK:
       break;
-    case HandshakeId::NEW_V1:
-      return convertConditionNewV1(condition);
+    case HandshakeId::BINTURONG:
+      return convertConditionBinturong(condition);
   }
-  return convertConditionOriginal(condition);
+  return convertConditionAardvark(condition);
 }
 
 float MatchEngine::convertFamiliarity(float familiarity) const
 {
   switch (handshakeId)
   {
-    case HandshakeId::ORIGINAL:
+    case HandshakeId::AARDVARK:
       break;
-    case HandshakeId::NEW_V1:
-      return convertFamiliarityNewV1(familiarity);
+    case HandshakeId::BINTURONG:
+      return convertFamiliarityBinturong(familiarity);
   }
-  return convertFamiliarityOriginal(familiarity);
+  return convertFamiliarityAardvark(familiarity);
 }
 
 float MatchEngine::convertTeamTalk(float modifier) const
 {
   switch (handshakeId)
   {
-    case HandshakeId::ORIGINAL:
+    case HandshakeId::AARDVARK:
       break;
-    case HandshakeId::NEW_V1:
-      return convertTeamTalkNewV1(modifier);
+    case HandshakeId::BINTURONG:
+      return convertTeamTalkBinturong(modifier);
   }
-  return convertTeamTalkOriginal(modifier);
+  return convertTeamTalkAardvark(modifier);
 }

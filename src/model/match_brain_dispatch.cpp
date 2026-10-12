@@ -18,38 +18,38 @@ const MatchEngine::MovementStyle& MatchEngine::movementStyle(
 {
   switch (brainOf(homeTeam))
   {
-    case BrainId::ORIGINAL:
+    case BrainId::AARDVARK:
       break;
-    case BrainId::NEW_V1:
-      return movementStyleNewV1();
+    case BrainId::BINTURONG:
+      return movementStyleBinturong();
   }
-  return movementStyleOriginal();
+  return movementStyleAardvark();
 }
 
 void MatchEngine::refreshTacticalTargets(float dt, bool planHome)
 {
   switch (brainOf(planHome))
   {
-    case BrainId::ORIGINAL:
+    case BrainId::AARDVARK:
       break;
-    case BrainId::NEW_V1:
-      refreshTacticalTargetsNewV1(dt, planHome);
+    case BrainId::BINTURONG:
+      refreshTacticalTargetsBinturong(dt, planHome);
       return;
   }
-  refreshTacticalTargetsOriginal(dt, planHome);
+  refreshTacticalTargetsAardvark(dt, planHome);
 }
 
 void MatchEngine::assignMarks(bool home)
 {
   switch (brainOf(home))
   {
-    case BrainId::ORIGINAL:
+    case BrainId::AARDVARK:
       break;
-    case BrainId::NEW_V1:
-      assignMarksNewV1(home);
+    case BrainId::BINTURONG:
+      assignMarksBinturong(home);
       return;
   }
-  assignMarksOriginal(home);
+  assignMarksAardvark(home);
 }
 
 Vector2F MatchEngine::goalkeeperTarget(MatchPlayer& keeper,
@@ -57,24 +57,24 @@ Vector2F MatchEngine::goalkeeperTarget(MatchPlayer& keeper,
 {
   switch (brainOf(keeper.isHomeTeam))
   {
-    case BrainId::ORIGINAL:
+    case BrainId::AARDVARK:
       break;
-    case BrainId::NEW_V1:
-      return goalkeeperTargetNewV1(keeper, carrier);
+    case BrainId::BINTURONG:
+      return goalkeeperTargetBinturong(keeper, carrier);
   }
-  return goalkeeperTargetOriginal(keeper, carrier);
+  return goalkeeperTargetAardvark(keeper, carrier);
 }
 
 MatchEngine::BallAction MatchEngine::chooseBallAction(MatchPlayer& carrier)
 {
   switch (brainOf(carrier.isHomeTeam))
   {
-    case BrainId::ORIGINAL:
+    case BrainId::AARDVARK:
       break;
-    case BrainId::NEW_V1:
-      return chooseBallActionNewV1(carrier);
+    case BrainId::BINTURONG:
+      return chooseBallActionBinturong(carrier);
   }
-  return chooseBallActionOriginal(carrier);
+  return chooseBallActionAardvark(carrier);
 }
 
 void MatchEngine::afterPassReleased(const MatchPlayer& passer,
@@ -82,13 +82,13 @@ void MatchEngine::afterPassReleased(const MatchPlayer& passer,
 {
   switch (brainOf(passer.isHomeTeam))
   {
-    case BrainId::ORIGINAL:
+    case BrainId::AARDVARK:
       break;
-    case BrainId::NEW_V1:
-      afterPassReleasedNewV1(passer, receiver);
+    case BrainId::BINTURONG:
+      afterPassReleasedBinturong(passer, receiver);
       return;
   }
-  afterPassReleasedOriginal(passer, receiver);
+  afterPassReleasedAardvark(passer, receiver);
 }
 
 MatchEngine::PassOption MatchEngine::evaluatePassOption(
@@ -97,12 +97,12 @@ MatchEngine::PassOption MatchEngine::evaluatePassOption(
 {
   switch (brainOf(passer.isHomeTeam))
   {
-    case BrainId::ORIGINAL:
+    case BrainId::AARDVARK:
       break;
-    case BrainId::NEW_V1:
-      return evaluatePassOptionNewV1(passer, receiver, detail);
+    case BrainId::BINTURONG:
+      return evaluatePassOptionBinturong(passer, receiver, detail);
   }
-  return evaluatePassOptionOriginal(passer, receiver, detail);
+  return evaluatePassOptionAardvark(passer, receiver, detail);
 }
 
 MatchEngine::ShotAim MatchEngine::chooseShotAim(const MatchPlayer& shooter,
@@ -111,24 +111,24 @@ MatchEngine::ShotAim MatchEngine::chooseShotAim(const MatchPlayer& shooter,
 {
   switch (brainOf(shooter.isHomeTeam))
   {
-    case BrainId::ORIGINAL:
+    case BrainId::AARDVARK:
       break;
-    case BrainId::NEW_V1:
-      return chooseShotAimNewV1(shooter, header, penalty, freeKick);
+    case BrainId::BINTURONG:
+      return chooseShotAimBinturong(shooter, header, penalty, freeKick);
   }
-  return chooseShotAimOriginal(shooter, header, penalty, freeKick);
+  return chooseShotAimAardvark(shooter, header, penalty, freeKick);
 }
 
 float MatchEngine::choosePenaltyGuess(const MatchPlayer& keeper)
 {
   switch (brainOf(keeper.isHomeTeam))
   {
-    case BrainId::ORIGINAL:
+    case BrainId::AARDVARK:
       break;
-    case BrainId::NEW_V1:
-      return choosePenaltyGuessNewV1(keeper);
+    case BrainId::BINTURONG:
+      return choosePenaltyGuessBinturong(keeper);
   }
-  return choosePenaltyGuessOriginal(keeper);
+  return choosePenaltyGuessAardvark(keeper);
 }
 
 MatchEngine::ClearanceAim MatchEngine::chooseClearanceAim(
@@ -136,24 +136,24 @@ MatchEngine::ClearanceAim MatchEngine::chooseClearanceAim(
 {
   switch (brainOf(defender.isHomeTeam))
   {
-    case BrainId::ORIGINAL:
+    case BrainId::AARDVARK:
       break;
-    case BrainId::NEW_V1:
-      return chooseClearanceAimNewV1(defender);
+    case BrainId::BINTURONG:
+      return chooseClearanceAimBinturong(defender);
   }
-  return chooseClearanceAimOriginal(defender);
+  return chooseClearanceAimAardvark(defender);
 }
 
 Vector2F MatchEngine::chooseClearBehindTarget(const MatchPlayer& defender)
 {
   switch (brainOf(defender.isHomeTeam))
   {
-    case BrainId::ORIGINAL:
+    case BrainId::AARDVARK:
       break;
-    case BrainId::NEW_V1:
-      return chooseClearBehindTargetNewV1(defender);
+    case BrainId::BINTURONG:
+      return chooseClearBehindTargetBinturong(defender);
   }
-  return chooseClearBehindTargetOriginal(defender);
+  return chooseClearBehindTargetAardvark(defender);
 }
 
 MatchEngine::HeaderAttempt MatchEngine::chooseHeaderAttempt(
@@ -161,12 +161,12 @@ MatchEngine::HeaderAttempt MatchEngine::chooseHeaderAttempt(
 {
   switch (brainOf(header.isHomeTeam))
   {
-    case BrainId::ORIGINAL:
+    case BrainId::AARDVARK:
       break;
-    case BrainId::NEW_V1:
-      return chooseHeaderAttemptNewV1(header, fromTeammate);
+    case BrainId::BINTURONG:
+      return chooseHeaderAttemptBinturong(header, fromTeammate);
   }
-  return chooseHeaderAttemptOriginal(header, fromTeammate);
+  return chooseHeaderAttemptAardvark(header, fromTeammate);
 }
 
 MatchEngine::HeaderPlay MatchEngine::chooseHeaderPlay(const MatchPlayer& header,
@@ -174,24 +174,24 @@ MatchEngine::HeaderPlay MatchEngine::chooseHeaderPlay(const MatchPlayer& header,
 {
   switch (brainOf(header.isHomeTeam))
   {
-    case BrainId::ORIGINAL:
+    case BrainId::AARDVARK:
       break;
-    case BrainId::NEW_V1:
-      return chooseHeaderPlayNewV1(header, fromTeammate);
+    case BrainId::BINTURONG:
+      return chooseHeaderPlayBinturong(header, fromTeammate);
   }
-  return chooseHeaderPlayOriginal(header, fromTeammate);
+  return chooseHeaderPlayAardvark(header, fromTeammate);
 }
 
 bool MatchEngine::touchNow(const MatchPlayer& player, const TouchMoment& moment)
 {
-  // The Original brain has no first-touch decisions: it plays the ball the
+  // The Aardvark brain has no first-touch decisions: it plays the ball the
   // moment it comes into reach.
   switch (brainOf(player.isHomeTeam))
   {
-    case BrainId::ORIGINAL:
+    case BrainId::AARDVARK:
       break;
-    case BrainId::NEW_V1:
-      return touchNowNewV1(player, moment);
+    case BrainId::BINTURONG:
+      return touchNowBinturong(player, moment);
   }
   return true;
 }
@@ -199,14 +199,14 @@ bool MatchEngine::touchNow(const MatchPlayer& player, const TouchMoment& moment)
 bool MatchEngine::dribbleTouchNow(const MatchPlayer& player,
                                   const TouchMoment& moment)
 {
-  // His own ball, due a touch (dribbleTouchDue). The Original brain has no
+  // His own ball, due a touch (dribbleTouchDue). The Aardvark brain has no
   // touch timing: he plays it the moment it is due.
   switch (brainOf(player.isHomeTeam))
   {
-    case BrainId::ORIGINAL:
+    case BrainId::AARDVARK:
       break;
-    case BrainId::NEW_V1:
-      return dribbleTouchNowNewV1(player, moment);
+    case BrainId::BINTURONG:
+      return dribbleTouchNowBinturong(player, moment);
   }
   return true;
 }
@@ -216,10 +216,10 @@ TouchIntent MatchEngine::chooseFirstTouch(const MatchPlayer& player,
 {
   switch (brainOf(player.isHomeTeam))
   {
-    case BrainId::ORIGINAL:
+    case BrainId::AARDVARK:
       break;
-    case BrainId::NEW_V1:
-      return chooseFirstTouchNewV1(player, moment);
+    case BrainId::BINTURONG:
+      return chooseFirstTouchBinturong(player, moment);
   }
   return defaultTouchIntent(player);
 }
@@ -230,48 +230,48 @@ MatchEngine::Challenge MatchEngine::chooseChallenge(const MatchPlayer& carrier,
   // The defending side decides whether to go in.
   switch (brainOf(!carrier.isHomeTeam))
   {
-    case BrainId::ORIGINAL:
+    case BrainId::AARDVARK:
       break;
-    case BrainId::NEW_V1:
-      return chooseChallengeNewV1(carrier, dt);
+    case BrainId::BINTURONG:
+      return chooseChallengeBinturong(carrier, dt);
   }
-  return chooseChallengeOriginal(carrier, dt);
+  return chooseChallengeAardvark(carrier, dt);
 }
 
 bool MatchEngine::choosesToBlock(const MatchPlayer& player)
 {
   switch (brainOf(player.isHomeTeam))
   {
-    case BrainId::ORIGINAL:
+    case BrainId::AARDVARK:
       break;
-    case BrainId::NEW_V1:
-      return choosesToBlockNewV1(player);
+    case BrainId::BINTURONG:
+      return choosesToBlockBinturong(player);
   }
-  return choosesToBlockOriginal(player);
+  return choosesToBlockAardvark(player);
 }
 
 bool MatchEngine::choosesToPutBlockBehind(const MatchPlayer& player)
 {
   switch (brainOf(player.isHomeTeam))
   {
-    case BrainId::ORIGINAL:
+    case BrainId::AARDVARK:
       break;
-    case BrainId::NEW_V1:
-      return choosesToPutBlockBehindNewV1(player);
+    case BrainId::BINTURONG:
+      return choosesToPutBlockBehindBinturong(player);
   }
-  return choosesToPutBlockBehindOriginal(player);
+  return choosesToPutBlockBehindAardvark(player);
 }
 
 bool MatchEngine::choosesToClearCrossBehind(const MatchPlayer& player)
 {
   switch (brainOf(player.isHomeTeam))
   {
-    case BrainId::ORIGINAL:
+    case BrainId::AARDVARK:
       break;
-    case BrainId::NEW_V1:
-      return choosesToClearCrossBehindNewV1(player);
+    case BrainId::BINTURONG:
+      return choosesToClearCrossBehindBinturong(player);
   }
-  return choosesToClearCrossBehindOriginal(player);
+  return choosesToClearCrossBehindAardvark(player);
 }
 
 MatchPlayer* MatchEngine::chooseRestartTaker(MatchState restart, bool homeTeam,
@@ -279,12 +279,12 @@ MatchPlayer* MatchEngine::chooseRestartTaker(MatchState restart, bool homeTeam,
 {
   switch (brainOf(homeTeam))
   {
-    case BrainId::ORIGINAL:
+    case BrainId::AARDVARK:
       break;
-    case BrainId::NEW_V1:
-      return chooseRestartTakerNewV1(restart, homeTeam, spot, topCorner);
+    case BrainId::BINTURONG:
+      return chooseRestartTakerBinturong(restart, homeTeam, spot, topCorner);
   }
-  return chooseRestartTakerOriginal(restart, homeTeam, spot, topCorner);
+  return chooseRestartTakerAardvark(restart, homeTeam, spot, topCorner);
 }
 
 MatchEngine::RestartPlay MatchEngine::chooseRestartPlay(MatchPlayer& taker,
@@ -292,12 +292,12 @@ MatchEngine::RestartPlay MatchEngine::chooseRestartPlay(MatchPlayer& taker,
 {
   switch (brainOf(taker.isHomeTeam))
   {
-    case BrainId::ORIGINAL:
+    case BrainId::AARDVARK:
       break;
-    case BrainId::NEW_V1:
-      return chooseRestartPlayNewV1(taker, restartState);
+    case BrainId::BINTURONG:
+      return chooseRestartPlayBinturong(taker, restartState);
   }
-  return chooseRestartPlayOriginal(taker, restartState);
+  return chooseRestartPlayAardvark(taker, restartState);
 }
 
 void MatchEngine::applyTeamMentality(StrategySliders& sliders,
@@ -305,13 +305,13 @@ void MatchEngine::applyTeamMentality(StrategySliders& sliders,
 {
   switch (brainOf(homeTeam))
   {
-    case BrainId::ORIGINAL:
+    case BrainId::AARDVARK:
       break;
-    case BrainId::NEW_V1:
-      applyTeamMentalityNewV1(sliders, homeTeam);
+    case BrainId::BINTURONG:
+      applyTeamMentalityBinturong(sliders, homeTeam);
       return;
   }
-  applyTeamMentalityOriginal(sliders, homeTeam);
+  applyTeamMentalityAardvark(sliders, homeTeam);
 }
 
 MatchEngine::SetPieceAttackers MatchEngine::arrangeSetPieceAttack(
@@ -319,12 +319,12 @@ MatchEngine::SetPieceAttackers MatchEngine::arrangeSetPieceAttack(
 {
   switch (brainOf(attackingHome))
   {
-    case BrainId::ORIGINAL:
+    case BrainId::AARDVARK:
       break;
-    case BrainId::NEW_V1:
-      return arrangeSetPieceAttackNewV1(attackingHome, ballPosition);
+    case BrainId::BINTURONG:
+      return arrangeSetPieceAttackBinturong(attackingHome, ballPosition);
   }
-  return arrangeSetPieceAttackOriginal(attackingHome, ballPosition);
+  return arrangeSetPieceAttackAardvark(attackingHome, ballPosition);
 }
 
 void MatchEngine::arrangeSetPieceDefence(bool defendingHome,
@@ -333,25 +333,25 @@ void MatchEngine::arrangeSetPieceDefence(bool defendingHome,
 {
   switch (brainOf(defendingHome))
   {
-    case BrainId::ORIGINAL:
+    case BrainId::AARDVARK:
       break;
-    case BrainId::NEW_V1:
-      arrangeSetPieceDefenceNewV1(defendingHome, ballPosition, attackers);
+    case BrainId::BINTURONG:
+      arrangeSetPieceDefenceBinturong(defendingHome, ballPosition, attackers);
       return;
   }
-  arrangeSetPieceDefenceOriginal(defendingHome, ballPosition, attackers);
+  arrangeSetPieceDefenceAardvark(defendingHome, ballPosition, attackers);
 }
 
 MatchPlayer* MatchEngine::dutyTaker(bool homeTeam, SetPieceDuty duty)
 {
   switch (brainOf(homeTeam))
   {
-    case BrainId::ORIGINAL:
+    case BrainId::AARDVARK:
       break;
-    case BrainId::NEW_V1:
-      return dutyTakerNewV1(homeTeam, duty);
+    case BrainId::BINTURONG:
+      return dutyTakerBinturong(homeTeam, duty);
   }
-  return dutyTakerOriginal(homeTeam, duty);
+  return dutyTakerAardvark(homeTeam, duty);
 }
 
 void MatchEngine::updateRestartSupport(MatchPlayer& player,
@@ -359,11 +359,11 @@ void MatchEngine::updateRestartSupport(MatchPlayer& player,
 {
   switch (brainOf(player.isHomeTeam))
   {
-    case BrainId::ORIGINAL:
+    case BrainId::AARDVARK:
       break;
-    case BrainId::NEW_V1:
-      updateRestartSupportNewV1(player, taker);
+    case BrainId::BINTURONG:
+      updateRestartSupportBinturong(player, taker);
       return;
   }
-  updateRestartSupportOriginal(player, taker);
+  updateRestartSupportAardvark(player, taker);
 }

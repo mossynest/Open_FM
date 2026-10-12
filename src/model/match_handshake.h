@@ -22,49 +22,52 @@
  * It runs at kickoff and whenever an input arrives later (a substitute, a
  * tactics or formation change).
  *
- * ORIGINAL is the inherited conversion, kept frozen for comparison; the
- * NEW_V* handshakes are the ones being developed. One handshake per match,
- * chosen when the engine is built (the MatchEngine constructor), since the
- * conversion starts there and works from both teams together.
+ * AARDVARK is the inherited conversion, kept frozen for comparison; the
+ * BINTURONG and later handshakes are the ones being developed. One handshake
+ * per match, chosen when the engine is built (the MatchEngine constructor),
+ * since the conversion starts there and works from both teams together.
  */
 enum class HandshakeId : std::uint8_t
 {
-  ORIGINAL,
-  NEW_V1,
+  AARDVARK,
+  BINTURONG,
 };
 
 inline constexpr std::array<HandshakeId, 2> ALL_HANDSHAKES = {
-    HandshakeId::ORIGINAL, HandshakeId::NEW_V1};
+    HandshakeId::AARDVARK, HandshakeId::BINTURONG};
 
-/** Display name ("Original", "New v1"). */
+/** Display name ("Aardvark", "Binturong"). */
 constexpr std::string_view handshakeName(HandshakeId handshake)
 {
   switch (handshake)
   {
-    case HandshakeId::ORIGINAL:
-      return "Original";
-    case HandshakeId::NEW_V1:
-      return "New v1";
+    case HandshakeId::AARDVARK:
+      return "Aardvark";
+    case HandshakeId::BINTURONG:
+      return "Binturong";
   }
   return "Unknown";
 }
 
-/** Command-line and file key ("original", "new-v1"). */
+/** Command-line and file key ("aardvark", "binturong"). */
 constexpr std::string_view handshakeKey(HandshakeId handshake)
 {
   switch (handshake)
   {
-    case HandshakeId::ORIGINAL:
-      return "original";
-    case HandshakeId::NEW_V1:
-      return "new-v1";
+    case HandshakeId::AARDVARK:
+      return "aardvark";
+    case HandshakeId::BINTURONG:
+      return "binturong";
   }
   return "unknown";
 }
 
-/** The handshake with this key, if any. */
+/** The handshake with this key, if any (also the keys used before the
+ * versions were renamed: "original" and "new-v1"). */
 constexpr std::optional<HandshakeId> handshakeFromKey(std::string_view key)
 {
+  if (key == "original") return HandshakeId::AARDVARK;
+  if (key == "new-v1") return HandshakeId::BINTURONG;
   for (const HandshakeId handshake : ALL_HANDSHAKES)
     if (handshakeKey(handshake) == key) return handshake;
   return std::nullopt;

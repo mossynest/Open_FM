@@ -139,8 +139,8 @@ struct TeamSetup
 {
   float rating = 65.0f;
   StrategySliders sliders{};
-  BrainId brain = BrainId::ORIGINAL;
-  BodyId body = BodyId::ORIGINAL;
+  BrainId brain = BrainId::AARDVARK;
+  BodyId body = BodyId::AARDVARK;
   /** Every stat of every player is `rating` (buildUniformLineup) instead
    * of the role-shaped squad. */
   bool uniform = false;
@@ -154,7 +154,7 @@ struct MatchJob
   /** Played with MatchFidelity::BACKGROUND (as unwatched fixtures are). */
   bool background = false;
   /** How the inputs become match state (one per match). */
-  HandshakeId handshake = HandshakeId::ORIGINAL;
+  HandshakeId handshake = HandshakeId::AARDVARK;
   /** MatchContext::homeAdvantageScale: 0 a neutral venue, 1 the engine's
    * default (the game's full home edge), up to 2. */
   float homeAdvantage = 1.0f;

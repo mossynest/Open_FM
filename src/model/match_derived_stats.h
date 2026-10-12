@@ -65,7 +65,7 @@ using DerivedRecipes = std::array<DerivedRecipe, DERIVED_STAT_COUNT>;
 /** Ratings that anchor the physical meanings: a lower-league part-timer and
  * the world's elite (world generation: a league's first-team level is
  * 38 + 0.42 x its reputation; the best clubs reach 90). On the linear scale
- * of the New v1 handshake a rating is the stat / 100; the Original
+ * of the Binturong handshake a rating is the stat / 100; the Aardvark
  * handshake's stretched scale places them differently. */
 inline constexpr float PART_TIME_RATING = 0.45f;
 inline constexpr float ELITE_RATING = 0.85f;
@@ -146,7 +146,7 @@ constexpr DerivedRecipe firstTouchRecipe()
 }
 }  // namespace DerivedStats
 
-/** The recipes a handshake uses unless it has its own (the Original's). For
+/** The recipes a handshake uses unless it has its own (the Aardvark's). For
  * now every endurance stat simply echoes Stamina; first touch blends
  * Dribbling and Passing. */
 inline constexpr DerivedRecipes DEFAULT_DERIVED_RECIPES{{
