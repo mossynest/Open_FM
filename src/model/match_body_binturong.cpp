@@ -144,10 +144,14 @@ constexpr float AIR_COST_K = 0.0037f;
 // The load period's acceleration is limited to what a body can do (a guard
 // against a jolt from body contact).
 constexpr float MAX_LOAD_ACCELERATION = 10.0f;
-// Above the power at his critical speed the extra is anaerobic: glycolysis
-// takes about ten times the glycogen per unit of energy of oxidation, part
-// of D' is phosphocreatine (none): about 7x (a design choice).
-constexpr float ANAEROBIC_FUEL_PREMIUM = 7.0f;
+// Energy drawn from the burst reserve costs extra fuel: glycolysis from
+// glycogen nets 3 ATP per glucose unit against ~31-33 oxidised (~10x the
+// glycogen per unit of energy), but only part of a burst is glycolytic:
+// about half of a fresh 6 s sprint is phosphocreatine, which uses none
+// (Gaitanos 1993), and glycolysis's share falls over repeated efforts
+// (Girard 2011). 0.4 glycolytic x 10: 4x, the single-sprint value (a match
+// of repeated efforts is likely lower).
+constexpr float ANAEROBIC_FUEL_PREMIUM = 4.0f;
 
 /** Running cost (J/kg/m) up the equivalent slope `slope` (Minetti & Pavei
  * 2018): 3.6 on the flat. */
