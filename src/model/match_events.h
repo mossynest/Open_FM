@@ -178,6 +178,9 @@ struct PlayerMatchStats
    * and the part above his critical speed's power (anaerobic). */
   float metabolicEnergy = 0.0f;
   float anaerobicEnergy = 0.0f;
+  /** The same two while he was slowing down. */
+  float brakingEnergy = 0.0f;
+  float brakingAnaerobicEnergy = 0.0f;
   /** Elapsed match minutes when his fuel first ran out (-1: never). */
   float emptyAtMinute = -1.0f;
   /** Efforts above 7 m/s. */

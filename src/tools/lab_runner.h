@@ -144,6 +144,8 @@ struct MatchSample
    * whose tank ran out, how many and the elapsed minutes when it did. */
   double full_match_energy = 0.0;
   double full_match_anaerobic = 0.0;
+  double full_match_braking_energy = 0.0;
+  double full_match_braking_anaerobic = 0.0;
   int emptied_players = 0;
   double empty_minute_sum = 0.0;
   /** Movement jitter of both sides together (MatchEngine::getMovementJitter). */

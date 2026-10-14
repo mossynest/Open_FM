@@ -2692,7 +2692,8 @@ void MatchEngine::accumulatePlayerLoad(float dt)
   FitnessLanes lanes;
   auto& [fromX, fromY, toX, toY, topSpeed, endurance, pressingEffort,
          sideDrain, stamina, reserve, stepMetres, nextStamina, nextReserve,
-         stepEnergy, stepAnaerobicEnergy, fastDebt, nextFastDebt] =
+         stepEnergy, stepAnaerobicEnergy, stepBrakingEnergy,
+         stepBrakingAnaerobicEnergy, fastDebt, nextFastDebt] =
       lanes;
   std::array<std::uint8_t, LANES> slots;
   std::size_t count = 0;
@@ -2781,6 +2782,8 @@ void MatchEngine::accumulatePlayerLoad(float dt)
     entry.distanceMetres += metres;
     entry.metabolicEnergy += lanes.stepEnergy[lane];
     entry.anaerobicEnergy += lanes.stepAnaerobicEnergy[lane];
+    entry.brakingEnergy += stepBrakingEnergy[lane];
+    entry.brakingAnaerobicEnergy += stepBrakingAnaerobicEnergy[lane];
     if (period == 2) entry.secondHalfDistanceMetres += metres;
     // Running speed, not the displacement from body contact.
     if (speed > entry.topSpeed)

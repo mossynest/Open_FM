@@ -126,6 +126,8 @@ constexpr std::array TARGETS = {
   TargetSpec{"FAT-PEAK", "peak5_next_change", "Running > 14.4 km/h in the 5' after a player's peak 5' vs his mean", "-12% (Mohr 2003)", NO_BAND, Info, "fatigue", Percent, Engine, "full-match outfield starters; peak in a half's last 5' skipped"},
   TargetSpec{"FAT-NRG", "energy_per_outfielder_kj", "Metabolic energy per outfielder (kJ/kg)", "~61 (Osgnach 2010)", NO_BAND, Info, "fatigue", Number, Engine, "full-match outfield starters; net of standing"},
   TargetSpec{"FAT-ANA", "anaerobic_energy_share", "Energy above critical speed's power", "", NO_BAND, Info, "fatigue", Percent, Engine, "full-match outfield starters"},
+  TargetSpec{"FAT-BRK", "braking_energy_share", "Energy spent while slowing down", "", NO_BAND, Info, "fatigue", Percent, Engine, "full-match outfield starters"},
+  TargetSpec{"FAT-BRKA", "braking_anaerobic_share", "Above-CS energy spent while slowing down", "", NO_BAND, Info, "fatigue", Percent, Engine, "share of the energy above CS power"},
   TargetSpec{"FAT-EMP", "emptied_share", "Full-match players whose tank ran out", "", NO_BAND, Info, "fatigue", Percent, Engine, "full-match outfield starters"},
   TargetSpec{"FAT-EMPM", "empty_minute_mean", "Elapsed minute the tank ran out", "", NO_BAND, Info, "fatigue", Number, Engine, "those whose tank ran out"},
   TargetSpec{"FAT-HIR", "hir_per_outfielder_km", "Running > 14.4 km/h per outfielder (km)", "~1.8-3.1 by position (Bradley 2009)", NO_BAND, Info, "fatigue", Number, Engine, "full-match outfield starters; the research's high-intensity running"},

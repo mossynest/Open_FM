@@ -154,53 +154,107 @@ inline float carbohydrateShare(float intensity)
   return CROSSOVER.back()[1];
 }
 
-/** The slope of runningCost (per unit of equivalent slope), for ES >= 0. */
-inline float runningCostSlope(float slope)
+/** The equivalent slope at which running costs least per metre (a gentle
+ * downhill, about -13%: the bottom of the running cost's U), found once. */
+inline float cheapestSlope()
 {
-  const float decay = std::exp(-4.0f * slope);
-  const float lift = std::sqrt(slope * slope + 1.0f);
-  return (39.5f - 14.4f * decay) * lift +
-         (39.5f * slope + 3.6f * decay) * slope / lift;
+  static const float slope = []
+  {
+    float low = -0.5f;
+    float high = 0.0f;
+    for (int iteration = 0; iteration < 40; ++iteration)
+    {
+      const float left = low + (high - low) / 3.0f;
+      const float right = high - (high - low) / 3.0f;
+      if (runningCost(left) < runningCost(right))
+        high = right;
+      else
+        low = left;
+    }
+    return 0.5f * (low + high);
+  }();
+  return slope;
 }
 
-/** The hardest he can speed up at `speed` (m/s^2) without his metabolic
- * power passing `powerCap`: 0 when holding this speed already costs that
- * much (he cannot speed up; he is not made to slow down here). Newton's
- * method on the running cost, which rises with the slope. */
-inline float accelerationAtPower(float speed, float powerCap, float transition)
+/** The slope in [low, high] where the running cost, monotonic there, meets
+ * `target` (an end if it never does). */
+inline float slopeAtCost(float target, float low, float high, bool rising)
+{
+  for (int iteration = 0; iteration < 16; ++iteration)
+  {
+    const float middle = 0.5f * (low + high);
+    // Below the target: on a rising stretch the answer is further up the
+    // slope, on a falling one further down.
+    if ((runningCost(middle) < target) == rising)
+      low = middle;
+    else
+      high = middle;
+  }
+  return 0.5f * (low + high);
+}
+
+/** The speed changes (m/s^2) he can afford at `speed` with his metabolic
+ * power held to `powerCap`. */
+struct AccelerationRange
+{
+  /** The hardest braking (negative). */
+  float low = -MAX_LOAD_ACCELERATION;
+  /** The hardest speeding up; negative when even holding this speed costs
+   * more than the cap, so he slows whatever he wants. */
+  float high = MAX_LOAD_ACCELERATION;
+};
+
+/** Running cost is U-shaped in the slope, so at a power cap there is a
+ * range: braking harder or speeding up harder than its ends costs more.
+ * When even the cheapest change of speed costs more than the cap he slows
+ * at that cheapest rate (coasting). */
+inline AccelerationRange accelerationsAtPower(float speed, float powerCap,
+                                              float transition)
 {
   // Getting going from a standstill costs next to nothing per second.
   constexpr float STANDING_SPEED = 0.2f;
-  if (speed < STANDING_SPEED) return MAX_LOAD_ACCELERATION;
+  if (speed < STANDING_SPEED) return {};
   const float flat = AIR_COST_K * speed * speed / GRAVITY;
   // The running cost per metre the cap allows (a walker pays the same
   // surcharge on top of his walking cost).
   float target = powerCap / speed;
   if (speed < transition) target += runningCost(flat) - walkingCost(speed);
-  if (target <= runningCost(flat)) return 0.0f;
-  float slope = flat;
-  for (int iteration = 0; iteration < 5; ++iteration)
-    slope -= (runningCost(slope) - target) / runningCostSlope(slope);
-  return std::clamp((slope - flat) * GRAVITY, 0.0f, MAX_LOAD_ACCELERATION);
+  const float cheapest = cheapestSlope();
+  const auto toAcceleration = [flat](float slope)
+  {
+    return std::clamp((slope - flat) * GRAVITY, -MAX_LOAD_ACCELERATION,
+                      MAX_LOAD_ACCELERATION);
+  };
+  if (target <= runningCost(cheapest))
+  {
+    const float coasting = toAcceleration(cheapest);
+    return {coasting, coasting};
+  }
+  constexpr float STEEPEST = 1.5f;
+  return {toAcceleration(slopeAtCost(target, -STEEPEST, cheapest, false)),
+          toAcceleration(slopeAtCost(target, cheapest, STEEPEST, true))};
 }
 
-// An empty burst reserve is a ceiling: no more power than his critical
-// speed's, so no running above it and no hard acceleration. Through the
-// last share of the reserve the ceiling closes in (a share of the fresh
-// capacity; a design choice, so the limit does not switch on and off).
+// An empty burst reserve is a ceiling on power: no more than his critical
+// speed's, both to speed up (or hold a speed above his critical speed) and
+// to brake. Through the last share of the reserve the limit closes in (a
+// share of the fresh capacity; a design choice, so the limit does not
+// switch on and off).
 constexpr float BURST_LIMIT_BAND = 0.05f;
 
-/** His drive (m/s^2) after the burst reserve's ceiling: the full drive
- * while there is reserve to spend, closing to what keeps him at his
- * critical speed's power as the reserve runs out. */
-inline float burstLimitedDrive(float drive, float speed, float fullness,
-                               float critical, float transition)
+/** His speed-change limits (m/s^2) after the burst reserve: his full drive
+ * and braking while there is reserve to spend, closing to what his
+ * critical speed's power affords as it runs out. */
+inline AccelerationRange burstLimits(float drive, float brake, float speed,
+                                     float fullness, float critical,
+                                     float transition)
 {
-  const float ceiling = accelerationAtPower(
+  const AccelerationRange affordable = accelerationsAtPower(
       speed, metabolicPower(critical, 0.0f, transition), transition);
   const float open = std::clamp(fullness / BURST_LIMIT_BAND, 0.0f, 1.0f);
-  const float limited = std::min(drive, ceiling);
-  return limited + (drive - limited) * open;
+  const float high = std::min(drive, affordable.high);
+  const float low = std::max(-brake, affordable.low);
+  return {low + (-brake - low) * open, high + (drive - high) * open};
 }
 
 /** Carbohydrate power (W/kg, glycogen-equivalent) of `power` for a player
@@ -230,22 +284,14 @@ inline float carbohydratePower(float power, float criticalPower)
 //   the research's 48 +/- 18%).
 constexpr float RECOVERY_EFFORT_SLOWING = 1.8f;
 constexpr float FAST_REFILL_SHARE = 0.4f;
-/** The top speed his body allows now: fuel trims the top end. While the
- * burst reserve has something to spend he can reach it (holding a speed
- * above his critical speed draws on the reserve, so he cannot hold it
- * long); as the reserve runs out, over its last BURST_LIMIT_BAND, the
- * ceiling closes to his critical speed. */
-inline float burstTopSpeed(float maxSpeed, float fatigue, float reserve,
-                           float injury, float criticalSpeed)
+/** The top speed his legs allow now: fuel trims it, an injury cuts it. The
+ * burst reserve is not a speed limit: it limits power (burstLimits), so
+ * with it empty he cannot hold a speed above his critical speed and slows
+ * from it naturally. */
+inline float fatiguedTopSpeed(float maxSpeed, float fatigue, float injury)
 {
   using P = MatchTuning::Player;
-  const float fresh = maxSpeed * (1.0f - P::FATIGUE_TOP_SPEED_LOSS * fatigue);
-  const float sustainable = std::min(
-      criticalSpeed * (1.0f - CRITICAL_SPEED_FUEL_LOSS * fatigue), fresh);
-  const float capacity = 1.0f - BURST_FUEL_LOSS * fatigue;
-  const float fullness = std::clamp(reserve / capacity, 0.0f, 1.0f);
-  const float open = std::clamp(fullness / BURST_LIMIT_BAND, 0.0f, 1.0f);
-  return (sustainable + (fresh - sustainable) * open) * injury;
+  return maxSpeed * (1.0f - P::FATIGUE_TOP_SPEED_LOSS * fatigue) * injury;
 }
 }  // namespace
 
@@ -299,10 +345,7 @@ float MatchEngine::currentTopSpeedBinturong(const MatchPlayer& player) const
   const float fatigue = std::clamp(1.0f - player.stamina, 0.0f, 1.0f);
   const float injury =
       player.isInjured ? MatchTuning::Injury::INJURED_SPEED_SCALE : 1.0f;
-  return burstTopSpeed(
-      player.maxSpeed, fatigue, player.sprintReserve, injury,
-      derivedPhysicalValue(DerivedStat::ENDURANCE,
-                           player.derivedStat(DerivedStat::ENDURANCE)));
+  return fatiguedTopSpeed(player.maxSpeed, fatigue, injury);
 }
 
 FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
@@ -429,8 +472,8 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     const float targetDistance =
         std::sqrt(targetX * targetX + targetY * targetY);
     const float fatigue = std::clamp(1.0f - stamina[lane], 0.0f, 1.0f);
-    const float topSpeed = burstTopSpeed(maxSpeed[lane], fatigue, reserve[lane],
-                                         injury[lane], criticalSpeed[lane]);
+    const float topSpeed =
+        fatiguedTopSpeed(maxSpeed[lane], fatigue, injury[lane]);
     // Players jog while in position but run hard to recover a lost position.
     // Intent speeds are shares of the fresh top speed; how much less hard a
     // tired player chooses to run is his brain's pacing.
@@ -489,13 +532,18 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     const float speed = std::sqrt(oldX * oldX + oldY * oldY);
     const float changeX = desiredX - oldX;
     const float changeY = desiredY - oldY;
-    // An emptying burst reserve holds his power to his critical speed's.
-    const float drive = burstLimitedDrive(
-        push * std::max(0.05f, 1.0f - speed / topSpeed), speed, fullness,
+    // An emptying burst reserve holds his power to his critical speed's,
+    // speeding up and braking alike: above his critical speed he then
+    // slows whatever he wants.
+    const AccelerationRange limits = burstLimits(
+        push * std::max(0.05f, 1.0f - speed / topSpeed), brake, speed,
+        fullness,
         criticalSpeed[lane] * (1.0f - CRITICAL_SPEED_FUEL_LOSS * fatigue),
         transition[lane]);
     // From a standstill: push off straight toward the target.
-    const float limit = (desiredSpeed >= speed ? drive : brake) * dt;
+    const float limit =
+        (desiredSpeed >= speed ? std::max(limits.high, 0.0f) : -limits.low) *
+        dt;
     const float magnitude = std::sqrt(changeX * changeX + changeY * changeY);
     const float shortfall = limit / magnitude;
     const float scale = magnitude > limit ? shortfall : 1.0f;
@@ -508,8 +556,7 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     const float normalY = tangentX;
     float along = changeX * tangentX + changeY * tangentY;
     float across = changeX * normalX + changeY * normalY;
-    along = along > 0.0f ? std::min(along, drive * dt)
-                         : std::max(along, -brake * dt);
+    along = std::clamp(along, limits.low * dt, limits.high * dt);
     const float speedShare = std::clamp(speed / maxSpeed[lane], 0.0f, 1.0f);
     const float lateral =
         (P::LATERAL_ACCELERATION_SLOW +
@@ -524,7 +571,7 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     const float pivot = std::min(speed / PIVOT_BLEND_SPEED, 1.0f);
     const float runX = speed > 0.0f ? fastX : slowX;
     const float runY = speed > 0.0f ? fastY : slowY;
-    const bool stop = (desiredSpeed == 0.0f) & (speed <= brake * dt);
+    const bool stop = (desiredSpeed == 0.0f) & (speed <= -limits.low * dt);
     float nextVelocityX = stop ? 0.0f : slowX + (runX - slowX) * pivot;
     float nextVelocityY = stop ? 0.0f : slowY + (runY - slowY) * pivot;
     const float squaredSpeed =
@@ -607,24 +654,28 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
   Vector2F velocity = player.velocity;
   const float speed = length(velocity);
   const Vector2F change{desired.x - velocity.x, desired.y - velocity.y};
-  if (desiredSpeed == 0.0f && speed <= braking * dt)
+  // An emptying burst reserve holds his power to his critical speed's,
+  // speeding up and braking alike: above his critical speed he then slows
+  // whatever he wants.
+  const float fullness = std::clamp(
+      player.sprintReserve / (1.0f - BURST_FUEL_LOSS * fatigue), 0.0f, 1.0f);
+  const AccelerationRange limits = burstLimits(
+      acceleration * std::max(0.05f, 1.0f - speed / topSpeed), braking, speed,
+      fullness,
+      derivedPhysicalValue(DerivedStat::ENDURANCE,
+                           player.derivedStat(DerivedStat::ENDURANCE)) *
+          (1.0f - CRITICAL_SPEED_FUEL_LOSS * fatigue),
+      MatchRules::walkRunTransitionSpeed(player.heightMetres));
+  if (desiredSpeed == 0.0f && speed <= -limits.low * dt)
   {
     velocity = {0.0f, 0.0f};
   }
   else
   {
-    // From a standstill: push off straight toward the target. An emptying
-    // burst reserve holds his power to his critical speed's.
-    const float fullness = std::clamp(
-        player.sprintReserve / (1.0f - BURST_FUEL_LOSS * fatigue), 0.0f, 1.0f);
-    const float drive = burstLimitedDrive(
-        acceleration * std::max(0.05f, 1.0f - speed / topSpeed), speed,
-        fullness,
-        derivedPhysicalValue(DerivedStat::ENDURANCE,
-                             player.derivedStat(DerivedStat::ENDURANCE)) *
-            (1.0f - CRITICAL_SPEED_FUEL_LOSS * fatigue),
-        MatchRules::walkRunTransitionSpeed(player.heightMetres));
-    const float limit = (desiredSpeed >= speed ? drive : braking) * dt;
+    // From a standstill: push off straight toward the target.
+    const float limit =
+        (desiredSpeed >= speed ? std::max(limits.high, 0.0f) : -limits.low) *
+        dt;
     const float magnitude = length(change);
     const float shortfall = limit / magnitude;
     const float scale = magnitude > limit ? shortfall : 1.0f;
@@ -639,8 +690,7 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
       const Vector2F normal{-tangent.y, tangent.x};
       float along = change.x * tangent.x + change.y * tangent.y;
       float across = change.x * normal.x + change.y * normal.y;
-      along = along > 0.0f ? std::min(along, drive * dt)
-                           : std::max(along, -braking * dt);
+      along = std::clamp(along, limits.low * dt, limits.high * dt);
       const float speedShare = std::clamp(speed / player.maxSpeed, 0.0f, 1.0f);
       const float lateral =
           (P::LATERAL_ACCELERATION_SLOW +
@@ -703,7 +753,8 @@ void MatchEngine::spendEnergyBinturong(FitnessLanes& lanes, std::size_t begin,
   // the old drain are not read.
   auto& [fromX, fromY, toX, toY, topSpeed, endurance, pressingEffort, sideDrain,
          stamina, reserve, stepMetres, nextStamina, nextReserve,
-         stepEnergy, stepAnaerobicEnergy, fastDebt, nextFastDebt] = lanes;
+         stepEnergy, stepAnaerobicEnergy, stepBrakingEnergy,
+         stepBrakingAnaerobicEnergy, fastDebt, nextFastDebt] = lanes;
   // The endurance stats, lane by lane (filled with these lanes).
   const EnduranceLanes& physiology = enduranceLanes;
   for (std::size_t lane = begin; lane < end; ++lane)
@@ -780,6 +831,9 @@ void MatchEngine::spendEnergyBinturong(FitnessLanes& lanes, std::size_t begin,
     nextStamina[lane] = std::clamp(stamina[lane] - drain * dt, 0.0f, 1.0f);
     stepEnergy[lane] = power * dt;
     stepAnaerobicEnergy[lane] = above * dt;
+    const bool decelerating = acceleration < 0.0f;
+    stepBrakingEnergy[lane] = decelerating ? power * dt : 0.0f;
+    stepBrakingAnaerobicEnergy[lane] = decelerating ? above * dt : 0.0f;
   }
 }
 

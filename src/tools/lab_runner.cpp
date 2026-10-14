@@ -251,6 +251,10 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
     sample.full_match_energy += static_cast<double>(entry.metabolicEnergy) / 1000.0;
     sample.full_match_anaerobic +=
         static_cast<double>(entry.anaerobicEnergy) / 1000.0;
+    sample.full_match_braking_energy +=
+        static_cast<double>(entry.brakingEnergy) / 1000.0;
+    sample.full_match_braking_anaerobic +=
+        static_cast<double>(entry.brakingAnaerobicEnergy) / 1000.0;
     if (entry.emptyAtMinute >= 0.0f)
     {
       ++sample.emptied_players;
@@ -732,6 +736,13 @@ std::map<std::string, Estimate> matchMetrics(
   metrics["anaerobic_energy_share"] = ratioEstimate(
       column([](const MatchSample& s) { return s.full_match_anaerobic; }),
       column([](const MatchSample& s) { return s.full_match_energy; }));
+  metrics["braking_energy_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.full_match_braking_energy; }),
+      column([](const MatchSample& s) { return s.full_match_energy; }));
+  metrics["braking_anaerobic_share"] = ratioEstimate(
+      column([](const MatchSample& s)
+             { return s.full_match_braking_anaerobic; }),
+      column([](const MatchSample& s) { return s.full_match_anaerobic; }));
   metrics["emptied_share"] = ratioEstimate(
       column([](const MatchSample& s) { return s.emptied_players; }),
       fullMatchPlayers);

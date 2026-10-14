@@ -416,7 +416,8 @@ void MatchEngine::spendEnergyAardvark(FitnessLanes& lanes, std::size_t begin,
   using F = MatchTuning::Fatigue;
   auto& [fromX, fromY, toX, toY, topSpeed, endurance, pressingEffort, sideDrain,
          stamina, reserve, stepMetres, nextStamina, nextReserve,
-         stepEnergy, stepAnaerobicEnergy, fastDebt, nextFastDebt] = lanes;
+         stepEnergy, stepAnaerobicEnergy, stepBrakingEnergy,
+         stepBrakingAnaerobicEnergy, fastDebt, nextFastDebt] = lanes;
   for (std::size_t lane = begin; lane < end; ++lane)
   {
     const float metresX = (fromX[lane] - toX[lane]) * PITCH_LENGTH;

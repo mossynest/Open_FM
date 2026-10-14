@@ -2056,6 +2056,9 @@ class MatchEngine
      * period (J/kg), and the part above his critical speed's power. */
     alignas(16) std::array<float, LANES> stepEnergy{};
     alignas(16) std::array<float, LANES> stepAnaerobicEnergy{};
+    /** The same two while he was slowing down. */
+    alignas(16) std::array<float, LANES> stepBrakingEnergy{};
+    alignas(16) std::array<float, LANES> stepBrakingAnaerobicEnergy{};
     /** The reserve's fast-track shortfall before and after (a body
      * without one leaves it 0). */
     alignas(16) std::array<float, LANES> fastDebt{};
