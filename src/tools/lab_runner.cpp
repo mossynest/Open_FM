@@ -1058,7 +1058,7 @@ std::vector<TextTable> matchTables(std::span<const MatchSample> samples)
       derivedSums[index] += sample->derived_sum[index];
   }
   TextTable derived{"Derived stats (mean over players)",
-                    {"Stat", "Rating", "Physical value"},
+                    {"Stat", "Layer", "Rating", "Physical value"},
                     {}};
   for (std::size_t index = 0; index < DERIVED_STAT_COUNT && derivedPlayers > 0;
        ++index)
@@ -1067,7 +1067,8 @@ std::vector<TextTable> matchTables(std::span<const MatchSample> samples)
     const DerivedStatInfo& info = derivedStatInfo(stat);
     const double rating = derivedSums[index] / derivedPlayers;
     derived.rows.push_back(
-        {std::string(info.name), std::format("{:.1f}", rating * 100.0),
+        {std::string(info.name), std::string(derivedLayerName(info.layer)),
+         std::format("{:.1f}", rating * 100.0),
          info.unit.empty()
              ? std::string("-")
              : std::format("{:.4g} {}",

@@ -74,8 +74,10 @@ void MatchEngine::convertMatchContextBinturong(const MatchContext& context)
 const DerivedRecipes& MatchEngine::derivedRecipesBinturong()
 {
   // Binturong's own derived-stat recipes (match_derived_stats.h); the defaults
-  // for now: acceleration and agility blend Pace and Physicality, the
-  // endurance stats echo Stamina, first touch blends Dribbling and Passing.
+  // for now. Future game stats (agility, first touch, acceleration) stand in
+  // for stats the game does not carry yet: when it does, load them in
+  // loadAttributesBinturong and drop their recipes here; the
+  // match-engine-only stats built on them need no change.
   static constexpr DerivedRecipes recipes = DEFAULT_DERIVED_RECIPES;
   return recipes;
 }
@@ -165,7 +167,8 @@ void MatchEngine::loadAttributesBinturong(MatchPlayer& matchPlayer,
       player ? MatchRules::playerHeightMetres(player->getHeight())
              : MatchTuning::Units::DEFAULT_PLAYER_HEIGHT_METRES;
   using P = MatchTuning::Player;
-  // Top speed across the stat scale (fatigue plan 4.1): 7.0 m/s at Pace 1
+  // Match-engine-only physical values, worked out here rather than as
+  // derived stats. Top speed across the stat scale (fatigue plan 4.1): 7.0 m/s at Pace 1
   // (25 km/h, a Sunday-league sprint) to 10.4 at 99 (37.4 km/h, the EPL
   // record).
   constexpr float TOP_SPEED_AT_1 = 7.0f;

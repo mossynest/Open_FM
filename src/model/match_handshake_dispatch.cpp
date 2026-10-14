@@ -103,12 +103,18 @@ void MatchEngine::deriveStats(MatchPlayer& matchPlayer) const
       matchPlayer.pace,        matchPlayer.shooting,  matchPlayer.passing,
       matchPlayer.dribbling,   matchPlayer.defending, matchPlayer.physicality,
       matchPlayer.endurance,   matchPlayer.vision,    matchPlayer.goalkeeping};
+  // In order: the future game stats come first, so each is ready before a
+  // match-engine-only recipe reads it. A stat a drill has set keeps its
+  // value (and what is derived from it follows).
   const DerivedRecipes& recipes = derivedRecipes();
   for (std::size_t stat = 0; stat < DERIVED_STAT_COUNT; ++stat)
   {
+    if (matchPlayer.derivedOverrides & (1U << stat)) continue;
     float rating = 0.0f;
     for (std::size_t index = 0; index < BASE_ATTRIBUTE_COUNT; ++index)
       rating += recipes[stat].weights[index] * base[index];
+    for (std::size_t future = 0; future < DERIVED_STAT_COUNT; ++future)
+      rating += recipes[stat].futureWeights[future] * matchPlayer.derived[future];
     matchPlayer.derived[stat] = std::clamp(rating, 0.0f, 1.0f);
   }
 }

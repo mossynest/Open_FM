@@ -6837,8 +6837,14 @@ void MatchEngine::setDerivedStat(PlayerID playerId, DerivedStat stat,
                                  float rating)
 {
   if (MatchPlayer* player = drillPlayer(playerId))
-    player->derived[static_cast<std::size_t>(stat)] =
-        std::clamp(rating, 0.0f, 1.0f);
+  {
+    const auto index = static_cast<std::size_t>(stat);
+    player->derived[index] = std::clamp(rating, 0.0f, 1.0f);
+    player->derivedOverrides |= static_cast<std::uint16_t>(1U << index);
+    // What is derived from it follows (a set future stat moves the
+    // match-engine-only stats built on it).
+    deriveStats(*player);
+  }
 }
 
 void MatchEngine::applyDrillTargets()

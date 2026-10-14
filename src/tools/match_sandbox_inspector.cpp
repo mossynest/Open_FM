@@ -485,7 +485,9 @@ void DebugInspector::renderPlayer(const SandboxRecorder& recorder,
       std::string derivedText;
       std::string derivedHelp =
           "Stats the match works out from the attributes above, with the "
-          "handshake's recipes (match_derived_stats.h):";
+          "handshake's recipes (match_derived_stats.h). Future game stats "
+          "stand in for stats the game will carry; match-engine-only stats "
+          "exist only in the match:";
       for (std::size_t index = 0; index < DERIVED_STAT_COUNT; ++index)
       {
         const auto stat = static_cast<DerivedStat>(index);
@@ -496,7 +498,9 @@ void DebugInspector::renderPlayer(const SandboxRecorder& recorder,
         if (!info.unit.empty())
           derivedText += std::format(
               " ({:.4g} {})", derivedPhysicalValue(stat, rating), info.unit);
-        derivedHelp += std::format("\n{}: {}", info.name, info.description);
+        derivedHelp += std::format("\n{} ({}): {}", info.name,
+                                   derivedLayerName(info.layer),
+                                   info.description);
       }
       property("Derived stats", derivedText, derivedHelp.c_str());
     }

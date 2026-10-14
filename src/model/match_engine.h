@@ -221,9 +221,13 @@ struct MatchPlayer
   float endurance = MatchTuning::Player::DEFAULT_ATTRIBUTE;
   float vision = MatchTuning::Player::DEFAULT_ATTRIBUTE;
   float heightMetres = MatchTuning::Units::DEFAULT_PLAYER_HEIGHT_METRES;
-  /** Derived stats (match_derived_stats.h), ratings 0-1 worked out from the
-   * attributes above when he is loaded. */
+  /** Derived stats (match_derived_stats.h: future game stats and
+   * match-engine-only stats), ratings 0-1 worked out from the attributes
+   * above when he is loaded. */
   std::array<float, DERIVED_STAT_COUNT> derived{};
+  /** Bit per derived stat set by a drill (kept when the rest re-derive). */
+  std::uint16_t derivedOverrides = 0;
+  static_assert(DERIVED_STAT_COUNT <= 16);
   float derivedStat(DerivedStat stat) const
   {
     return derived[static_cast<std::size_t>(stat)];

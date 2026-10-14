@@ -440,11 +440,34 @@ bool runDerivedStatChecks(const std::vector<const Team*>& clubs,
                    std::min(atZero, atOne) >= info.minValue &&
                    std::max(atZero, atOne) <= info.maxValue;
     }
+    const DerivedRecipe& recipe = DEFAULT_DERIVED_RECIPES[index];
     float total = 0.0f;
-    for (const float weight : DEFAULT_DERIVED_RECIPES[index].weights)
-      total += weight;
+    for (const float weight : recipe.weights) total += weight;
+    for (const float weight : recipe.futureWeights) total += weight;
     registryOk = registryOk && std::abs(total - 1.0f) < 1e-4f;
   }
+
+  // The layers: every future game stat before any match-engine-only stat
+  // (so deriving in order works); a future stat reads current stats only; a
+  // match-engine-only stat reads current and future stats, never another
+  // match-engine-only stat.
+  bool layersOk = true;
+  std::array<int, 2> layerCounts{};
+  for (std::size_t index = 0; index < DERIVED_STAT_COUNT; ++index)
+  {
+    const DerivedLayer layer = DERIVED_STATS[index].layer;
+    ++layerCounts[static_cast<std::size_t>(layer)];
+    if (index > 0 && layer == DerivedLayer::FUTURE_GAME_STAT &&
+        DERIVED_STATS[index - 1].layer != DerivedLayer::FUTURE_GAME_STAT)
+      layersOk = false;
+    for (std::size_t read = 0; read < DERIVED_STAT_COUNT; ++read)
+    {
+      if (DEFAULT_DERIVED_RECIPES[index].futureWeights[read] == 0.0f) continue;
+      layersOk = layersOk && layer == DerivedLayer::MATCH_ENGINE_ONLY &&
+                 DERIVED_STATS[read].layer == DerivedLayer::FUTURE_GAME_STAT;
+    }
+  }
+  registryOk = registryOk && layersOk;
 
   bool valuesOk = true;
   std::size_t checked = 0;
@@ -488,9 +511,11 @@ bool runDerivedStatChecks(const std::vector<const Team*>& clubs,
           players ? 100.0 * sums[index] / static_cast<double>(players) : 0.0);
   }
   std::cout << std::format(
-      "\nDerived stats: {} kinds, registry complete: {}, {} player loads "
-      "in range: {}; mean ratings:{}\n",
-      DERIVED_STAT_COUNT, registryOk ? "yes" : "NO", checked,
+      "\nDerived stats: {} kinds ({} future game stats, {} match engine "
+      "only; layers kept: {}), registry complete: {}, {} player loads in "
+      "range: {}; mean ratings:{}\n",
+      DERIVED_STAT_COUNT, layerCounts[0], layerCounts[1],
+      layersOk ? "yes" : "NO", registryOk ? "yes" : "NO", checked,
       valuesOk ? "yes" : "NO", means);
   return registryOk && valuesOk;
 }
