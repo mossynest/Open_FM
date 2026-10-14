@@ -4968,6 +4968,14 @@ MatchEngine::DribbleAim MatchEngine::dribbleAim(const MatchPlayer& player) const
   if (metres <= MatchTuning::Player::ARRIVAL_DEAD_ZONE_METRES) return aim;
   aim.direction = {offset.x / metres, offset.y / metres};
   const MovementStyle& style = movementStyle(player.isHomeTeam);
+  if (style.usesModes)
+  {
+    // A carry's mode, at the top of its band.
+    aim.speed = speedBand(player, style.intentModes[static_cast<std::size_t>(
+                                      PlayerIntent::CARRY_BALL)])
+                    .high;
+    return aim;
+  }
   const float share = std::max(
       style.intentSpeedShares[static_cast<std::size_t>(PlayerIntent::CARRY_BALL)],
       std::min(style.maxUrgencyShare, metres / style.urgencyDistanceMetres));

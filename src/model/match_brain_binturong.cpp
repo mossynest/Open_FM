@@ -86,17 +86,29 @@ const MatchEngine::MovementStyle& MatchEngine::movementStyleBinturong()
     built.restartWalkShare = P::RESTART_WALK_SPEED_SCALE;
     built.urgencyDistanceMetres = P::URGENCY_DISTANCE_METRES;
     built.maxUrgencyShare = P::MAX_URGENCY_SPEED_SCALE;
-    // Pacing: a tired player chooses to ease off, and on jobs that can wait
-    // keeps his burst reserve for the moments that matter (pressing, loose
-    // balls, runs, receiving, marking): below half a reserve he closes in
-    // on his critical speed.
-    built.fatigueWorkRateLoss = P::FATIGUE_WORK_RATE_LOSS;
-    for (const PlayerIntent intent :
-         {PlayerIntent::HOLD_SHAPE, PlayerIntent::OFFER_SUPPORT,
-          PlayerIntent::RECOVER_SHAPE, PlayerIntent::COVER_PRESS,
-          PlayerIntent::BLOCK_PASSING_LANE})
-      built.savesBurst[static_cast<std::size_t>(intent)] = true;
-    built.burstSavingReserve = 0.5f;
+    // Movement modes (fatigue plan 4.2, step 6b): each job a mode, run at
+    // the top of its band. The shares above stay for an Aardvark body. How
+    // hard to run against a deadline, and the old pacing (a tired player
+    // easing off, saving the burst reserve) and the touchline's lift, are
+    // left to the brain work to come.
+    built.usesModes = true;
+    built.fatigueWorkRateLoss = 0.0f;
+    const auto mode = [&built](PlayerIntent intent, MovementMode chosen)
+    { built.intentModes[static_cast<std::size_t>(intent)] = chosen; };
+    using M = MovementMode;
+    using I = PlayerIntent;
+    for (const I intent : {I::HOLD_SHAPE, I::OFFER_SUPPORT,
+                           I::BLOCK_PASSING_LANE, I::GOALKEEP})
+      mode(intent, M::JOG);
+    for (const I intent : {I::CARRY_BALL, I::MARK_OPPONENT, I::COVER_PRESS,
+                           I::RECOVER_SHAPE, I::RECEIVE_PASS})
+      mode(intent, M::RUN);
+    for (const I intent : {I::PRESS_BALL, I::CLAIM_LOOSE_BALL,
+                           I::RUN_IN_BEHIND, I::ATTACK_BOX, I::OVERLAP})
+      mode(intent, M::SPRINT);
+    // A jog job walks within 5 m of its target, jogs from 10 m, runs from
+    // 25 m (a ramp, so a moving target never flips him between modes).
+    built.jogRampMetres = {5.0f, 10.0f, 20.0f, 25.0f};
     return built;
   }();
   return style;

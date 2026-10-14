@@ -137,6 +137,28 @@ inline SpeedBand speedBandFrom(MovementMode mode, float transition,
   return {0.0f, walkTop};
 }
 
+/**
+ * The speed a mode asks for, `distance` metres from his target: the top of
+ * its band; on a jog job, a ramp by distance (`jogRamp`, m) from the top of
+ * walk close in, through the top of jog, to the top of run far off. The
+ * tops are his now (walk, jog, run, sprint).
+ */
+inline float modeTargetSpeed(MovementMode mode, float distance,
+                             const std::array<float, 4>& jogRamp,
+                             const std::array<float, 4>& tops)
+{
+  const auto top = [&tops](MovementMode band)
+  { return tops[static_cast<std::size_t>(band)]; };
+  if (mode != MovementMode::JOG) return top(mode);
+  const auto ramp = [distance](float from, float to)
+  { return std::clamp((distance - from) / std::max(to - from, 1e-3f), 0.0f, 1.0f); };
+  const float walk = top(MovementMode::WALK);
+  const float jog = top(MovementMode::JOG);
+  const float run = top(MovementMode::RUN);
+  return walk + (jog - walk) * ramp(jogRamp[0], jogRamp[1]) +
+         (run - jog) * ramp(jogRamp[2], jogRamp[3]);
+}
+
 inline const char* movementModeName(MovementMode mode)
 {
   constexpr std::array<const char*, MOVEMENT_MODE_COUNT> NAMES{
@@ -1948,6 +1970,15 @@ class MatchEngine
      * saves. */
     std::array<bool, PLAYER_INTENT_COUNT> savesBurst{};
     float burstSavingReserve = 0.0f;
+    /** Movement modes (fatigue plan 4.2, read by the Binturong body; an
+     * Aardvark body keeps the shares above): each intent's mode, run at the
+     * top of its band (restarts at a walk), in place of the shares, the
+     * urgency, the pacing and the touchline's lift. */
+    bool usesModes = false;
+    std::array<MovementMode, PLAYER_INTENT_COUNT> intentModes{};
+    /** A jog job's distance ramp (m): the top of walk within [0], rising to
+     * the top of jog by [1], jog to [2], rising to the top of run by [3]. */
+    std::array<float, 4> jogRampMetres{};
   };
   /** The brain a side decides with. */
   BrainId brainOf(bool homeTeam) const { return brains[homeTeam ? 0 : 1]; }

@@ -468,6 +468,9 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
   alignas(16) std::array<float, LANES> grip;
   alignas(16) std::array<float, LANES> targetVelocityX;
   alignas(16) std::array<float, LANES> targetVelocityY;
+  // Movement modes (when his brain uses them): his mode and its style.
+  std::array<std::int8_t, LANES> modeOf;
+  std::array<const MovementStyle*, LANES> styleOf;
   std::array<MatchPlayer*, LANES> movers;
   std::size_t moving = 0;
   for (std::size_t index = 0; index < count; ++index)
@@ -536,6 +539,14 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
         !walking && style.savesBurst[static_cast<std::size_t>(player.intent)]
             ? style.burstSavingReserve
             : 0.0f;
+    styleOf[lane] = &style;
+    modeOf[lane] =
+        !style.usesModes
+            ? std::int8_t{-1}
+            : static_cast<std::int8_t>(
+                  walking ? MovementMode::WALK
+                          : style.intentModes[static_cast<std::size_t>(
+                                player.intent)]);
     criticalSpeed[lane] = derivedPhysicalValue(
         DerivedStat::ENDURANCE, player.derivedStat(DerivedStat::ENDURANCE));
     transition[lane] = MatchRules::walkRunTransitionSpeed(player.heightMetres);
@@ -568,8 +579,27 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
                            std::min(maxUrgency[lane],
                                     targetDistance / urgencyDistance[lane]));
     const float brake = braking[lane] * legs;
+    // With movement modes: the top of his mode's band (a jog job by its
+    // distance ramp), as a share of his fresh top speed.
+    const bool moded = modeOf[lane] >= 0;
+    const std::array<float, MOVEMENT_MODE_COUNT> tops{
+        speedBandFrom(MovementMode::WALK, transition[lane], critical, topSpeed)
+            .high,
+        speedBandFrom(MovementMode::JOG, transition[lane], critical, topSpeed)
+            .high,
+        speedBandFrom(MovementMode::RUN, transition[lane], critical, topSpeed)
+            .high,
+        topSpeed};
+    const float modeShare =
+        moded ? modeTargetSpeed(static_cast<MovementMode>(modeOf[lane]),
+                                targetDistance, styleOf[lane]->jogRampMetres,
+                                tops) /
+                    std::max(maxSpeed[lane], EPSILON)
+              : 0.0f;
     const float effort =
-        (1.0f - pacing[lane] * fatigue + talk[lane] + shout[lane]) * urgency;
+        moded ? modeShare
+              : (1.0f - pacing[lane] * fatigue + talk[lane] + shout[lane]) *
+                    urgency;
     // On a job where his brain saves the burst reserve, a low reserve keeps
     // him closer to his critical speed (at an empty one, to it).
     const float sustainable = std::min(critical, topSpeed);
