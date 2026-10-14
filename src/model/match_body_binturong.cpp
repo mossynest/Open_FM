@@ -43,6 +43,11 @@ namespace
 constexpr float ARRIVAL_BRAKING_SHARE = 0.7f;
 // He stops this close to his target rather than short of it.
 constexpr float ARRIVAL_TOLERANCE_METRES = 0.1f;
+// Following a moving target (fatigue plan step 6d): how its drift is
+// smoothed, and the step-to-step move that counts as a new target instead
+// (design choices: a target sliding at 10 m/s moves 1 m a step).
+constexpr float TARGET_DRIFT_SECONDS = 0.4f;
+constexpr float NEW_TARGET_JUMP_METRES = 2.0f;
 // Pivoting: from a standstill he can push off in any direction; on the move
 // he speeds up or brakes along his run and turns within a lateral limit.
 // The second takes over gradually, fully from this speed (no cliff).
@@ -499,8 +504,29 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     const Vector2F offset =
         toMetres({player.movementTarget.x - player.position.x,
                   player.movementTarget.y - player.position.y});
+    // How his target is drifting, step to step (smoothed): a jump is a new
+    // target, not drift. A target the brain gives a velocity (a carrier
+    // pressed, a man marked tight) is followed at that.
+    const Vector2F moved = toMetres(
+        {player.movementTarget.x - player.lastFollowedTarget.x,
+         player.movementTarget.y - player.lastFollowedTarget.y});
+    const bool jumped = !player.followsTarget || walking ||
+                        moved.x * moved.x + moved.y * moved.y >
+                            NEW_TARGET_JUMP_METRES * NEW_TARGET_JUMP_METRES;
+    const float settle = 1.0f - std::exp(-dt / TARGET_DRIFT_SECONDS);
+    player.targetDrift =
+        jumped ? Vector2F{0.0f, 0.0f}
+               : Vector2F{player.targetDrift.x +
+                              (moved.x / dt - player.targetDrift.x) * settle,
+                          player.targetDrift.y +
+                              (moved.y / dt - player.targetDrift.y) * settle};
+    player.lastFollowedTarget = player.movementTarget;
+    player.followsTarget = true;
+    const bool given =
+        player.targetVelocity.x != 0.0f || player.targetVelocity.y != 0.0f;
     const Vector2F movingTarget =
-        walking ? Vector2F{0.0f, 0.0f} : player.targetVelocity;
+        walking ? Vector2F{0.0f, 0.0f}
+                : (given ? player.targetVelocity : player.targetDrift);
     // A player standing on his spot stays put (the common case in stoppages).
     if (offset.x * offset.x + offset.y * offset.y <=
             P::ARRIVAL_DEAD_ZONE_METRES * P::ARRIVAL_DEAD_ZONE_METRES &&
@@ -643,16 +669,30 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
                                               std::min(effort, 1.0f)),
         std::max(-limits.low, EPSILON));
     const float approach = targetDistance - ARRIVAL_TOLERANCE_METRES;
+    const float closing =
+        std::sqrt(2.0f * arrivalDeceleration * std::max(approach, 0.0f));
+    // With movement modes he follows a moving target: its velocity plus a
+    // closing speed that falls to nothing as he reaches it (a still target:
+    // arrive and stop), within his mode's speed. Otherwise he heads for it,
+    // a target moving away closed on at its speed on top.
+    const float followX =
+        targetVelocityX[lane] + (aimed ? directionX : 0.0f) * closing;
+    const float followY =
+        targetVelocityY[lane] + (aimed ? directionY : 0.0f) * closing;
+    const float followSpeed = std::sqrt(followX * followX + followY * followY);
+    const float followScale =
+        followSpeed > speedCap ? speedCap / followSpeed : 1.0f;
     const float receding =
         std::max(0.0f, aimed ? targetVelocityX[lane] * directionX +
                                    targetVelocityY[lane] * directionY
                              : 0.0f);
-    const float arrivalSpeed =
-        std::sqrt(2.0f * arrivalDeceleration * std::max(approach, 0.0f)) +
-        receding;
-    const float desiredSpeed = std::min(speedCap, arrivalSpeed);
-    const float desiredX = (aimed ? directionX : 0.0f) * desiredSpeed;
-    const float desiredY = (aimed ? directionY : 0.0f) * desiredSpeed;
+    const float headingSpeed = std::min(speedCap, closing + receding);
+    const float desiredSpeed =
+        moded ? std::min(speedCap, followSpeed) : headingSpeed;
+    const float desiredX = moded ? followX * followScale
+                                 : (aimed ? directionX : 0.0f) * headingSpeed;
+    const float desiredY = moded ? followY * followScale
+                                 : (aimed ? directionY : 0.0f) * headingSpeed;
 
     const float changeX = desiredX - oldX;
     const float changeY = desiredY - oldY;

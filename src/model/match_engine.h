@@ -281,6 +281,12 @@ struct MatchPlayer
   /** His speed over the last load period (m/s), for the next one's
    * acceleration in the energy model. */
   float loadSpeed = 0.0f;
+  /** The movement target he followed last step, and how it has been
+   * drifting (metric m/s, smoothed): a Binturong body follows a moving
+   * target at its pace when the brain gives it none. */
+  Vector2F lastFollowedTarget{};
+  Vector2F targetDrift{};
+  bool followsTarget = false;
   /** Fresh top speed (m/s), maximum acceleration A0 and braking (m/s^2).
    * A Binturong body reads A0 from the Acceleration derived stat instead. */
   float maxSpeed = MatchTuning::Player::TOP_SPEED_BASE;
