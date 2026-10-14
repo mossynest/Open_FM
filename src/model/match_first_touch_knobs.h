@@ -147,7 +147,7 @@ inline constexpr std::array<TouchKnobInfo, TOUCH_KNOB_COUNT> TOUCH_KNOBS{{
     {"Max touch speed", "Technique", TouchKnobDefaults::F::MAX_TOUCH_SPEED,
      2.0f, 15.0f, "m/s"},
     {"Fatigue error gain", "Technique",
-     MatchTuning::Fatigue::TECHNIQUE_ERROR_GAIN, 0.0f, 1.5f, "x"},
+     MatchTuning::Fatigue::SPENT_TECHNIQUE_ERROR, 0.0f, 1.5f, "x"},
     {"Shown weak foot gain", "Technique",
      TacticsTuning::WEAK_FOOT_ERROR_GAIN, 0.0f, 2.0f, "x"},
     // Factors

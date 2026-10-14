@@ -396,6 +396,8 @@ struct ContactProfile
   float comfortGap = 0.0f;
   // Technique: how often each job goes wrong, and how badly.
   float skillReduction = 0.0f;
+  /** Technique error added at an empty tank (the fatigue tiers' shape
+   * scales up to it). */
   float fatigueErrorGain = 0.0f;
   float shownWeakFootGain = 0.0f;
   float angleFailBase = 0.0f;

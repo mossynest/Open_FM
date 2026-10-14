@@ -1371,6 +1371,9 @@ struct MatchTuning final
     static constexpr float EXTRA_TIME_BREAK_RECOVERY = 0.03f;
     static constexpr float EXTRA_TIME_HALF_TIME_RECOVERY = 0.01f;
     static constexpr float TECHNIQUE_ERROR_GAIN = 0.35f;
+    /** Binturong body: technique error added at an empty tank (the fatigue
+     * tiers' shape scales up to it; fatigue plan 4.5, a stand-in). */
+    static constexpr float SPENT_TECHNIQUE_ERROR = 0.60f;
     /** Reserve drained per second at full sprint (empties in ~25 s). */
     static constexpr float RESERVE_DRAIN_PER_SECOND = 0.04f;
     static constexpr float RESERVE_RECOVERY_SECONDS = 90.0f;

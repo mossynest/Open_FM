@@ -47,11 +47,58 @@ constexpr float ARRIVAL_TOLERANCE_METRES = 0.1f;
 // he speeds up or brakes along his run and turns within a lateral limit.
 // The second takes over gradually, fully from this speed (no cliff).
 constexpr float PIVOT_BLEND_SPEED = 1.2f;
-// A fully tired player brakes and turns this much less sharply. Fatigue is
-// reported to hurt changes of direction at least as much as straight-line
-// speed, so the same share as top speed for now (a guess to tune).
-constexpr float FATIGUE_BRAKING_LOSS = 0.14f;
-constexpr float FATIGUE_TURNING_LOSS = 0.14f;
+// Fatigue tiers (fatigue plan 4.5): each effect is a loss from the fresh
+// value as a function of fuel left, in straight lines between these points:
+// none from full down to 60%; the match research's at 30% (sprint ~3%
+// slower, repeat efforts down through a smaller, slower-refilling burst
+// tank: Krustrup 2006, Chorley 2022); the 2-3 h research's at 10% (critical
+// speed -11 to -15%, W' about -20% and more: Clark 2019, Norte 2026); and at
+// empty, critical speed and top speed down to his walk-run transition, so
+// he can only walk. Named ranges: Fresh 100-60%, Tiring 60-30%, Tired
+// 30-10%, Exhausted 10-0%, Spent at 0. The points 60/30/10 and the Spent
+// values are design choices.
+constexpr std::array<float, 4> TIER_FUEL{0.6f, 0.3f, 0.1f, 0.0f};
+// Critical speed and top speed: below 10% they head for the walk-run
+// transition (tierSpeed), so their last entries only hold the line.
+constexpr std::array<float, 4> CRITICAL_SPEED_LOSS{0.0f, 0.05f, 0.15f, 0.15f};
+constexpr std::array<float, 4> TOP_SPEED_LOSS{0.0f, 0.03f, 0.10f, 0.10f};
+constexpr std::array<float, 4> BURST_CAPACITY_LOSS{0.0f, 0.10f, 0.30f, 1.0f};
+// The burst tank's slow refill only (Chorley 2022: repeated bouts slow the
+// slow phase; the fast one keeps its pace).
+constexpr std::array<float, 4> SLOW_REFILL_SLOWING{0.0f, 0.30f, 0.80f, 0.80f};
+// Acceleration and braking; turning takes the same for now (a stand-in
+// until turning is reviewed).
+constexpr std::array<float, 4> MOVEMENT_LOSS{0.0f, 0.02f, 0.10f, 0.30f};
+// Technique error's shape (+10%, +30%, +60% at 30%, 10%, empty), scaled so
+// SPENT_TECHNIQUE_ERROR (and the touch knob Fatigue error gain) is its size
+// at empty (a stand-in until fatigue's effect on technique is reviewed).
+constexpr std::array<float, 4> TECHNIQUE_SHAPE{0.0f, 1.0f / 6.0f, 0.5f, 1.0f};
+
+/** A tier column's loss at `fuel` left (0-1). */
+inline float tierLoss(const std::array<float, 4>& losses, float fuel)
+{
+  const float left = std::clamp(fuel, 0.0f, 1.0f);
+  if (left >= TIER_FUEL[0]) return losses[0];
+  for (std::size_t point = 1; point < TIER_FUEL.size(); ++point)
+    if (left >= TIER_FUEL[point])
+      return losses[point - 1] +
+             (losses[point] - losses[point - 1]) *
+                 (TIER_FUEL[point - 1] - left) /
+                 (TIER_FUEL[point - 1] - TIER_FUEL[point]);
+  return losses.back();
+}
+
+/** A speed (critical or top) at `fuel` left: its tier losses down to 10%,
+ * then on down to his walk-run transition at empty. */
+inline float tierSpeed(float fresh, const std::array<float, 4>& losses,
+                       float fuel, float transition)
+{
+  const float left = std::clamp(fuel, 0.0f, 1.0f);
+  if (left >= TIER_FUEL[2]) return fresh * (1.0f - tierLoss(losses, left));
+  const float exhausted = fresh * (1.0f - losses[2]);
+  const float spent = std::min(transition, exhausted);
+  return exhausted + (spent - exhausted) * (TIER_FUEL[2] - left) / TIER_FUEL[2];
+}
 
 /** His grip: the Agility stat's multiplier on the lateral limit every
  * player has (0.9 for a part-timer, 1.1 for the elite). One value for both
@@ -77,11 +124,8 @@ inline float playerAcceleration(const MatchPlayer& player)
 //   refilled in play. It drains with the carbohydrate share of the metabolic
 //   power of his movement (below), sized by his fuel capacity: running at
 //   FUEL_ANCHOR_SHARE of his critical speed empties a full tank in exactly
-//   his fuel capacity. A fully used fuel tank lowers the critical speed and
-//   the burst capacity by these shares (late-match tiredness: fewer, slower
-//   repeat efforts).
-constexpr float CRITICAL_SPEED_FUEL_LOSS = 0.10f;
-constexpr float BURST_FUEL_LOSS = 0.25f;
+//   his fuel capacity. What fuel used costs him is the fatigue tiers'
+//   (above).
 constexpr float FUEL_ANCHOR_SHARE = 0.9f;
 // Metabolic power: accelerating on the flat costs what running up the
 // equivalent slope a / g does (di Prampero 2005, Osgnach 2010), plus air
@@ -284,14 +328,36 @@ inline float carbohydratePower(float power, float criticalPower)
 //   the research's 48 +/- 18%).
 constexpr float RECOVERY_EFFORT_SLOWING = 1.8f;
 constexpr float FAST_REFILL_SHARE = 0.4f;
-/** The top speed his legs allow now: fuel trims it, an injury cuts it. The
- * burst reserve is not a speed limit: it limits power (burstLimits), so
- * with it empty he cannot hold a speed above his critical speed and slows
- * from it naturally. */
-inline float fatiguedTopSpeed(float maxSpeed, float fatigue, float injury)
+/** The top speed his legs allow now: the fatigue tiers trim it (to his
+ * walk-run transition when spent), an injury cuts it. The burst reserve is
+ * not a speed limit: it limits power (burstLimits), so with it empty he
+ * cannot hold a speed above his critical speed and slows from it
+ * naturally. */
+inline float fatiguedTopSpeed(float maxSpeed, float fuel, float transition,
+                              float injury)
 {
-  using P = MatchTuning::Player;
-  return maxSpeed * (1.0f - P::FATIGUE_TOP_SPEED_LOSS * fatigue) * injury;
+  return tierSpeed(maxSpeed, TOP_SPEED_LOSS, fuel, transition) * injury;
+}
+
+/** His critical speed now: the fatigue tiers' (his walk-run transition when
+ * spent). */
+inline float tieredCriticalSpeed(float fresh, float fuel, float transition)
+{
+  return tierSpeed(fresh, CRITICAL_SPEED_LOSS, fuel, transition);
+}
+
+/** The share of his fresh burst capacity his fuel leaves (none when
+ * spent). */
+inline float tieredBurstCapacity(float fuel)
+{
+  return 1.0f - tierLoss(BURST_CAPACITY_LOSS, fuel);
+}
+
+/** The share of his fresh acceleration, braking and turning his fuel
+ * leaves. */
+inline float tieredMovement(float fuel)
+{
+  return 1.0f - tierLoss(MOVEMENT_LOSS, fuel);
 }
 }  // namespace
 
@@ -299,8 +365,9 @@ float MatchEngine::executionErrorScaleBinturong(const MatchPlayer& player) const
 {
   // Tired players lose precision, and a home crowd lifts the home side a
   // little: both scale the technical error of passes and shots.
-  const float fatigue = 1.0f + (1.0f - player.stamina) *
-                                   MatchTuning::Fatigue::TECHNIQUE_ERROR_GAIN;
+  const float fatigue =
+      1.0f + tierLoss(TECHNIQUE_SHAPE, player.stamina) *
+                 MatchTuning::Fatigue::SPENT_TECHNIQUE_ERROR;
   return fatigue * std::max(0.5f, 1.0f - teamEdge(player.isHomeTeam)) *
          (1.0f +
           weakFootPressure(player) * TacticsTuning::WEAK_FOOT_ERROR_GAIN);
@@ -341,24 +408,24 @@ void MatchEngine::moveControlledBinturong(MatchPlayer& player, Vector2F desired,
 
 float MatchEngine::currentTopSpeedBinturong(const MatchPlayer& player) const
 {
-  // Fuel used: 0 fresh, 1 at an empty tank.
-  const float fatigue = std::clamp(1.0f - player.stamina, 0.0f, 1.0f);
   const float injury =
       player.isInjured ? MatchTuning::Injury::INJURED_SPEED_SCALE : 1.0f;
-  return fatiguedTopSpeed(player.maxSpeed, fatigue, injury);
+  return fatiguedTopSpeed(
+      player.maxSpeed, player.stamina,
+      MatchRules::walkRunTransitionSpeed(player.heightMetres), injury);
 }
 
 SpeedBand MatchEngine::speedBandBinturong(const MatchPlayer& player,
                                           MovementMode mode) const
 {
-  const float fatigue = std::clamp(1.0f - player.stamina, 0.0f, 1.0f);
-  const float critical =
+  const float transition =
+      MatchRules::walkRunTransitionSpeed(player.heightMetres);
+  const float critical = tieredCriticalSpeed(
       derivedPhysicalValue(DerivedStat::ENDURANCE,
-                           player.derivedStat(DerivedStat::ENDURANCE)) *
-      (1.0f - CRITICAL_SPEED_FUEL_LOSS * fatigue);
-  return speedBandFrom(mode,
-                       MatchRules::walkRunTransitionSpeed(player.heightMetres),
-                       critical, currentTopSpeedBinturong(player));
+                           player.derivedStat(DerivedStat::ENDURANCE)),
+      player.stamina, transition);
+  return speedBandFrom(mode, transition, critical,
+                       currentTopSpeedBinturong(player));
 }
 
 FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
@@ -484,9 +551,14 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     const float targetY = offsetY[lane];
     const float targetDistance =
         std::sqrt(targetX * targetX + targetY * targetY);
-    const float fatigue = std::clamp(1.0f - stamina[lane], 0.0f, 1.0f);
+    const float fuel = stamina[lane];
+    const float fatigue = std::clamp(1.0f - fuel, 0.0f, 1.0f);
     const float topSpeed =
-        fatiguedTopSpeed(maxSpeed[lane], fatigue, injury[lane]);
+        fatiguedTopSpeed(maxSpeed[lane], fuel, transition[lane], injury[lane]);
+    const float critical =
+        tieredCriticalSpeed(criticalSpeed[lane], fuel, transition[lane]);
+    // Tired legs push, brake and turn less sharply (the fatigue tiers).
+    const float legs = tieredMovement(fuel);
     // Players jog while in position but run hard to recover a lost position.
     // Intent speeds are shares of the fresh top speed; how much less hard a
     // tired player chooses to run is his brain's pacing.
@@ -495,17 +567,15 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
                 : std::max(intentScale[lane],
                            std::min(maxUrgency[lane],
                                     targetDistance / urgencyDistance[lane]));
-    // Tired legs brake and turn less sharply.
-    const float brake = braking[lane] * (1.0f - FATIGUE_BRAKING_LOSS * fatigue);
+    const float brake = braking[lane] * legs;
     const float effort =
         (1.0f - pacing[lane] * fatigue + talk[lane] + shout[lane]) * urgency;
     // On a job where his brain saves the burst reserve, a low reserve keeps
     // him closer to his critical speed (at an empty one, to it).
-    const float sustainable = std::min(
-        criticalSpeed[lane] * (1.0f - CRITICAL_SPEED_FUEL_LOSS * fatigue),
-        topSpeed);
+    const float sustainable = std::min(critical, topSpeed);
     const float fullness = std::clamp(
-        reserve[lane] / (1.0f - BURST_FUEL_LOSS * fatigue), 0.0f, 1.0f);
+        reserve[lane] / std::max(tieredBurstCapacity(fuel), EPSILON), 0.0f,
+        1.0f);
     const float saved =
         burstSaving[lane] > 0.0f
             ? std::clamp(fullness / std::max(burstSaving[lane], EPSILON), 0.0f,
@@ -538,8 +608,7 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     // Acceleration-speed profile a(v) = A0 (1 - v / vmax), stronger braking,
     // and a lateral limit (scaled by his grip) that forces a player to slow
     // down to turn sharply.
-    const float push =
-        acceleration[lane] * (1.0f - P::FATIGUE_ACCELERATION_LOSS * fatigue);
+    const float push = acceleration[lane] * legs;
     const float oldX = velocityX[lane];
     const float oldY = velocityY[lane];
     const float speed = std::sqrt(oldX * oldX + oldY * oldY);
@@ -550,9 +619,7 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     // slows whatever he wants.
     const AccelerationRange limits = burstLimits(
         push * std::max(0.05f, 1.0f - speed / topSpeed), brake, speed,
-        fullness,
-        criticalSpeed[lane] * (1.0f - CRITICAL_SPEED_FUEL_LOSS * fatigue),
-        transition[lane]);
+        fullness, critical, transition[lane]);
     // From a standstill: push off straight toward the target.
     const float limit =
         (desiredSpeed >= speed ? std::max(limits.high, 0.0f) : -limits.low) *
@@ -575,7 +642,7 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
         (P::LATERAL_ACCELERATION_SLOW +
          (P::LATERAL_ACCELERATION_FAST - P::LATERAL_ACCELERATION_SLOW) *
              speedShare) *
-        grip[lane] * (1.0f - FATIGUE_TURNING_LOSS * fatigue) * dt;
+        grip[lane] * legs * dt;
     across = std::clamp(across, -lateral, lateral);
     const float fastX = oldX + (tangentX * along + normalX * across);
     const float fastY = oldY + (tangentY * along + normalY * across);
@@ -655,15 +722,14 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     float fatigue, float dt)
 {
   using P = MatchTuning::Player;
+  const float fuel = 1.0f - fatigue;
   // Acceleration-speed profile a(v) = A0 (1 - v / vmax), stronger braking,
   // and a lateral limit (scaled by his grip) that forces a player to slow
-  // down to turn sharply.
-  const float acceleration =
-      playerAcceleration(player) *
-      (1.0f - P::FATIGUE_ACCELERATION_LOSS * fatigue);
-  // Tired legs brake and turn less sharply.
-  const float braking =
-      player.braking * (1.0f - FATIGUE_BRAKING_LOSS * fatigue);
+  // down to turn sharply. Tired legs push, brake and turn less sharply (the
+  // fatigue tiers).
+  const float legs = tieredMovement(fuel);
+  const float acceleration = playerAcceleration(player) * legs;
+  const float braking = player.braking * legs;
   Vector2F velocity = player.velocity;
   const float speed = length(velocity);
   const Vector2F change{desired.x - velocity.x, desired.y - velocity.y};
@@ -671,14 +737,18 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
   // speeding up and braking alike: above his critical speed he then slows
   // whatever he wants.
   const float fullness = std::clamp(
-      player.sprintReserve / (1.0f - BURST_FUEL_LOSS * fatigue), 0.0f, 1.0f);
+      player.sprintReserve / std::max(tieredBurstCapacity(fuel), EPSILON),
+      0.0f, 1.0f);
+  const float transition =
+      MatchRules::walkRunTransitionSpeed(player.heightMetres);
   const AccelerationRange limits = burstLimits(
       acceleration * std::max(0.05f, 1.0f - speed / topSpeed), braking, speed,
       fullness,
-      derivedPhysicalValue(DerivedStat::ENDURANCE,
-                           player.derivedStat(DerivedStat::ENDURANCE)) *
-          (1.0f - CRITICAL_SPEED_FUEL_LOSS * fatigue),
-      MatchRules::walkRunTransitionSpeed(player.heightMetres));
+      tieredCriticalSpeed(
+          derivedPhysicalValue(DerivedStat::ENDURANCE,
+                               player.derivedStat(DerivedStat::ENDURANCE)),
+          fuel, transition),
+      transition);
   if (desiredSpeed == 0.0f && speed <= -limits.low * dt)
   {
     velocity = {0.0f, 0.0f};
@@ -709,7 +779,7 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
           (P::LATERAL_ACCELERATION_SLOW +
            (P::LATERAL_ACCELERATION_FAST - P::LATERAL_ACCELERATION_SLOW) *
                speedShare) *
-          playerGrip(player) * (1.0f - FATIGUE_TURNING_LOSS * fatigue) * dt;
+          playerGrip(player) * legs * dt;
       across = std::clamp(across, -lateral, lateral);
       run = {velocity.x + tangent.x * along + normal.x * across,
              velocity.y + tangent.y * along + normal.y * across};
@@ -777,10 +847,10 @@ void MatchEngine::spendEnergyBinturong(FitnessLanes& lanes, std::size_t begin,
     const float metres = std::sqrt(metresX * metresX + metresY * metresY);
     const float speed = metres / dt;
     stepMetres[lane] = metres;
-    const float fatigue = 1.0f - stamina[lane];
+    const float fuel = stamina[lane];
     const float fresh = physiology.criticalSpeed[lane];
-    const float critical = fresh * (1.0f - CRITICAL_SPEED_FUEL_LOSS * fatigue);
     const float transition = physiology.transitionSpeed[lane];
+    const float critical = tieredCriticalSpeed(fresh, fuel, transition);
     // Fuel: the carbohydrate power of this period's movement against his
     // anchor's (FUEL_ANCHOR_SHARE of his fresh critical speed, which a full
     // tank lasts his fuel capacity).
@@ -802,7 +872,7 @@ void MatchEngine::spendEnergyBinturong(FitnessLanes& lanes, std::size_t begin,
         physiology.burstMetres[lane] *
             runningCost(AIR_COST_K * fresh * fresh / GRAVITY),
         EPSILON);
-    const float capacity = 1.0f - BURST_FUEL_LOSS * fatigue;
+    const float capacity = tieredBurstCapacity(fuel);
     const float above = std::max(0.0f, power - criticalPower);
     const float drawn = std::min(reserve[lane], above * dt / burstEnergy);
     // The shortfall refills in two parallel phases (Chorley 2022): a share
@@ -815,9 +885,11 @@ void MatchEngine::spendEnergyBinturong(FitnessLanes& lanes, std::size_t begin,
     const float fastRepaid =
         fast * (1.0f - std::exp(-dt / (physiology.fastRecoverySeconds[lane] *
                                        slowing)));
+    // Fuel fatigue slows only the slow phase (the fatigue tiers).
     const float slowRepaid =
         (shortfall - fast) *
-        (1.0f - std::exp(-dt / (physiology.recoverySeconds[lane] * slowing)));
+        (1.0f - std::exp(-dt / (physiology.recoverySeconds[lane] * slowing *
+                                (1.0f + tierLoss(SLOW_REFILL_SLOWING, fuel)))));
     const bool spending = above > 0.0f;
     const float next = std::min(
         spending ? reserve[lane] - drawn
@@ -1034,7 +1106,7 @@ ContactProfile MatchEngine::strikeProfileBinturong(StrikeKind kind) const
   // Where in his reach he meets it is measured as for the touch.
   profile.comfortGap = touchKnobs[TouchKnob::COMFORT_GAP];
   // Tiredness and being shown onto the weaker foot, as for every strike.
-  profile.fatigueErrorGain = MatchTuning::Fatigue::TECHNIQUE_ERROR_GAIN;
+  profile.fatigueErrorGain = MatchTuning::Fatigue::SPENT_TECHNIQUE_ERROR;
   profile.shownWeakFootGain = TacticsTuning::WEAK_FOOT_ERROR_GAIN;
   profile.skillReduction = knob(K::SKILL_REDUCTION);
   profile.angleFailBase = knob(K::ANGLE_FAIL_BASE);
@@ -1342,7 +1414,7 @@ ContactOutcome MatchEngine::carryOutContactBinturong(
   // it, as for his passes and shots (executionErrorScaleBinturong, with the
   // profile's own gains). How badly a job goes wrong is the ball's doing.
   const float fatigue =
-      1.0f + (1.0f - player.stamina) * profile.fatigueErrorGain;
+      1.0f + tierLoss(TECHNIQUE_SHAPE, player.stamina) * profile.fatigueErrorGain;
   const float execution =
       fatigue * std::max(0.5f, 1.0f - teamEdge(player.isHomeTeam)) *
       (1.0f + weakFootPressure(player) * profile.shownWeakFootGain);
