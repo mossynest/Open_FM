@@ -154,6 +154,55 @@ inline float carbohydrateShare(float intensity)
   return CROSSOVER.back()[1];
 }
 
+/** The slope of runningCost (per unit of equivalent slope), for ES >= 0. */
+inline float runningCostSlope(float slope)
+{
+  const float decay = std::exp(-4.0f * slope);
+  const float lift = std::sqrt(slope * slope + 1.0f);
+  return (39.5f - 14.4f * decay) * lift +
+         (39.5f * slope + 3.6f * decay) * slope / lift;
+}
+
+/** The hardest he can speed up at `speed` (m/s^2) without his metabolic
+ * power passing `powerCap`: 0 when holding this speed already costs that
+ * much (he cannot speed up; he is not made to slow down here). Newton's
+ * method on the running cost, which rises with the slope. */
+inline float accelerationAtPower(float speed, float powerCap, float transition)
+{
+  // Getting going from a standstill costs next to nothing per second.
+  constexpr float STANDING_SPEED = 0.2f;
+  if (speed < STANDING_SPEED) return MAX_LOAD_ACCELERATION;
+  const float flat = AIR_COST_K * speed * speed / GRAVITY;
+  // The running cost per metre the cap allows (a walker pays the same
+  // surcharge on top of his walking cost).
+  float target = powerCap / speed;
+  if (speed < transition) target += runningCost(flat) - walkingCost(speed);
+  if (target <= runningCost(flat)) return 0.0f;
+  float slope = flat;
+  for (int iteration = 0; iteration < 5; ++iteration)
+    slope -= (runningCost(slope) - target) / runningCostSlope(slope);
+  return std::clamp((slope - flat) * GRAVITY, 0.0f, MAX_LOAD_ACCELERATION);
+}
+
+// An empty burst reserve is a ceiling: no more power than his critical
+// speed's, so no running above it and no hard acceleration. Through the
+// last share of the reserve the ceiling closes in (a share of the fresh
+// capacity; a design choice, so the limit does not switch on and off).
+constexpr float BURST_LIMIT_BAND = 0.05f;
+
+/** His drive (m/s^2) after the burst reserve's ceiling: the full drive
+ * while there is reserve to spend, closing to what keeps him at his
+ * critical speed's power as the reserve runs out. */
+inline float burstLimitedDrive(float drive, float speed, float fullness,
+                               float critical, float transition)
+{
+  const float ceiling = accelerationAtPower(
+      speed, metabolicPower(critical, 0.0f, transition), transition);
+  const float open = std::clamp(fullness / BURST_LIMIT_BAND, 0.0f, 1.0f);
+  const float limited = std::min(drive, ceiling);
+  return limited + (drive - limited) * open;
+}
+
 /** Carbohydrate power (W/kg, glycogen-equivalent) of `power` for a player
  * whose critical speed takes `criticalPower`: the crossover share below it;
  * above it, the aerobic part at its share and the rest anaerobic, at the
@@ -175,13 +224,9 @@ inline float carbohydratePower(float power, float criticalPower)
 //   heavy recovery in intermittent trials). What it supplies costs fuel at
 //   the anaerobic premium.
 constexpr float RECOVERY_EFFORT_SLOWING = 1.8f;
-// With the reserve empty he can still go this share of the way from his
-// critical speed to his top speed.
-constexpr float EMPTY_BURST_SHARE = 0.35f;
-
 /** The top speed his body allows now: fuel trims the top end; above his
  * critical speed, how much of the rest he can reach depends on the burst
- * reserve. */
+ * reserve (none with it empty: his critical speed is the ceiling). */
 inline float burstTopSpeed(float maxSpeed, float fatigue, float reserve,
                            float injury, float criticalSpeed)
 {
@@ -191,10 +236,7 @@ inline float burstTopSpeed(float maxSpeed, float fatigue, float reserve,
       criticalSpeed * (1.0f - CRITICAL_SPEED_FUEL_LOSS * fatigue), fresh);
   const float capacity = 1.0f - BURST_FUEL_LOSS * fatigue;
   const float fullness = std::clamp(reserve / capacity, 0.0f, 1.0f);
-  return (sustainable +
-          (fresh - sustainable) *
-              (EMPTY_BURST_SHARE + (1.0f - EMPTY_BURST_SHARE) * fullness)) *
-         injury;
+  return (sustainable + (fresh - sustainable) * fullness) * injury;
 }
 }  // namespace
 
@@ -286,6 +328,7 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
   alignas(16) std::array<float, LANES> maxUrgency;
   alignas(16) std::array<float, LANES> pacing;
   alignas(16) std::array<float, LANES> criticalSpeed;
+  alignas(16) std::array<float, LANES> transition;
   alignas(16) std::array<float, LANES> burstSaving;
   alignas(16) std::array<float, LANES> talk;
   alignas(16) std::array<float, LANES> shout;
@@ -363,6 +406,7 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
             : 0.0f;
     criticalSpeed[lane] = derivedPhysicalValue(
         DerivedStat::ENDURANCE, player.derivedStat(DerivedStat::ENDURANCE));
+    transition[lane] = MatchRules::walkRunTransitionSpeed(player.heightMetres);
     talk[lane] = talkOf(player.isHomeTeam);
     shout[lane] = shoutWorkRate(player.isHomeTeam);
     turnRate[lane] = player.turnRate;
@@ -436,7 +480,11 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     const float speed = std::sqrt(oldX * oldX + oldY * oldY);
     const float changeX = desiredX - oldX;
     const float changeY = desiredY - oldY;
-    const float drive = push * std::max(0.05f, 1.0f - speed / topSpeed);
+    // An emptying burst reserve holds his power to his critical speed's.
+    const float drive = burstLimitedDrive(
+        push * std::max(0.05f, 1.0f - speed / topSpeed), speed, fullness,
+        criticalSpeed[lane] * (1.0f - CRITICAL_SPEED_FUEL_LOSS * fatigue),
+        transition[lane]);
     // From a standstill: push off straight toward the target.
     const float limit = (desiredSpeed >= speed ? drive : brake) * dt;
     const float magnitude = std::sqrt(changeX * changeX + changeY * changeY);
@@ -556,8 +604,17 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
   }
   else
   {
-    // From a standstill: push off straight toward the target.
-    const float drive = acceleration * std::max(0.05f, 1.0f - speed / topSpeed);
+    // From a standstill: push off straight toward the target. An emptying
+    // burst reserve holds his power to his critical speed's.
+    const float fullness = std::clamp(
+        player.sprintReserve / (1.0f - BURST_FUEL_LOSS * fatigue), 0.0f, 1.0f);
+    const float drive = burstLimitedDrive(
+        acceleration * std::max(0.05f, 1.0f - speed / topSpeed), speed,
+        fullness,
+        derivedPhysicalValue(DerivedStat::ENDURANCE,
+                             player.derivedStat(DerivedStat::ENDURANCE)) *
+            (1.0f - CRITICAL_SPEED_FUEL_LOSS * fatigue),
+        MatchRules::walkRunTransitionSpeed(player.heightMetres));
     const float limit = (desiredSpeed >= speed ? drive : braking) * dt;
     const float magnitude = length(change);
     const float shortfall = limit / magnitude;
