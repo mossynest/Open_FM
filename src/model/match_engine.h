@@ -2042,7 +2042,8 @@ class MatchEngine
   /** The endurance stats' physical values, lane by lane alongside the
    * FitnessLanes of the same step (match_derived_stats.h): critical speed
    * (m/s), burst capacity (m), the walking refill time constant (s) and the
-   * fuel capacity rating. Read by the Binturong body. */
+   * fuel capacity rating (its minutes come in with the new drain, fatigue
+   * plan step 3). Read by the Binturong body. */
   struct EnduranceLanes
   {
     static constexpr std::size_t LANES = FitnessLanes::LANES;

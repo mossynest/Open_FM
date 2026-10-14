@@ -177,8 +177,8 @@ struct RunnerAttributes
                           "acceleration: Pace and Physicality)."));
     parameters.push_back(setting("Acceleration", &acceleration, 0.0f, 100.0f,
                           true,
-                          "His push from a standstill (6.7 m/s² at 45, 7.6 at "
-                          "85).\n0: from its recipe (Pace and Physicality, "
+                          "His push from a standstill (5.5 m/s² at 1, 9.5 at "
+                          "99).\n0: from its recipe (Pace and Physicality, "
                           "1.6 : 0.6)."));
     parameters.push_back(setting("Condition", &condition, 0.0f, 100.0f, true,
                           "Fuel at the start (100: fresh). Lower it to test "

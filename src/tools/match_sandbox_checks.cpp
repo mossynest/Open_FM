@@ -432,9 +432,9 @@ bool runDerivedStatChecks(const std::vector<const Team*>& clubs,
     // never flattens a real rating.
     if (!info.unit.empty())
     {
-      const float slope = (info.eliteValue - info.partTimeValue) /
-                          (ELITE_RATING - PART_TIME_RATING);
-      const float atZero = info.partTimeValue - slope * PART_TIME_RATING;
+      const float slope = (info.highValue - info.lowValue) /
+                          (info.highRating - info.lowRating);
+      const float atZero = info.lowValue - slope * info.lowRating;
       const float atOne = atZero + slope;
       registryOk = registryOk &&
                    std::min(atZero, atOne) >= info.minValue &&

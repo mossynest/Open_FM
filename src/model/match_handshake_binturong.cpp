@@ -164,8 +164,15 @@ void MatchEngine::loadAttributesBinturong(MatchPlayer& matchPlayer,
       player ? MatchRules::playerHeightMetres(player->getHeight())
              : MatchTuning::Units::DEFAULT_PLAYER_HEIGHT_METRES;
   using P = MatchTuning::Player;
+  // Top speed across the stat scale (fatigue plan 4.1): 7.0 m/s at Pace 1
+  // (25 km/h, a Sunday-league sprint) to 10.4 at 99 (37.4 km/h, the EPL
+  // record).
+  constexpr float TOP_SPEED_AT_1 = 7.0f;
+  constexpr float TOP_SPEED_AT_99 = 10.4f;
   matchPlayer.maxSpeed =
-      P::TOP_SPEED_BASE + matchPlayer.pace * P::TOP_SPEED_PACE;
+      TOP_SPEED_AT_1 + (TOP_SPEED_AT_99 - TOP_SPEED_AT_1) *
+                           (matchPlayer.pace - STAT_1_RATING) /
+                           (STAT_99_RATING - STAT_1_RATING);
   // Acceleration is a derived stat (the Binturong body reads it there).
   matchPlayer.braking =
       P::BRAKING_BASE + matchPlayer.physicality * P::BRAKING_PHYSICALITY;
