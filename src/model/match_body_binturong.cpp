@@ -223,8 +223,13 @@ inline float carbohydratePower(float power, float criticalPower)
 //   with the recovery rate's time constant, slower the harder he still
 //   works (x 2.8 at critical power: about 120 s after light and 340 s after
 //   heavy recovery in intermittent trials). What it supplies costs fuel at
-//   the anaerobic premium.
+//   the anaerobic premium. The refill has two parallel phases (Chorley
+//   2022: a fast one, tau ~22 s, about 48% of what was spent; the rest
+//   slow): this share of every spend comes back on the fast track, with
+//   the Fast recovery stat's time constant (40%, a design choice within
+//   the research's 48 +/- 18%).
 constexpr float RECOVERY_EFFORT_SLOWING = 1.8f;
+constexpr float FAST_REFILL_SHARE = 0.4f;
 /** The top speed his body allows now: fuel trims the top end. While the
  * burst reserve has something to spend he can reach it (holding a speed
  * above his critical speed draws on the reserve, so he cannot hold it
@@ -698,7 +703,7 @@ void MatchEngine::spendEnergyBinturong(FitnessLanes& lanes, std::size_t begin,
   // the old drain are not read.
   auto& [fromX, fromY, toX, toY, topSpeed, endurance, pressingEffort, sideDrain,
          stamina, reserve, stepMetres, nextStamina, nextReserve,
-         stepEnergy, stepAnaerobicEnergy] = lanes;
+         stepEnergy, stepAnaerobicEnergy, fastDebt, nextFastDebt] = lanes;
   // The endurance stats, lane by lane (filled with these lanes).
   const EnduranceLanes& physiology = enduranceLanes;
   for (std::size_t lane = begin; lane < end; ++lane)
@@ -736,18 +741,32 @@ void MatchEngine::spendEnergyBinturong(FitnessLanes& lanes, std::size_t begin,
     const float capacity = 1.0f - BURST_FUEL_LOSS * fatigue;
     const float above = std::max(0.0f, power - criticalPower);
     const float drawn = std::min(reserve[lane], above * dt / burstEnergy);
+    // The shortfall refills in two parallel phases (Chorley 2022): a share
+    // of every spend on the fast track, the rest slowly; both slower the
+    // harder he still works.
+    const float shortfall = std::max(0.0f, capacity - reserve[lane]);
+    const float fast = std::min(fastDebt[lane], shortfall);
     const float intensity = std::min(power / criticalPower, 1.0f);
-    const float refillSeconds =
-        physiology.recoverySeconds[lane] *
-        (1.0f + RECOVERY_EFFORT_SLOWING * intensity * intensity);
-    const float refilled =
-        reserve[lane] +
-        (capacity - reserve[lane]) * (1.0f - std::exp(-dt / refillSeconds));
+    const float slowing = 1.0f + RECOVERY_EFFORT_SLOWING * intensity * intensity;
+    const float fastRepaid =
+        fast * (1.0f - std::exp(-dt / (physiology.fastRecoverySeconds[lane] *
+                                       slowing)));
+    const float slowRepaid =
+        (shortfall - fast) *
+        (1.0f - std::exp(-dt / (physiology.recoverySeconds[lane] * slowing)));
+    const bool spending = above > 0.0f;
+    const float next = std::min(
+        spending ? reserve[lane] - drawn
+                 : reserve[lane] + fastRepaid + slowRepaid,
+        capacity);
+    const float nextFast =
+        spending ? fast + FAST_REFILL_SHARE * drawn : fast - fastRepaid;
     // A restart's repositioning jump is not running.
     const bool ran = speed <= MatchTuning::Player::MAX_COUNTED_STEP_SPEED;
-    nextReserve[lane] =
-        ran ? std::min(above > 0.0f ? reserve[lane] - drawn : refilled, capacity)
-            : reserve[lane];
+    nextReserve[lane] = ran ? next : reserve[lane];
+    nextFastDebt[lane] =
+        ran ? std::clamp(nextFast, 0.0f, std::max(0.0f, capacity - next))
+            : fastDebt[lane];
     // Fuel: the aerobic part at its carbohydrate share, and what was drawn
     // from the burst reserve at the anaerobic premium; against his anchor.
     // (With the reserve empty, power above his critical speed's is not yet

@@ -37,8 +37,9 @@ enum class DerivedStat : std::uint8_t
   RECOVERY_RATE,
   FIRST_TOUCH,
   ACCELERATION,
+  FAST_RECOVERY,
 };
-inline constexpr std::size_t DERIVED_STAT_COUNT = 7;
+inline constexpr std::size_t DERIVED_STAT_COUNT = 8;
 
 /** The match attributes a recipe blends (MatchPlayer's fields). */
 enum class BaseAttribute : std::uint8_t
@@ -129,6 +130,14 @@ inline constexpr std::array<DerivedStatInfo, DERIVED_STAT_COUNT> DERIVED_STATS{{
      "Getting going: his maximum push from a standstill (A0 of the "
      "acceleration-speed profile, fading to nothing at his top speed).",
      "m/s^2", 5.5f, 9.5f, 5.4f, 9.6f, STAT_1_RATING, STAT_99_RATING},
+    // The fast phase of D' reconstitution: 22 +/- 12 s (Chorley 2022);
+    // phosphocreatine is rebuilt faster in aerobically trained muscle
+    // (Takahashi 1995), so from Stamina.
+    {"Fast recovery", "Frc",
+     "How fast the quick part of his burst capacity comes back: the time "
+     "constant of its refill while walking (slower the harder he still "
+     "works).",
+     "s", 34.0f, 10.0f, 9.5f, 34.5f, STAT_1_RATING, STAT_99_RATING},
 }};
 
 namespace DerivedStats
@@ -192,6 +201,7 @@ inline constexpr DerivedRecipes DEFAULT_DERIVED_RECIPES{{
     DerivedStats::only(BaseAttribute::STAMINA),
     DerivedStats::firstTouchRecipe(),
     DerivedStats::accelerationRecipe(),
+    DerivedStats::only(BaseAttribute::STAMINA),
 }};
 
 inline const DerivedStatInfo& derivedStatInfo(DerivedStat stat)

@@ -195,6 +195,9 @@ struct MatchPlayer
   float stamina = 1.0f;
   /** Fast repeat-sprint reserve in [0, 1]. */
   float sprintReserve = 1.0f;
+  /** How much of the reserve's shortfall (a share of its fresh capacity)
+   * refills on the fast track (Binturong body; the rest refills slowly). */
+  float fastBurstDebt = 0.0f;
   /** His speed over the last load period (m/s), for the next one's
    * acceleration in the energy model. */
   float loadSpeed = 0.0f;
@@ -2049,6 +2052,10 @@ class MatchEngine
      * period (J/kg), and the part above his critical speed's power. */
     alignas(16) std::array<float, LANES> stepEnergy{};
     alignas(16) std::array<float, LANES> stepAnaerobicEnergy{};
+    /** The reserve's fast-track shortfall before and after (a body
+     * without one leaves it 0). */
+    alignas(16) std::array<float, LANES> fastDebt{};
+    alignas(16) std::array<float, LANES> nextFastDebt{};
   };
   /** The endurance stats' physical values, lane by lane alongside the
    * FitnessLanes of the same step (match_derived_stats.h): critical speed
@@ -2061,6 +2068,7 @@ class MatchEngine
     alignas(16) std::array<float, LANES> criticalSpeed{};
     alignas(16) std::array<float, LANES> burstMetres{};
     alignas(16) std::array<float, LANES> recoverySeconds{};
+    alignas(16) std::array<float, LANES> fastRecoverySeconds{};
     alignas(16) std::array<float, LANES> fuelSeconds{};
     alignas(16) std::array<float, LANES> transitionSpeed{};
     alignas(16) std::array<float, LANES> previousSpeed{};

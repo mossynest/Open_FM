@@ -1330,6 +1330,7 @@ void MatchEngine::beginBreak(float seconds, float recovery)
     if (!active(player)) continue;
     player.stamina = std::min(1.0f, player.stamina + recovery);
     player.sprintReserve = 1.0f;
+    player.fastBurstDebt = 0.0f;
     player.velocity = {0.0f, 0.0f};
   }
   updateTeamPhases();
@@ -2691,7 +2692,7 @@ void MatchEngine::accumulatePlayerLoad(float dt)
   FitnessLanes lanes;
   auto& [fromX, fromY, toX, toY, topSpeed, endurance, pressingEffort,
          sideDrain, stamina, reserve, stepMetres, nextStamina, nextReserve,
-         stepEnergy, stepAnaerobicEnergy] =
+         stepEnergy, stepAnaerobicEnergy, fastDebt, nextFastDebt] =
       lanes;
   std::array<std::uint8_t, LANES> slots;
   std::size_t count = 0;
@@ -2732,6 +2733,10 @@ void MatchEngine::accumulatePlayerLoad(float dt)
     enduranceLanes.recoverySeconds[lane] = derivedPhysicalValue(
         DerivedStat::RECOVERY_RATE,
         player.derivedStat(DerivedStat::RECOVERY_RATE));
+    enduranceLanes.fastRecoverySeconds[lane] = derivedPhysicalValue(
+        DerivedStat::FAST_RECOVERY,
+        player.derivedStat(DerivedStat::FAST_RECOVERY));
+    fastDebt[lane] = player.fastBurstDebt;
     enduranceLanes.fuelSeconds[lane] =
         derivedPhysicalValue(DerivedStat::FUEL_CAPACITY,
                              player.derivedStat(DerivedStat::FUEL_CAPACITY)) *
@@ -2814,6 +2819,7 @@ void MatchEngine::accumulatePlayerLoad(float dt)
     }
     player.stamina = nextStamina[lane];
     player.sprintReserve = nextReserve[lane];
+    player.fastBurstDebt = nextFastDebt[lane];
     if (player.stamina <= 0.0f && entry.emptyAtMinute < 0.0f)
       entry.emptyAtMinute = elapsedMatchMinutes;
   }
@@ -6224,6 +6230,7 @@ bool MatchEngine::performSubstitution(MatchPlayer& outgoing,
   outgoing.stamina =
       benchCondition != benchConditions.end() ? benchCondition->second : 1.0f;
   outgoing.sprintReserve = 1.0f;
+  outgoing.fastBurstDebt = 0.0f;
   outgoing.isInjured = false;
   outgoing.yellowCards = 0;
   outgoing.actionCooldown = MatchTuning::Player::SUBSTITUTION_SETTLE_SECONDS;
