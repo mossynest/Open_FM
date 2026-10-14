@@ -214,6 +214,7 @@ inline float carbohydratePower(float power, float criticalPower)
   return critical * carbohydrateShare(1.0f) +
          (power - critical) * ANAEROBIC_FUEL_PREMIUM;
 }
+
 // - Burst reserve (`sprintReserve`, a share of the fresh burst capacity):
 //   D' as energy, the capacity's metres at his critical speed's running
 //   cost. Metabolic power above his critical speed's drains it (running
@@ -224,9 +225,11 @@ inline float carbohydratePower(float power, float criticalPower)
 //   heavy recovery in intermittent trials). What it supplies costs fuel at
 //   the anaerobic premium.
 constexpr float RECOVERY_EFFORT_SLOWING = 1.8f;
-/** The top speed his body allows now: fuel trims the top end; above his
- * critical speed, how much of the rest he can reach depends on the burst
- * reserve (none with it empty: his critical speed is the ceiling). */
+/** The top speed his body allows now: fuel trims the top end. While the
+ * burst reserve has something to spend he can reach it (holding a speed
+ * above his critical speed draws on the reserve, so he cannot hold it
+ * long); as the reserve runs out, over its last BURST_LIMIT_BAND, the
+ * ceiling closes to his critical speed. */
 inline float burstTopSpeed(float maxSpeed, float fatigue, float reserve,
                            float injury, float criticalSpeed)
 {
@@ -236,7 +239,8 @@ inline float burstTopSpeed(float maxSpeed, float fatigue, float reserve,
       criticalSpeed * (1.0f - CRITICAL_SPEED_FUEL_LOSS * fatigue), fresh);
   const float capacity = 1.0f - BURST_FUEL_LOSS * fatigue;
   const float fullness = std::clamp(reserve / capacity, 0.0f, 1.0f);
-  return (sustainable + (fresh - sustainable) * fullness) * injury;
+  const float open = std::clamp(fullness / BURST_LIMIT_BAND, 0.0f, 1.0f);
+  return (sustainable + (fresh - sustainable) * open) * injury;
 }
 }  // namespace
 
