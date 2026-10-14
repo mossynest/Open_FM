@@ -190,10 +190,14 @@ struct MatchPlayer
   bool isPressing = false;
   bool isMakingRun = false;
 
-  /** Slow energy pool (match condition) in [MINIMUM_STAMINA, 1]. */
+  /** Slow energy pool (match condition, fuel) in [floor, 1]: the floor is
+   * MINIMUM_STAMINA for an Aardvark body, 0 for a Binturong one. */
   float stamina = 1.0f;
   /** Fast repeat-sprint reserve in [0, 1]. */
   float sprintReserve = 1.0f;
+  /** His speed over the last load period (m/s), for the next one's
+   * acceleration in the energy model. */
+  float loadSpeed = 0.0f;
   /** Fresh top speed (m/s), maximum acceleration A0 and braking (m/s^2).
    * A Binturong body reads A0 from the Acceleration derived stat instead. */
   float maxSpeed = MatchTuning::Player::TOP_SPEED_BASE;
@@ -1400,6 +1404,9 @@ class MatchEngine
     bool chaseEffort = false;
   };
   void setDrillRules(const DrillRules& rules) { drillRules = rules; }
+  /** The lowest a side's body lets fuel (condition) fall: MINIMUM_STAMINA
+   * for an Aardvark body, 0 (an empty tank) for a Binturong one. */
+  float fuelFloor(bool homeTeam) const;
   const DrillRules& getDrillRules() const { return drillRules; }
 
   /**
@@ -2038,19 +2045,25 @@ class MatchEngine
     alignas(16) std::array<float, LANES> stepMetres;
     alignas(16) std::array<float, LANES> nextStamina;
     alignas(16) std::array<float, LANES> nextReserve;
+    /** Observed only (a body may leave them 0): metabolic energy of the
+     * period (J/kg), and the part above his critical speed's power. */
+    alignas(16) std::array<float, LANES> stepEnergy{};
+    alignas(16) std::array<float, LANES> stepAnaerobicEnergy{};
   };
   /** The endurance stats' physical values, lane by lane alongside the
    * FitnessLanes of the same step (match_derived_stats.h): critical speed
    * (m/s), burst capacity (m), the walking refill time constant (s) and the
-   * fuel capacity rating (its minutes come in with the new drain, fatigue
-   * plan step 3). Read by the Binturong body. */
+   * fuel capacity (s), with his walk-run transition speed (m/s) and his
+   * speed over the previous load period (m/s). Read by the Binturong body. */
   struct EnduranceLanes
   {
     static constexpr std::size_t LANES = FitnessLanes::LANES;
     alignas(16) std::array<float, LANES> criticalSpeed{};
     alignas(16) std::array<float, LANES> burstMetres{};
     alignas(16) std::array<float, LANES> recoverySeconds{};
-    alignas(16) std::array<float, LANES> fuelCapacity{};
+    alignas(16) std::array<float, LANES> fuelSeconds{};
+    alignas(16) std::array<float, LANES> transitionSpeed{};
+    alignas(16) std::array<float, LANES> previousSpeed{};
   };
   EnduranceLanes enduranceLanes;
   /** Stamina drain and sprint-reserve drain or recovery for lanes
@@ -2181,6 +2194,8 @@ class MatchEngine
   void updatePendingAdvantage(float dt);
   /** Current top speed (m/s) after fatigue, sprint reserve and injury. */
   float currentTopSpeed(const MatchPlayer& player) const;
+  /** His fatigue, 0 fresh to 1 spent, as his side's body reads his fuel. */
+  float fuelFatigue(const MatchPlayer& player) const;
   /**
    * Moves the players in `slots` toward their targets: the tactical target
    * (urgent when urgentMovement is set) in play, or the restart spot

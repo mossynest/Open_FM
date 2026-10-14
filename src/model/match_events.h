@@ -174,6 +174,12 @@ struct PlayerMatchStats
    * left out). */
   static constexpr std::size_t FIVE_MINUTE_WINDOWS = 18;
   std::array<float, FIVE_MINUTE_WINDOWS> runningByFive{};
+  /** Metabolic energy of his movement (J/kg; bodies with an energy model),
+   * and the part above his critical speed's power (anaerobic). */
+  float metabolicEnergy = 0.0f;
+  float anaerobicEnergy = 0.0f;
+  /** Elapsed match minutes when his fuel first ran out (-1: never). */
+  float emptyAtMinute = -1.0f;
   /** Efforts above 7 m/s. */
   int sprints = 0;
   /** Highest speed reached (m/s). */

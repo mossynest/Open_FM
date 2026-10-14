@@ -140,6 +140,12 @@ struct MatchSample
    * many (Mohr et al. 2003; a peak in a half's last window is skipped). */
   double peak_next_change_sum = 0.0;
   int peak_next_players = 0;
+  /** Their metabolic energy (kJ/kg) and its anaerobic part, and among those
+   * whose tank ran out, how many and the elapsed minutes when it did. */
+  double full_match_energy = 0.0;
+  double full_match_anaerobic = 0.0;
+  int emptied_players = 0;
+  double empty_minute_sum = 0.0;
   /** Movement jitter of both sides together (MatchEngine::getMovementJitter). */
   MovementJitterStats jitter;
   /** Open-play strikes as the contact model reads them (Binturong bodies;

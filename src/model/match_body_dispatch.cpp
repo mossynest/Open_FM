@@ -12,6 +12,8 @@
 // (match_body_<name>_members.h, included in MatchEngine), its definitions
 // (match_body_<name>.cpp), and a case in each function here.
 
+#include <algorithm>
+
 #include "model/match_engine.h"
 
 void MatchEngine::integrateMovements(const std::uint8_t* slots,
@@ -71,6 +73,25 @@ float MatchEngine::injuryChance(const MatchPlayer& player) const
       return injuryChanceBinturong(player);
   }
   return injuryChanceAardvark(player);
+}
+
+float MatchEngine::fuelFloor(bool homeTeam) const
+{
+  switch (bodyOf(homeTeam))
+  {
+    case BodyId::AARDVARK:
+      break;
+    case BodyId::BINTURONG:
+      return 0.0f;
+  }
+  return MatchTuning::Player::MINIMUM_STAMINA;
+}
+
+float MatchEngine::fuelFatigue(const MatchPlayer& player) const
+{
+  // Aardvark: fully tired at its fuel floor. Binturong: at an empty tank.
+  const float floor = fuelFloor(player.isHomeTeam);
+  return std::clamp((1.0f - player.stamina) / (1.0f - floor), 0.0f, 1.0f);
 }
 
 float MatchEngine::currentTopSpeed(const MatchPlayer& player) const

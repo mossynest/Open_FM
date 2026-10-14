@@ -82,7 +82,8 @@ const DerivedRecipes& MatchEngine::derivedRecipesBinturong()
 
 float MatchEngine::convertConditionBinturong(float condition) const
 {
-  return std::clamp(condition, MatchTuning::Player::MINIMUM_STAMINA, 1.0f);
+  // The whole tank: a Binturong body has no fuel floor.
+  return std::clamp(condition, 0.0f, 1.0f);
 }
 
 float MatchEngine::convertFamiliarityBinturong(float familiarity) const

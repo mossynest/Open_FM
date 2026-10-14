@@ -409,7 +409,7 @@ class LapsDrill final : public TrainingDrill
       // Spent, or hurt (he stops there, short of his best).
       runner.injured = player->isInjured;
       if (runner.injured ||
-          player->stamina <= MatchTuning::Player::MINIMUM_STAMINA + 1e-4f)
+          player->stamina <= engine.fuelFloor(player->isHomeTeam) + 1e-4f)
       {
         runner.doneAt = now;
         runner.place = ++doneCount;

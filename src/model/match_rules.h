@@ -9,6 +9,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 
 #include "model/match_events.h"
@@ -182,5 +183,20 @@ inline float staminaDrainPerSecond(float speedRatio, float endurance,
       std::clamp(pressingIntensity, 0.0f, 1.0f) * P::PRESSING_DRAIN;
   return work * (P::ENDURANCE_BASE -
                  std::clamp(endurance, 0.0f, 1.0f) * P::ENDURANCE_RELIEF);
+}
+
+/**
+ * The speed (m/s) at which he breaks from a walk into a run: Froude number
+ * v^2 / (g L) of about 0.5 across people of different leg length (Kram et
+ * al.), with leg length L about 0.53 of his height. 2.07 m/s at 1.65 m, 2.16
+ * at 1.80, 2.25 at 1.95.
+ */
+inline float walkRunTransitionSpeed(float heightMetres)
+{
+  constexpr float GRAVITY = 9.81f;
+  constexpr float TRANSITION_FROUDE = 0.5f;
+  constexpr float LEG_LENGTH_SHARE = 0.53f;
+  return std::sqrt(TRANSITION_FROUDE * GRAVITY * LEG_LENGTH_SHARE *
+                   std::max(heightMetres, 1.0f));
 }
 }  // namespace MatchRules

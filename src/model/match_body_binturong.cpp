@@ -71,18 +71,109 @@ inline float playerAcceleration(const MatchPlayer& player)
 }
 
 // Energy: two tanks (critical speed and D', the W' balance model of Skiba et
-// al. for intermittent running).
-// - Fuel (`stamina`, floor MINIMUM_STAMINA): the whole match's work, drained
-//   as before but by the fuel capacity stat, never refilled in play. A
-//   fully used fuel tank lowers the critical speed and the burst capacity
-//   by these shares (late-match tiredness: fewer, slower repeat efforts).
+// al. for intermittent running). The fatigue plan
+// (match_engine_fatigue_plan.md) is the reference for every value here.
+// - Fuel (`stamina`, 1 full to 0 empty): the whole match's work, never
+//   refilled in play. It drains with the carbohydrate share of the metabolic
+//   power of his movement (below), sized by his fuel capacity: running at
+//   FUEL_ANCHOR_SHARE of his critical speed empties a full tank in exactly
+//   his fuel capacity. A fully used fuel tank lowers the critical speed and
+//   the burst capacity by these shares (late-match tiredness: fewer, slower
+//   repeat efforts).
 constexpr float CRITICAL_SPEED_FUEL_LOSS = 0.10f;
 constexpr float BURST_FUEL_LOSS = 0.25f;
+constexpr float FUEL_ANCHOR_SHARE = 0.9f;
+// Metabolic power: accelerating on the flat costs what running up the
+// equivalent slope a / g does (di Prampero 2005, Osgnach 2010), plus air
+// resistance K v^2 / g; running cost per metre from Minetti & Pavei 2018
+// (as in the floodlight library), walking below his walk-run transition
+// from the flat walking polynomial. Only the shape matters: each player is
+// measured against his own anchor, so the constants' scale and his mass
+// cancel.
+constexpr float GRAVITY = 9.81f;
+constexpr float AIR_COST_K = 0.0037f;
+// The load period's acceleration is limited to what a body can do (a guard
+// against a jolt from body contact).
+constexpr float MAX_LOAD_ACCELERATION = 10.0f;
+// Above the power at his critical speed the extra is anaerobic: glycolysis
+// takes about ten times the glycogen per unit of energy of oxidation, part
+// of D' is phosphocreatine (none): about 7x (a design choice).
+constexpr float ANAEROBIC_FUEL_PREMIUM = 7.0f;
+
+/** Running cost (J/kg/m) up the equivalent slope `slope` (Minetti & Pavei
+ * 2018): 3.6 on the flat. */
+inline float runningCost(float slope)
+{
+  const float cost = slope >= 0.0f
+                         ? 39.5f * slope + 3.6f * std::exp(-4.0f * slope)
+                         : -8.34f * slope + 3.6f * std::exp(13.0f * slope);
+  return cost * std::sqrt(slope * slope + 1.0f);
+}
+
+/** Walking cost on the flat (J/kg/m) at `speed` (m/s): about 2.2 at 1.35. */
+inline float walkingCost(float speed)
+{
+  return (((1.25f * speed - 6.57f) * speed + 13.14f) * speed - 11.15f) * speed +
+         5.35f;
+}
+
+/** Metabolic power (W/kg) of moving at `speed` while changing speed by
+ * `acceleration`. Below his walk-run transition he walks, with the same
+ * surcharge (or saving) for changing speed as a runner. */
+inline float metabolicPower(float speed, float acceleration, float transition)
+{
+  const float flat = AIR_COST_K * speed * speed / GRAVITY;
+  const float slope = acceleration / GRAVITY + flat;
+  const float cost =
+      speed < transition
+          ? std::max(0.0f, walkingCost(speed) + runningCost(slope) -
+                               runningCost(flat))
+          : runningCost(slope);
+  return cost * speed;
+}
+
+/** The carbohydrate share of aerobic power at `intensity` (power over the
+ * power at his critical speed): the crossover (Romijn 1993/2000, review
+ * 2023), the same for everyone; piecewise linear. */
+inline float carbohydrateShare(float intensity)
+{
+  constexpr std::array<std::array<float, 2>, 6> CROSSOVER{{{0.0f, 0.10f},
+                                                           {0.30f, 0.15f},
+                                                           {0.75f, 0.50f},
+                                                           {0.82f, 0.60f},
+                                                           {0.90f, 0.70f},
+                                                           {1.00f, 0.85f}}};
+  if (intensity >= CROSSOVER.back()[0]) return CROSSOVER.back()[1];
+  for (std::size_t point = 1; point < CROSSOVER.size(); ++point)
+    if (intensity < CROSSOVER[point][0])
+    {
+      const auto& [x0, y0] = CROSSOVER[point - 1];
+      const auto& [x1, y1] = CROSSOVER[point];
+      return y0 + (y1 - y0) * (std::max(intensity, 0.0f) - x0) / (x1 - x0);
+    }
+  return CROSSOVER.back()[1];
+}
+
+/** Carbohydrate power (W/kg, glycogen-equivalent) of `power` for a player
+ * whose critical speed takes `criticalPower`: the crossover share below it;
+ * above it, the aerobic part at its share and the rest anaerobic, at the
+ * premium. */
+inline float carbohydratePower(float power, float criticalPower)
+{
+  const float critical = std::max(criticalPower, EPSILON);
+  if (power <= critical) return power * carbohydrateShare(power / critical);
+  return critical * carbohydrateShare(1.0f) +
+         (power - critical) * ANAEROBIC_FUEL_PREMIUM;
+}
 // - Burst reserve (`sprintReserve`, a share of the fresh burst capacity):
-//   metres run above the critical speed drain it one for one; below it, it
-//   refills toward full with the recovery rate's time constant, slower the
-//   closer he still runs to his critical speed (x 2.8 at it: about 120 s
-//   after light and 340 s after heavy recovery in intermittent trials).
+//   D' as energy, the capacity's metres at his critical speed's running
+//   cost. Metabolic power above his critical speed's drains it (running
+//   faster, and accelerating: on the flat a run of metres above critical
+//   speed drains about one metre each); below it, it refills toward full
+//   with the recovery rate's time constant, slower the harder he still
+//   works (x 2.8 at critical power: about 120 s after light and 340 s after
+//   heavy recovery in intermittent trials). What it supplies costs fuel at
+//   the anaerobic premium.
 constexpr float RECOVERY_EFFORT_SLOWING = 1.8f;
 // With the reserve empty he can still go this share of the way from his
 // critical speed to his top speed.
@@ -153,8 +244,8 @@ void MatchEngine::moveControlledBinturong(MatchPlayer& player, Vector2F desired,
 
 float MatchEngine::currentTopSpeedBinturong(const MatchPlayer& player) const
 {
-  const float fatigue =
-      std::clamp((1.0f - player.stamina) * INVERSE_FATIGUE_RANGE, 0.0f, 1.0f);
+  // Fuel used: 0 fresh, 1 at an empty tank.
+  const float fatigue = std::clamp(1.0f - player.stamina, 0.0f, 1.0f);
   const float injury =
       player.isInjured ? MatchTuning::Injury::INJURED_SPEED_SCALE : 1.0f;
   return burstTopSpeed(
@@ -284,8 +375,7 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     const float targetY = offsetY[lane];
     const float targetDistance =
         std::sqrt(targetX * targetX + targetY * targetY);
-    const float fatigue =
-        std::clamp((1.0f - stamina[lane]) * INVERSE_FATIGUE_RANGE, 0.0f, 1.0f);
+    const float fatigue = std::clamp(1.0f - stamina[lane], 0.0f, 1.0f);
     const float topSpeed = burstTopSpeed(maxSpeed[lane], fatigue, reserve[lane],
                                          injury[lane], criticalSpeed[lane]);
     // Players jog while in position but run hard to recover a lost position.
@@ -543,8 +633,11 @@ void MatchEngine::spendEnergyBinturong(FitnessLanes& lanes, std::size_t begin,
                                        std::size_t end, float dt,
                                        bool /*homeTeam*/) const
 {
+  // Pressing costs what its running costs: the pressing and side terms of
+  // the old drain are not read.
   auto& [fromX, fromY, toX, toY, topSpeed, endurance, pressingEffort, sideDrain,
-         stamina, reserve, stepMetres, nextStamina, nextReserve] = lanes;
+         stamina, reserve, stepMetres, nextStamina, nextReserve,
+         stepEnergy, stepAnaerobicEnergy] = lanes;
   // The endurance stats, lane by lane (filled with these lanes).
   const EnduranceLanes& physiology = enduranceLanes;
   for (std::size_t lane = begin; lane < end; ++lane)
@@ -553,40 +646,60 @@ void MatchEngine::spendEnergyBinturong(FitnessLanes& lanes, std::size_t begin,
     const float metresY = (fromY[lane] - toY[lane]) * PITCH_WIDTH;
     const float metres = std::sqrt(metresX * metresX + metresY * metresY);
     const float speed = metres / dt;
-    // Fuel: the whole match's work, with the fuel capacity stat in place of
-    // the Stamina attribute; never refilled in play.
-    const float drain =
-        MatchRules::staminaDrainPerSecond(
-            speed / std::max(topSpeed[lane], EPSILON),
-            physiology.fuelCapacity[lane], pressingEffort[lane]) +
-        sideDrain[lane];
     stepMetres[lane] = metres;
-    nextStamina[lane] = std::clamp(stamina[lane] - drain * dt,
-                                   MatchTuning::Player::MINIMUM_STAMINA, 1.0f);
-    // Burst reserve (a share of the fresh burst capacity): metres above the
-    // critical speed drain it; below it, it refills toward what the fuel
-    // left allows, slower the closer he still runs to his critical speed.
-    const float fatigue =
-        std::clamp((1.0f - stamina[lane]) * INVERSE_FATIGUE_RANGE, 0.0f, 1.0f);
-    const float critical = physiology.criticalSpeed[lane] *
-                           (1.0f - CRITICAL_SPEED_FUEL_LOSS * fatigue);
+    const float fatigue = 1.0f - stamina[lane];
+    const float fresh = physiology.criticalSpeed[lane];
+    const float critical = fresh * (1.0f - CRITICAL_SPEED_FUEL_LOSS * fatigue);
+    const float transition = physiology.transitionSpeed[lane];
+    // Fuel: the carbohydrate power of this period's movement against his
+    // anchor's (FUEL_ANCHOR_SHARE of his fresh critical speed, which a full
+    // tank lasts his fuel capacity).
+    const float acceleration =
+        std::clamp((speed - physiology.previousSpeed[lane]) / dt,
+                   -MAX_LOAD_ACCELERATION, MAX_LOAD_ACCELERATION);
+    const float anchor = carbohydratePower(
+        metabolicPower(FUEL_ANCHOR_SHARE * fresh, 0.0f, transition),
+        metabolicPower(fresh, 0.0f, transition));
+    const float power = metabolicPower(speed, acceleration, transition);
+    const float criticalPower =
+        std::max(metabolicPower(critical, 0.0f, transition), EPSILON);
+    // Burst reserve (a share of the fresh burst capacity): energy, the burst
+    // capacity's metres at the running cost of his fresh critical speed.
+    // Power above his critical speed's, from running fast or accelerating,
+    // is drawn from it; below, it refills toward what the fuel left allows,
+    // slower the harder he still works.
+    const float burstEnergy = std::max(
+        physiology.burstMetres[lane] *
+            runningCost(AIR_COST_K * fresh * fresh / GRAVITY),
+        EPSILON);
     const float capacity = 1.0f - BURST_FUEL_LOSS * fatigue;
-    const float drained =
-        std::max(0.0f, reserve[lane] -
-                           (speed - critical) * dt /
-                               std::max(physiology.burstMetres[lane], EPSILON));
-    const float effortShare = speed / std::max(critical, EPSILON);
+    const float above = std::max(0.0f, power - criticalPower);
+    const float drawn = std::min(reserve[lane], above * dt / burstEnergy);
+    const float intensity = std::min(power / criticalPower, 1.0f);
     const float refillSeconds =
         physiology.recoverySeconds[lane] *
-        (1.0f + RECOVERY_EFFORT_SLOWING * effortShare * effortShare);
+        (1.0f + RECOVERY_EFFORT_SLOWING * intensity * intensity);
     const float refilled =
         reserve[lane] +
         (capacity - reserve[lane]) * (1.0f - std::exp(-dt / refillSeconds));
     // A restart's repositioning jump is not running.
     const bool ran = speed <= MatchTuning::Player::MAX_COUNTED_STEP_SPEED;
     nextReserve[lane] =
-        ran ? std::min(speed > critical ? drained : refilled, capacity)
+        ran ? std::min(above > 0.0f ? reserve[lane] - drawn : refilled, capacity)
             : reserve[lane];
+    // Fuel: the aerobic part at its carbohydrate share, and what was drawn
+    // from the burst reserve at the anaerobic premium; against his anchor.
+    // (With the reserve empty, power above his critical speed's is not yet
+    // charged: the fatigue plan's step 4 makes an empty reserve a ceiling.)
+    const float aerobic = std::min(power, criticalPower);
+    const float carbohydrate =
+        aerobic * carbohydrateShare(aerobic / criticalPower) +
+        drawn * burstEnergy / dt * ANAEROBIC_FUEL_PREMIUM;
+    const float drain =
+        carbohydrate / std::max(anchor * physiology.fuelSeconds[lane], EPSILON);
+    nextStamina[lane] = std::clamp(stamina[lane] - drain * dt, 0.0f, 1.0f);
+    stepEnergy[lane] = power * dt;
+    stepAnaerobicEnergy[lane] = above * dt;
   }
 }
 

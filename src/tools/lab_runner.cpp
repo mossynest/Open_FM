@@ -248,6 +248,14 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
     sample.full_match_walk += static_cast<double>(entry.walkMetres);
     sample.full_match_jog += static_cast<double>(entry.jogMetres);
     sample.full_match_run += static_cast<double>(entry.runMetres);
+    sample.full_match_energy += static_cast<double>(entry.metabolicEnergy) / 1000.0;
+    sample.full_match_anaerobic +=
+        static_cast<double>(entry.anaerobicEnergy) / 1000.0;
+    if (entry.emptyAtMinute >= 0.0f)
+    {
+      ++sample.emptied_players;
+      sample.empty_minute_sum += static_cast<double>(entry.emptyAtMinute);
+    }
     const auto& windows = entry.runningByFive;
     constexpr std::size_t PER_HALF = PlayerMatchStats::FIVE_MINUTE_WINDOWS / 2;
     double windowSum = 0.0;
@@ -279,7 +287,7 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
       sample.end_fuel_sum += static_cast<double>(fuel);
       sample.end_fuel_square_sum += static_cast<double>(fuel) * fuel;
       sample.end_fuel_min = std::min(sample.end_fuel_min, fuel);
-      if (fuel <= MatchTuning::Player::MINIMUM_STAMINA + 0.005f)
+      if (fuel <= engine.fuelFloor(player.isHomeTeam) + 0.005f)
         ++sample.finishers_at_floor;
       const std::size_t band = fuel >= 0.6f   ? 0
                                : fuel >= 0.3f ? 1
@@ -718,6 +726,18 @@ std::map<std::string, Estimate> matchMetrics(
              { return (s.full_match_run + s.full_match_high_intensity) /
                       1000.0; }),
       fullMatchPlayers);
+  metrics["energy_per_outfielder_kj"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.full_match_energy; }),
+      fullMatchPlayers);
+  metrics["anaerobic_energy_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.full_match_anaerobic; }),
+      column([](const MatchSample& s) { return s.full_match_energy; }));
+  metrics["emptied_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.emptied_players; }),
+      fullMatchPlayers);
+  metrics["empty_minute_mean"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.empty_minute_sum; }),
+      column([](const MatchSample& s) { return s.emptied_players; }));
   metrics["peak5_next_change"] = ratioEstimate(
       column([](const MatchSample& s) { return s.peak_next_change_sum; }),
       column([](const MatchSample& s) { return s.peak_next_players; }));

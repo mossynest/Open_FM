@@ -2016,8 +2016,7 @@ void MatchEngine::integrateControlled(MatchPlayer& player, float dt)
 {
   using C = MatchTuning::Control;
   const float topSpeed = currentTopSpeed(player);
-  const float fatigue =
-      std::clamp((1.0f - player.stamina) * INVERSE_FATIGUE_RANGE, 0.0f, 1.0f);
+  const float fatigue = fuelFatigue(player);
   const MatchPlayer* carrier = findMatchPlayer(ball.possessedBy);
   const bool jockeying = controlInput.jockey && carrier &&
                          carrier->isHomeTeam != player.isHomeTeam;
@@ -2691,7 +2690,8 @@ void MatchEngine::accumulatePlayerLoad(float dt)
   constexpr std::size_t LANES = FitnessLanes::LANES;
   FitnessLanes lanes;
   auto& [fromX, fromY, toX, toY, topSpeed, endurance, pressingEffort,
-         sideDrain, stamina, reserve, stepMetres, nextStamina, nextReserve] =
+         sideDrain, stamina, reserve, stepMetres, nextStamina, nextReserve,
+         stepEnergy, stepAnaerobicEnergy] =
       lanes;
   std::array<std::uint8_t, LANES> slots;
   std::size_t count = 0;
@@ -2732,8 +2732,13 @@ void MatchEngine::accumulatePlayerLoad(float dt)
     enduranceLanes.recoverySeconds[lane] = derivedPhysicalValue(
         DerivedStat::RECOVERY_RATE,
         player.derivedStat(DerivedStat::RECOVERY_RATE));
-    enduranceLanes.fuelCapacity[lane] =
-        player.derivedStat(DerivedStat::FUEL_CAPACITY);
+    enduranceLanes.fuelSeconds[lane] =
+        derivedPhysicalValue(DerivedStat::FUEL_CAPACITY,
+                             player.derivedStat(DerivedStat::FUEL_CAPACITY)) *
+        MatchTuning::Timing::SECONDS_PER_MINUTE;
+    enduranceLanes.transitionSpeed[lane] =
+        MatchRules::walkRunTransitionSpeed(player.heightMetres);
+    enduranceLanes.previousSpeed[lane] = player.loadSpeed;
   }
   spendEnergy(lanes, 0, homeLanes, dt, true);
   spendEnergy(lanes, homeLanes, count, dt, false);
@@ -2754,8 +2759,13 @@ void MatchEngine::accumulatePlayerLoad(float dt)
             : nullptr;
     if (profile) profile->playerSeconds[spell()] += dt;
     // Restart repositioning teleports are not running.
-    if (metres > MatchTuning::Player::MAX_COUNTED_STEP_SPEED * dt) continue;
+    if (metres > MatchTuning::Player::MAX_COUNTED_STEP_SPEED * dt)
+    {
+      player.loadSpeed = length(player.velocity);
+      continue;
+    }
     const float speed = metres / dt;
+    player.loadSpeed = speed;
     if (profile)
     {
       profile->metres[spell()] += metres;
@@ -2764,6 +2774,8 @@ void MatchEngine::accumulatePlayerLoad(float dt)
     }
     PlayerMatchStats& entry = statsOf(player);
     entry.distanceMetres += metres;
+    entry.metabolicEnergy += lanes.stepEnergy[lane];
+    entry.anaerobicEnergy += lanes.stepAnaerobicEnergy[lane];
     if (period == 2) entry.secondHalfDistanceMetres += metres;
     // Running speed, not the displacement from body contact.
     if (speed > entry.topSpeed)
@@ -2802,6 +2814,8 @@ void MatchEngine::accumulatePlayerLoad(float dt)
     }
     player.stamina = nextStamina[lane];
     player.sprintReserve = nextReserve[lane];
+    if (player.stamina <= 0.0f && entry.emptyAtMinute < 0.0f)
+      entry.emptyAtMinute = elapsedMatchMinutes;
   }
 }
 
