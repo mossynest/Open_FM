@@ -194,7 +194,8 @@ struct MatchPlayer
   float stamina = 1.0f;
   /** Fast repeat-sprint reserve in [0, 1]. */
   float sprintReserve = 1.0f;
-  /** Fresh top speed (m/s), maximum acceleration A0 and braking (m/s^2). */
+  /** Fresh top speed (m/s), maximum acceleration A0 and braking (m/s^2).
+   * A Binturong body reads A0 from the Acceleration derived stat instead. */
   float maxSpeed = MatchTuning::Player::TOP_SPEED_BASE;
   float acceleration = MatchTuning::Player::ACCELERATION_BASE;
   float braking = MatchTuning::Player::BRAKING_BASE;

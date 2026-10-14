@@ -130,6 +130,16 @@ struct MatchSample
   double full_match_high_intensity = 0.0;
   double full_match_sprint = 0.0;
   int full_match_sprints = 0;
+  /** Their walking, jogging and running (below high intensity), Bradley et
+   * al. 2009's bands. */
+  double full_match_walk = 0.0;
+  double full_match_jog = 0.0;
+  double full_match_run = 0.0;
+  /** Running above 14.4 km/h in the 5 minutes after each one's peak 5
+   * minutes, against his match mean per window, minus 1, summed, and how
+   * many (Mohr et al. 2003; a peak in a half's last window is skipped). */
+  double peak_next_change_sum = 0.0;
+  int peak_next_players = 0;
   /** Movement jitter of both sides together (MatchEngine::getMovementJitter). */
   MovementJitterStats jitter;
   /** Open-play strikes as the contact model reads them (Binturong bodies;
@@ -144,7 +154,13 @@ struct MatchSample
    * (condition) summed, and how many were at its floor. */
   int finishers = 0;
   double end_fuel_sum = 0.0;
+  double end_fuel_square_sum = 0.0;
+  float end_fuel_min = 1.0f;
   int finishers_at_floor = 0;
+  /** Finishers by fuel left: 60% or more, 30-60%, 10-30%, below 10%, empty
+   * (the fatigue plan's tier points). */
+  static constexpr std::size_t FUEL_BANDS = 5;
+  std::array<int, FUEL_BANDS> end_fuel_bands{};
 
   int totalGoals() const { return goals[0] + goals[1]; }
 };

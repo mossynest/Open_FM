@@ -428,6 +428,10 @@ struct MatchTuning final
   /** Physical load statistics thresholds (m/s). */
   struct Load final
   {
+    // Bradley et al. 2009's bands: walking below 7.2 km/h, jogging to 14.4,
+    // running to 19.8, high-speed running to 25.2, sprinting above.
+    static constexpr float JOG_SPEED = 2.0f;
+    static constexpr float RUN_SPEED = 4.0f;
     static constexpr float HIGH_INTENSITY_SPEED = 5.5f;
     static constexpr float SPRINT_SPEED = 7.0f;
     static constexpr float SPRINT_EXIT_SPEED = 6.5f;

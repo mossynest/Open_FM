@@ -36,8 +36,9 @@ enum class DerivedStat : std::uint8_t
   FUEL_CAPACITY,
   RECOVERY_RATE,
   FIRST_TOUCH,
+  ACCELERATION,
 };
-inline constexpr std::size_t DERIVED_STAT_COUNT = 6;
+inline constexpr std::size_t DERIVED_STAT_COUNT = 7;
 
 /** The match attributes a recipe blends (MatchPlayer's fields). */
 enum class BaseAttribute : std::uint8_t
@@ -111,6 +112,12 @@ inline constexpr std::array<DerivedStatInfo, DERIVED_STAT_COUNT> DERIVED_STATS{{
      "Receiving the ball: taking the pace off it and placing it where he "
      "wants it.",
      "", 0.0f, 0.0f, 0.0f, 0.0f},
+    // The old fixed 5.7 + 1.6 x Pace + 0.6 x Physicality, which its recipe's
+    // rating reproduces as 5.7 + 2.2 x rating.
+    {"Acceleration", "Acc",
+     "Getting going: his maximum push from a standstill (A0 of the "
+     "acceleration-speed profile, fading to nothing at his top speed).",
+     "m/s^2", 6.69f, 7.57f, 5.0f, 8.5f},
 }};
 
 namespace DerivedStats
@@ -122,9 +129,9 @@ constexpr DerivedRecipe only(BaseAttribute attribute)
   return recipe;
 }
 
-constexpr DerivedRecipe agilityRecipe()
+constexpr DerivedRecipe accelerationRecipe()
 {
-  // Mirrors acceleration's blend of Pace and Physicality for now.
+  // Pace and Physicality, weighted as the old fixed formula weighed them.
   using P = MatchTuning::Player;
   constexpr float total = P::ACCELERATION_PACE + P::ACCELERATION_PHYSICALITY;
   DerivedRecipe recipe;
@@ -133,6 +140,12 @@ constexpr DerivedRecipe agilityRecipe()
   recipe.weights[static_cast<std::size_t>(BaseAttribute::PHYSICALITY)] =
       P::ACCELERATION_PHYSICALITY / total;
   return recipe;
+}
+
+constexpr DerivedRecipe agilityRecipe()
+{
+  // Mirrors acceleration's blend of Pace and Physicality for now.
+  return accelerationRecipe();
 }
 
 constexpr DerivedRecipe firstTouchRecipe()
@@ -148,7 +161,7 @@ constexpr DerivedRecipe firstTouchRecipe()
 
 /** The recipes a handshake uses unless it has its own (the Aardvark's). For
  * now every endurance stat simply echoes Stamina; first touch blends
- * Dribbling and Passing. */
+ * Dribbling and Passing; acceleration blends Pace and Physicality. */
 inline constexpr DerivedRecipes DEFAULT_DERIVED_RECIPES{{
     DerivedStats::agilityRecipe(),
     DerivedStats::only(BaseAttribute::STAMINA),
@@ -156,6 +169,7 @@ inline constexpr DerivedRecipes DEFAULT_DERIVED_RECIPES{{
     DerivedStats::only(BaseAttribute::STAMINA),
     DerivedStats::only(BaseAttribute::STAMINA),
     DerivedStats::firstTouchRecipe(),
+    DerivedStats::accelerationRecipe(),
 }};
 
 inline const DerivedStatInfo& derivedStatInfo(DerivedStat stat)

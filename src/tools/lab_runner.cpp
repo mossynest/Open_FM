@@ -245,6 +245,22 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
         static_cast<double>(entry.highIntensityMetres);
     sample.full_match_sprint += static_cast<double>(entry.sprintMetres);
     sample.full_match_sprints += entry.sprints;
+    sample.full_match_walk += static_cast<double>(entry.walkMetres);
+    sample.full_match_jog += static_cast<double>(entry.jogMetres);
+    sample.full_match_run += static_cast<double>(entry.runMetres);
+    const auto& windows = entry.runningByFive;
+    constexpr std::size_t PER_HALF = PlayerMatchStats::FIVE_MINUTE_WINDOWS / 2;
+    double windowSum = 0.0;
+    for (const float metres : windows) windowSum += static_cast<double>(metres);
+    const auto peak = static_cast<std::size_t>(
+        std::ranges::max_element(windows) - windows.begin());
+    if (windowSum > 0.0 && peak % PER_HALF != PER_HALF - 1)
+    {
+      const double mean = windowSum / static_cast<double>(windows.size());
+      sample.peak_next_change_sum +=
+          static_cast<double>(windows[peak + 1]) / mean - 1.0;
+      ++sample.peak_next_players;
+    }
   }
   for (const LoadProfileStats& side : engine.getLoadProfile())
     for (std::size_t spell = 0; spell < LoadProfileStats::SPELLS; ++spell)
@@ -259,9 +275,18 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
     if (player.onPitch && !player.isGoalkeeper)
     {
       ++sample.finishers;
-      sample.end_fuel_sum += static_cast<double>(player.stamina);
-      if (player.stamina <= MatchTuning::Player::MINIMUM_STAMINA + 0.005f)
+      const float fuel = player.stamina;
+      sample.end_fuel_sum += static_cast<double>(fuel);
+      sample.end_fuel_square_sum += static_cast<double>(fuel) * fuel;
+      sample.end_fuel_min = std::min(sample.end_fuel_min, fuel);
+      if (fuel <= MatchTuning::Player::MINIMUM_STAMINA + 0.005f)
         ++sample.finishers_at_floor;
+      const std::size_t band = fuel >= 0.6f   ? 0
+                               : fuel >= 0.3f ? 1
+                               : fuel >= 0.1f ? 2
+                               : fuel > 0.005f ? 3
+                                               : 4;
+      ++sample.end_fuel_bands[band];
     }
     ++sample.derived_players;
     for (std::size_t index = 0; index < DERIVED_STAT_COUNT; ++index)
@@ -674,6 +699,28 @@ std::map<std::string, Estimate> matchMetrics(
   metrics["sprints_per_outfielder"] = ratioEstimate(
       column([](const MatchSample& s) { return s.full_match_sprints; }),
       fullMatchPlayers);
+  metrics["walk_per_outfielder_km"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.full_match_walk / 1000.0; }),
+      fullMatchPlayers);
+  metrics["jog_per_outfielder_km"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.full_match_jog / 1000.0; }),
+      fullMatchPlayers);
+  metrics["run_per_outfielder_km"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.full_match_run / 1000.0; }),
+      fullMatchPlayers);
+  metrics["hsr_per_outfielder_km"] = ratioEstimate(
+      column([](const MatchSample& s)
+             { return (s.full_match_high_intensity - s.full_match_sprint) /
+                      1000.0; }),
+      fullMatchPlayers);
+  metrics["hir_per_outfielder_km"] = ratioEstimate(
+      column([](const MatchSample& s)
+             { return (s.full_match_run + s.full_match_high_intensity) /
+                      1000.0; }),
+      fullMatchPlayers);
+  metrics["peak5_next_change"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.peak_next_change_sum; }),
+      column([](const MatchSample& s) { return s.peak_next_players; }));
   // Movement jitter: the plan's scheduled refreshes, summed over intents.
   const auto planned = [&](auto field)
   {
@@ -779,6 +826,33 @@ std::map<std::string, Estimate> matchMetrics(
   metrics["end_fuel_floor_share"] = ratioEstimate(
       column([](const MatchSample& s) { return s.finishers_at_floor; }),
       finishers);
+  // Its spread over all finishers, pooled; bootstrap.
+  metrics["end_fuel_sd"] = bootstrapEstimate(
+      n,
+      [&](std::span<const std::size_t> indices)
+      {
+        double count = 0.0, sum = 0.0, squares = 0.0;
+        for (const std::size_t i : indices)
+        {
+          count += valid[i]->finishers;
+          sum += valid[i]->end_fuel_sum;
+          squares += valid[i]->end_fuel_square_sum;
+        }
+        if (count < 2.0) return std::nan("");
+        const double mean = sum / count;
+        return std::sqrt(std::max(0.0, squares / count - mean * mean));
+      },
+      0xF0E1ULL);
+  metrics["end_fuel_min_mean"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.end_fuel_min; }),
+      column([](const MatchSample&) { return 1; }));
+  constexpr std::array<const char*, MatchSample::FUEL_BANDS> FUEL_BAND_NAMES{
+      "end_fuel_60_share", "end_fuel_30_60_share", "end_fuel_10_30_share",
+      "end_fuel_below_10_share", "end_fuel_empty_share"};
+  for (std::size_t band = 0; band < MatchSample::FUEL_BANDS; ++band)
+    metrics[FUEL_BAND_NAMES[band]] = ratioEstimate(
+        column([band](const MatchSample& s) { return s.end_fuel_bands[band]; }),
+        finishers);
 
   // Rate multipliers: goals per team-minute in a state / in the reference
   // state, pooled over matches; bootstrap over matches.

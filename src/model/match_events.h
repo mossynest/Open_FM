@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -161,6 +163,17 @@ struct PlayerMatchStats
   float highIntensityMetres = 0.0f;
   float secondHalfHighIntensityMetres = 0.0f;
   float sprintMetres = 0.0f;
+  /** Distance below 2 m/s (walking), 2-4 m/s (jogging) and 4-5.5 m/s
+   * (running); above that is high intensity. */
+  float walkMetres = 0.0f;
+  float jogMetres = 0.0f;
+  float runMetres = 0.0f;
+  /** Distance above 4 m/s (14.4 km/h: the research's "high-intensity
+   * running", Mohr 2003, Bradley 2009) by 5-minute window of the clock: 0-5
+   * ... 40-45 of the first half, then of the second (added and extra time
+   * left out). */
+  static constexpr std::size_t FIVE_MINUTE_WINDOWS = 18;
+  std::array<float, FIVE_MINUTE_WINDOWS> runningByFive{};
   /** Efforts above 7 m/s. */
   int sprints = 0;
   /** Highest speed reached (m/s). */

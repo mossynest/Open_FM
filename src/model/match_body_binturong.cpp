@@ -63,6 +63,13 @@ inline float playerGrip(const MatchPlayer& player)
                               player.derivedStat(DerivedStat::AGILITY));
 }
 
+/** His fresh maximum acceleration A0 (m/s^2): the Acceleration stat. */
+inline float playerAcceleration(const MatchPlayer& player)
+{
+  return derivedPhysicalValue(DerivedStat::ACCELERATION,
+                              player.derivedStat(DerivedStat::ACCELERATION));
+}
+
 // Energy: two tanks (critical speed and D', the W' balance model of Skiba et
 // al. for intermittent running).
 // - Fuel (`stamina`, floor MINIMUM_STAMINA): the whole match's work, drained
@@ -247,7 +254,7 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     reserve[lane] = player.sprintReserve;
     injury[lane] =
         player.isInjured ? MatchTuning::Injury::INJURED_SPEED_SCALE : 1.0f;
-    acceleration[lane] = player.acceleration;
+    acceleration[lane] = playerAcceleration(player);
     braking[lane] = player.braking;
     // How hard he chooses to run is his side's brain's.
     const MovementStyle& style = movementStyle(player.isHomeTeam);
@@ -445,7 +452,8 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
   // and a lateral limit (scaled by his grip) that forces a player to slow
   // down to turn sharply.
   const float acceleration =
-      player.acceleration * (1.0f - P::FATIGUE_ACCELERATION_LOSS * fatigue);
+      playerAcceleration(player) *
+      (1.0f - P::FATIGUE_ACCELERATION_LOSS * fatigue);
   // Tired legs brake and turn less sharply.
   const float braking =
       player.braking * (1.0f - FATIGUE_BRAKING_LOSS * fatigue);

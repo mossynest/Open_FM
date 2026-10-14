@@ -2769,6 +2769,22 @@ void MatchEngine::accumulatePlayerLoad(float dt)
     if (speed > entry.topSpeed)
       entry.topSpeed =
           std::max(entry.topSpeed, std::min(speed, length(player.velocity)));
+    if (speed < L::JOG_SPEED)
+      entry.walkMetres += metres;
+    else if (speed < L::RUN_SPEED)
+      entry.jogMetres += metres;
+    else if (speed < L::HIGH_INTENSITY_SPEED)
+      entry.runMetres += metres;
+    if (speed >= L::RUN_SPEED)
+    {
+      // The 5-minute window of the half (added time left out).
+      const float halfMinutes =
+          matchTimeMinutes - (period == 2 ? 45.0f : 0.0f);
+      const auto window = static_cast<std::size_t>(std::max(0.0f, halfMinutes) / 5.0f);
+      constexpr std::size_t PER_HALF = PlayerMatchStats::FIVE_MINUTE_WINDOWS / 2;
+      if (period <= 2 && window < PER_HALF)
+        entry.runningByFive[(period == 2 ? PER_HALF : 0) + window] += metres;
+    }
     if (speed >= L::HIGH_INTENSITY_SPEED)
     {
       entry.highIntensityMetres += metres;

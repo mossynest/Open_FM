@@ -156,8 +156,12 @@ struct RunnerAttributes
   float pace = 70.0f;
   float physicality = 70.0f;
   float stamina = 70.0f;
-  /** The Agility derived stat; 0 leaves it to its recipe. */
+  /** The Agility and Acceleration derived stats; 0 leaves each to its
+   * recipe. */
   float agility = 0.0f;
+  float acceleration = 0.0f;
+  /** Fuel (condition) at the start, 0-100. */
+  float condition = 100.0f;
 
   void addTo(std::vector<DrillParameter>& parameters)
   {
@@ -171,6 +175,14 @@ struct RunnerAttributes
                           "Grip: how sharply he turns at speed (0.9x at 45, "
                           "1.1x at 85).\n0: from its recipe (mirrors "
                           "acceleration: Pace and Physicality)."));
+    parameters.push_back(setting("Acceleration", &acceleration, 0.0f, 100.0f,
+                          true,
+                          "His push from a standstill (6.7 m/s² at 45, 7.6 at "
+                          "85).\n0: from its recipe (Pace and Physicality, "
+                          "1.6 : 0.6)."));
+    parameters.push_back(setting("Condition", &condition, 0.0f, 100.0f, true,
+                          "Fuel at the start (100: fresh). Lower it to test "
+                          "a tired player, e.g. a sprint after a match."));
   }
   [[nodiscard]] std::map<std::string, float> stats() const
   {
@@ -178,14 +190,19 @@ struct RunnerAttributes
   }
   [[nodiscard]] std::map<DerivedStat, float> derived() const
   {
-    if (agility <= 0.0f) return {};
-    return {{DerivedStat::AGILITY, agility}};
+    std::map<DerivedStat, float> derived;
+    if (agility > 0.0f) derived[DerivedStat::AGILITY] = agility;
+    if (acceleration > 0.0f) derived[DerivedStat::ACCELERATION] = acceleration;
+    return derived;
   }
   [[nodiscard]] std::string describe() const
   {
     std::string text = std::format("Pace {:.0f} · Physicality {:.0f} · Stamina {:.0f}",
                                    pace, physicality, stamina);
     if (agility > 0.0f) text += std::format(" · Agility {:.0f}", agility);
+    if (acceleration > 0.0f)
+      text += std::format(" · Acceleration {:.0f}", acceleration);
+    if (condition < 100.0f) text += std::format(" · Condition {:.0f}", condition);
     return text;
   }
 };
@@ -327,7 +344,9 @@ class MovementDrill : public Drill
     stats["Passing"] = dribbler.passing;
     if (dribbler.firstTouch > 0.0f)
       derived[DerivedStat::FIRST_TOUCH] = dribbler.firstTouch;
-    return {{"Runner", PlayerRole::CM, true, stats, 180, derived}};
+    DrillPlayerSpec spec{"Runner", PlayerRole::CM, true, stats, 180, derived};
+    spec.condition = runner.condition;
+    return {spec};
   }
 
   bool humanControl() const override { return pathSetting() == YOU; }

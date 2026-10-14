@@ -74,8 +74,8 @@ void MatchEngine::convertMatchContextBinturong(const MatchContext& context)
 const DerivedRecipes& MatchEngine::derivedRecipesBinturong()
 {
   // Binturong's own derived-stat recipes (match_derived_stats.h); the defaults
-  // for now: agility mirrors acceleration, the endurance stats echo Stamina,
-  // first touch blends Dribbling and Passing.
+  // for now: acceleration and agility blend Pace and Physicality, the
+  // endurance stats echo Stamina, first touch blends Dribbling and Passing.
   static constexpr DerivedRecipes recipes = DEFAULT_DERIVED_RECIPES;
   return recipes;
 }
@@ -166,9 +166,7 @@ void MatchEngine::loadAttributesBinturong(MatchPlayer& matchPlayer,
   using P = MatchTuning::Player;
   matchPlayer.maxSpeed =
       P::TOP_SPEED_BASE + matchPlayer.pace * P::TOP_SPEED_PACE;
-  matchPlayer.acceleration =
-      P::ACCELERATION_BASE + matchPlayer.pace * P::ACCELERATION_PACE +
-      matchPlayer.physicality * P::ACCELERATION_PHYSICALITY;
+  // Acceleration is a derived stat (the Binturong body reads it there).
   matchPlayer.braking =
       P::BRAKING_BASE + matchPlayer.physicality * P::BRAKING_PHYSICALITY;
 }
