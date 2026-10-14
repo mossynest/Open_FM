@@ -1856,10 +1856,38 @@ void MatchEngine::observeRunJitter(float dt)
       track.windowStart = player.position;
       track.windowPath = 0.0;
       track.lastVelocity = player.velocity;
+      track.lastSpeed = length(player.velocity);
+      track.speedTrend = 0;
       continue;
     }
     MovementJitterStats& side = movementJitter[player.isHomeTeam ? 0 : 1];
     side.playerSeconds += dt;
+    // Speed surging: rising then falling (or back) while running.
+    constexpr float SURGE_SPEED = 2.0f;
+    constexpr float SURGE_ACCELERATION = 0.5f;
+    const float speedNow = length(player.velocity);
+    const float speedChange = speedNow - track.lastSpeed;
+    track.lastSpeed = speedNow;
+    if (speedNow > SURGE_SPEED)
+    {
+      auto& job = side.byIntent[static_cast<std::size_t>(player.intent)];
+      side.runningSeconds += dt;
+      job.runningSeconds += dt;
+      if (std::abs(speedChange) > SURGE_ACCELERATION * dt)
+      {
+        const std::int8_t trend = speedChange > 0.0f ? 1 : -1;
+        if (track.speedTrend != 0 && trend != track.speedTrend)
+        {
+          ++side.speedReversals;
+          ++job.speedReversals;
+        }
+        track.speedTrend = trend;
+      }
+    }
+    else
+    {
+      track.speedTrend = 0;
+    }
     track.windowPath += length(toMetres({player.position.x - track.lastPosition.x,
                                          player.position.y - track.lastPosition.y}));
     track.lastPosition = player.position;

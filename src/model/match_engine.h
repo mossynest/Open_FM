@@ -771,6 +771,10 @@ struct MovementJitterStats
      * the last second. */
     std::uint32_t switchesIn = 0;
     std::uint32_t flipBacks = 0;
+    /** Speed surging on this job: running time (s) and reversals (see
+     * speedReversals). */
+    double runningSeconds = 0.0;
+    std::uint32_t speedReversals = 0;
   };
   std::array<ByIntent, PLAYER_INTENT_COUNT> byIntent{};
   /** Refreshes forced (even on a scheduled step) by the ball changing hands
@@ -787,6 +791,11 @@ struct MovementJitterStats
    * times it turned more than 90 degrees. */
   std::uint32_t turnSamples = 0;
   std::uint32_t sharpTurns = 0;
+  /** Speed surging: time spent running above 2 m/s (s), and the times his
+   * speed turned from rising to falling or back (each change over 0.5
+   * m/s^2 in a step). */
+  double runningSeconds = 0.0;
+  std::uint32_t speedReversals = 0;
 };
 
 /**
@@ -1741,6 +1750,9 @@ class MatchEngine
     Vector2F windowStart{};
     double windowPath = 0.0;
     Vector2F lastVelocity{};
+    /** Speed last step, and whether it was last rising (1) or falling (-1). */
+    float lastSpeed = 0.0f;
+    std::int8_t speedTrend = 0;
   };
   std::array<JitterTrack, 32> jitterTracks{};
   std::uint64_t lastJitterStep = 0;

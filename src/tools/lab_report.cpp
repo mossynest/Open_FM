@@ -165,6 +165,7 @@ constexpr std::array TARGETS = {
   TargetSpec{"JIT-EVTM", "jitter_event_target_move_m", "Target move per forced replan (m)", "", NO_BAND, Info, "jitter", Number, Engine, ""},
   TargetSpec{"JIT-EFF", "jitter_run_efficiency", "Run efficiency (ground gained / distance run, 2 s windows)", "", NO_BAND, Info, "jitter", Percent, Engine, ""},
   TargetSpec{"JIT-TURN", "jitter_sharp_turn_share", "Runs turned > 90 degrees within 0.2 s", "", NO_BAND, Info, "jitter", Percent, Engine, "both speeds > 1 m/s"},
+  TargetSpec{"JIT-SURGE", "jitter_speed_reversals_per_running_minute", "Speed surges (rise/fall reversals) per running minute", "", NO_BAND, Info, "jitter", Number, Engine, "above 2 m/s; changes over 0.5 m/s^2 per step"},
   // ---- World (season runs) --------------------------------------------------
   TargetSpec{"CT-W01", "", "Output peak age by position", "FW~25, MF 25-27, DF~27", NO_BAND, Gate, "PEER", Number, World, "not measurable in one season: needs multi-season rating-by-age curves"},
   TargetSpec{"CT-W02", "", "Physical peaks", "25.7 / 24.8 / 26.0", NO_BAND, Monitor, "PEER", Number, World, "not measurable yet"},

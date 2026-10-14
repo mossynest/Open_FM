@@ -317,6 +317,8 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
       to.reversals += from.reversals;
       to.switchesIn += from.switchesIn;
       to.flipBacks += from.flipBacks;
+      to.runningSeconds += from.runningSeconds;
+      to.speedReversals += from.speedReversals;
     }
     total.eventRefreshes += side.eventRefreshes;
     total.eventTargetMoveMetres += side.eventTargetMoveMetres;
@@ -325,6 +327,8 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
     total.netMetres += side.netMetres;
     total.turnSamples += side.turnSamples;
     total.sharpTurns += side.sharpTurns;
+    total.runningSeconds += side.runningSeconds;
+    total.speedReversals += side.speedReversals;
   }
   sample.strike_contacts = engine.getStrikeContacts();
   sample.first_half_distance =
@@ -798,6 +802,11 @@ std::map<std::string, Estimate> matchMetrics(
              { return static_cast<double>(s.jitter.sharpTurns); }),
       column([](const MatchSample& s)
              { return static_cast<double>(s.jitter.turnSamples); }));
+  metrics["jitter_speed_reversals_per_running_minute"] = ratioEstimate(
+      column([](const MatchSample& s)
+             { return static_cast<double>(s.jitter.speedReversals); }),
+      column([](const MatchSample& s)
+             { return s.jitter.runningSeconds / 60.0; }));
   // Second-half vs first-half distance per minute of those players, pooled
   // over matches (distance / (half length x players)); bootstrap.
   metrics["second_half_distance_change"] = bootstrapEstimate(
@@ -1034,12 +1043,17 @@ std::vector<TextTable> matchTables(std::span<const MatchSample> samples)
       to.reversals += from.reversals;
       to.switchesIn += from.switchesIn;
       to.flipBacks += from.flipBacks;
+      to.runningSeconds += from.runningSeconds;
+      to.speedReversals += from.speedReversals;
       allRefreshes += from.refreshes;
     }
+  double allRunning = 0.0;
+  for (const auto& bucket : jitter.byIntent) allRunning += bucket.runningSeconds;
   TextTable byIntent{"Movement jitter by intent (scheduled refreshes)",
                      {"Intent", "Share of refreshes", "Target move (m)",
                       "Moves > 0.5 m", "Moves reversed",
-                      "Switches in per 100", "Switched back within 1 s"},
+                      "Switches in per 100", "Switched back within 1 s",
+                      "Share of running", "Speed surges per running min"},
                      {}};
   for (std::size_t intent = 0; intent < PLAYER_INTENT_COUNT; ++intent)
   {
@@ -1054,7 +1068,12 @@ std::vector<TextTable> matchTables(std::span<const MatchSample> samples)
          percent(share(bucket.moves, bucket.refreshes)),
          percent(share(bucket.reversals, bucket.moves)),
          std::format("{:.1f}", 100.0 * bucket.switchesIn / count),
-         percent(share(bucket.flipBacks, bucket.switchesIn))});
+         percent(share(bucket.flipBacks, bucket.switchesIn)),
+         percent(allRunning > 0.0 ? bucket.runningSeconds / allRunning : 0.0),
+         std::format("{:.1f}", bucket.runningSeconds > 0.0
+                                   ? 60.0 * bucket.speedReversals /
+                                         bucket.runningSeconds
+                                   : 0.0)});
   }
   tables.push_back(std::move(byIntent));
 
