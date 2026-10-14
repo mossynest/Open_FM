@@ -613,16 +613,35 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
             : 1.0f;
     const float pacedTop = sustainable + (topSpeed - sustainable) * saved;
     const float speedCap = std::min(pacedTop, maxSpeed[lane] * effort);
+    // Acceleration-speed profile a(v) = A0 (1 - v / vmax), stronger braking,
+    // and a lateral limit (scaled by his grip) that forces a player to slow
+    // down to turn sharply.
+    const float push = acceleration[lane] * legs;
+    const float oldX = velocityX[lane];
+    const float oldY = velocityY[lane];
+    const float speed = std::sqrt(oldX * oldX + oldY * oldY);
+    // An emptying burst reserve holds his power to his critical speed's,
+    // speeding up and braking alike: above his critical speed he then
+    // slows whatever he wants. Below a sprint, a moded job keeps to that
+    // power whatever is in the reserve: only a sprint spends it.
+    const bool spendsBurst =
+        !moded || modeOf[lane] == static_cast<std::int8_t>(MovementMode::SPRINT);
+    const AccelerationRange limits = burstLimits(
+        push * std::max(0.05f, 1.0f - speed / topSpeed), brake, speed,
+        spendsBurst ? fullness : 0.0f, critical, transition[lane]);
     // Quotients are formed for every lane and discarded where unused.
     const bool aimed = targetDistance > EPSILON;
     const float directionX = targetX / targetDistance;
     const float directionY = targetY / targetDistance;
     // Arrive without overshooting: the desired speed falls off so he stops
-    // on the target, braking as hard as the effort he is putting in. A
-    // target moving away is closed on at that speed on top.
-    const float arrivalDeceleration =
-        std::max(P::ARRIVAL_DECELERATION,
-                 ARRIVAL_BRAKING_SHARE * brake * std::min(effort, 1.0f));
+    // on the target, braking as hard as the effort he is putting in (and
+    // his power allows). A target moving away is closed on at that speed on
+    // top.
+    const float arrivalDeceleration = std::min(
+        std::max(P::ARRIVAL_DECELERATION, ARRIVAL_BRAKING_SHARE *
+                                              std::min(brake, -limits.low) *
+                                              std::min(effort, 1.0f)),
+        std::max(-limits.low, EPSILON));
     const float approach = targetDistance - ARRIVAL_TOLERANCE_METRES;
     const float receding =
         std::max(0.0f, aimed ? targetVelocityX[lane] * directionX +
@@ -635,21 +654,8 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     const float desiredX = (aimed ? directionX : 0.0f) * desiredSpeed;
     const float desiredY = (aimed ? directionY : 0.0f) * desiredSpeed;
 
-    // Acceleration-speed profile a(v) = A0 (1 - v / vmax), stronger braking,
-    // and a lateral limit (scaled by his grip) that forces a player to slow
-    // down to turn sharply.
-    const float push = acceleration[lane] * legs;
-    const float oldX = velocityX[lane];
-    const float oldY = velocityY[lane];
-    const float speed = std::sqrt(oldX * oldX + oldY * oldY);
     const float changeX = desiredX - oldX;
     const float changeY = desiredY - oldY;
-    // An emptying burst reserve holds his power to his critical speed's,
-    // speeding up and braking alike: above his critical speed he then
-    // slows whatever he wants.
-    const AccelerationRange limits = burstLimits(
-        push * std::max(0.05f, 1.0f - speed / topSpeed), brake, speed,
-        fullness, critical, transition[lane]);
     // From a standstill: push off straight toward the target.
     const float limit =
         (desiredSpeed >= speed ? std::max(limits.high, 0.0f) : -limits.low) *
