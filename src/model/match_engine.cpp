@@ -1243,6 +1243,7 @@ bool MatchEngine::isInAddedTime() const
 
 void MatchEngine::updateMatchClock()
 {
+  if (!drillRules.periods) return;
   if (state == MatchState::HALF_TIME || state == MatchState::FULL_TIME ||
       state == MatchState::GOAL || state == MatchState::PENALTY_SHOOTOUT)
   {
@@ -6812,6 +6813,8 @@ void MatchEngine::applyDrillTargets()
       player->tacticalTarget = held.target;
       player->targetVelocity = {0.0f, 0.0f};
       player->urgentMovement = held.urgent;
+      if (held.urgent && drillRules.chaseEffort)
+        player->intent = PlayerIntent::CLAIM_LOOSE_BALL;
       player->isPressing = false;
       player->isMakingRun = false;
     }

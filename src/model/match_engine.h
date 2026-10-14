@@ -1389,6 +1389,14 @@ class MatchEngine
     bool offside = true;
     /** Off: a side below seven players does not abandon the match. */
     bool minimumPlayers = true;
+    /** Off: the halves never end (no half time, its rest or full time), so
+     * a drill can run as long as it likes. */
+    bool periods = true;
+    /** On: a player held on an urgent drill target runs as hard as one
+     * chasing a loose ball, whatever job his side's brain gave him, so a
+     * squad drill's runners all go equally hard (a lone runner gets that
+     * job anyway). Off: his brain's job sets his effort. */
+    bool chaseEffort = false;
   };
   void setDrillRules(const DrillRules& rules) { drillRules = rules; }
   const DrillRules& getDrillRules() const { return drillRules; }

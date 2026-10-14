@@ -634,6 +634,8 @@ add_library(fm_drills STATIC
     tools/match_sandbox_drill.h
     tools/match_sandbox_drill.cpp
     tools/match_sandbox_drills.cpp
+    tools/match_sandbox_training.h
+    tools/match_sandbox_training.cpp
     tools/match_sandbox_measure.h
     tools/match_sandbox_measure.cpp
     tools/match_sandbox_setup.h
@@ -680,6 +682,8 @@ add_executable(match_sandbox
     tools/match_sandbox_scenario.cpp
     tools/match_sandbox_drill_scene.h
     tools/match_sandbox_drill_scene.cpp
+    tools/match_sandbox_training_scene.h
+    tools/match_sandbox_training_scene.cpp
     tools/match_sandbox_measure_scene.h
     tools/match_sandbox_measure_scene.cpp
     tools/match_sandbox_shot_map.h

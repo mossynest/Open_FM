@@ -41,6 +41,7 @@
 #include "tools/match_sandbox_measure_scene.h"
 #include "tools/match_sandbox_pickers.h"
 #include "tools/match_sandbox_test_teams.h"
+#include "tools/match_sandbox_training_scene.h"
 #include "tools/match_sandbox_shot_map.h"
 
 namespace
@@ -303,12 +304,18 @@ void MatchSandboxScene::render()
                  "Pick two clubs and both sides' tactics, then play the "
                  "match as the home side, or run a drill that isolates one "
                  "behaviour. Nothing here is saved.");
-  constexpr std::array<const char*, 2> MODES{"Match", "Drills"};
-  UI::segmented("##mode", mode, MODES, 220.0f * scale);
+  constexpr std::array<const char*, 3> MODES{"Match", "Drills", "Training"};
+  UI::segmented("##mode", mode, MODES, 330.0f * scale);
   ImGui::Spacing();
   if (mode == 1)
   {
     renderDrills();
+    ImGui::End();
+    return;
+  }
+  if (mode == 2)
+  {
+    renderTraining();
     ImGui::End();
     return;
   }
@@ -378,6 +385,124 @@ void MatchSandboxScene::renderDrills()
       ImGui::SetTooltip("A grid of spots, many shots each: conversion against "
                         "the engine's xG as a heatmap, and the calibration.");
   }
+  UI::endCard();
+}
+
+void MatchSandboxScene::renderTraining()
+{
+  const float scale = Theme::scale();
+  const GameController& controller = guiView->getController();
+  const TeamID clubId = sides[HOME].team;
+  const std::vector<const Player*> squad = squadOf(controller, clubId);
+  std::string clubName;
+  for (const auto& team : controller.getTeams())
+    if (team.get().getId() == clubId) clubName = team.get().getName();
+  // A new club: the first of its squad, as many as fit on the pitch.
+  if (clubId != training_club)
+  {
+    training_club = clubId;
+    training_picks.clear();
+    for (const Player* player : squad)
+      if (training_picks.size() < TrainingDrill::MAX_PLAYERS)
+        training_picks.push_back(player->getId());
+  }
+
+  const std::vector<TrainingSessionInfo>& sessions = trainingSessions();
+  UI::beginCard("##session_list", "Sessions", ImVec2(260.0f * scale, 0.0f), true);
+  for (std::size_t index = 0; index < sessions.size(); ++index)
+    if (ImGui::Selectable(sessions[index].name,
+                          static_cast<std::size_t>(session_index) == index))
+      session_index = static_cast<int>(index);
+  ImGui::Spacing();
+  ImGui::PushTextWrapPos(0.0f);
+  ImGui::TextDisabled("The home club trains (pick it on the Match tab), the "
+                      "whole squad at once.");
+  ImGui::PopTextWrapPos();
+  UI::endCard();
+  ImGui::SameLine();
+  if (sessions.empty()) return;
+  const TrainingSessionInfo& info =
+      sessions[static_cast<std::size_t>(session_index)];
+  UI::beginCard("##session_page", info.name, ImVec2(0.0f, 0.0f), true);
+  ImGui::PushTextWrapPos(0.0f);
+  ImGui::TextUnformatted(info.summary);
+  ImGui::PopTextWrapPos();
+
+  ImGui::SeparatorText(std::format("{}: {} of {} picked (up to {})", clubName,
+                                   training_picks.size(), squad.size(),
+                                   TrainingDrill::MAX_PLAYERS)
+                           .c_str());
+  const bool full = training_picks.size() >= TrainingDrill::MAX_PLAYERS;
+  const float tableHeight = std::max(
+      120.0f * scale,
+      ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() * 2.0f);
+  if (ImGui::BeginTable("##training_squad", 6,
+                        ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH |
+                            ImGuiTableFlags_ScrollY |
+                            ImGuiTableFlags_SizingFixedFit,
+                        ImVec2(0.0f, tableHeight)))
+  {
+    ImGui::TableSetupScrollFreeze(0, 1);
+    ImGui::TableSetupColumn("");
+    ImGui::TableSetupColumn("Player", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableSetupColumn("Pos");
+    ImGui::TableSetupColumn("Pace");
+    ImGui::TableSetupColumn("Physicality");
+    ImGui::TableSetupColumn("Stamina");
+    ImGui::TableHeadersRow();
+    for (const Player* player : squad)
+    {
+      const PlayerID id = player->getId();
+      const auto found = std::ranges::find(training_picks, id);
+      bool picked = found != training_picks.end();
+      const auto stat = [player](const char* name)
+      {
+        const auto& stats = player->getStats();
+        const auto at = stats.find(name);
+        return at == stats.end() ? 0.0f : at->second;
+      };
+      ImGui::PushID(static_cast<int>(id));
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn();
+      ImGui::BeginDisabled(!picked && full);
+      if (ImGui::Checkbox("##pick", &picked))
+      {
+        if (picked)
+          training_picks.push_back(id);
+        else
+          training_picks.erase(found);
+      }
+      ImGui::EndDisabled();
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(player->getName().c_str());
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(RoleUtils::toString(player->getRole()).c_str());
+      ImGui::TableNextColumn();
+      ImGui::Text("%.0f", static_cast<double>(stat("Pace")));
+      ImGui::TableNextColumn();
+      ImGui::Text("%.0f", static_cast<double>(stat("Physicality")));
+      ImGui::TableNextColumn();
+      ImGui::Text("%.0f", static_cast<double>(stat("Stamina")));
+      ImGui::PopID();
+    }
+    ImGui::EndTable();
+  }
+
+  ImGui::BeginDisabled(training_picks.empty());
+  if (UI::primaryButton("Start session"))
+  {
+    // The picks in squad order.
+    std::vector<TrainingPlayer> trainees;
+    for (const Player* player : squad)
+      if (std::ranges::find(training_picks, player->getId()) !=
+          training_picks.end())
+        trainees.push_back({player->getName(), player->getRole(),
+                            player->getStats(), player->getHeight(),
+                            player->getFoot()});
+    guiView->overlayScene(std::make_unique<TrainingSessionScene>(
+        guiView, info.make(std::move(trainees)), clubName));
+  }
+  ImGui::EndDisabled();
   UI::endCard();
 }
 
