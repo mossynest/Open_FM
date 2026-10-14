@@ -348,6 +348,19 @@ float MatchEngine::currentTopSpeedBinturong(const MatchPlayer& player) const
   return fatiguedTopSpeed(player.maxSpeed, fatigue, injury);
 }
 
+SpeedBand MatchEngine::speedBandBinturong(const MatchPlayer& player,
+                                          MovementMode mode) const
+{
+  const float fatigue = std::clamp(1.0f - player.stamina, 0.0f, 1.0f);
+  const float critical =
+      derivedPhysicalValue(DerivedStat::ENDURANCE,
+                           player.derivedStat(DerivedStat::ENDURANCE)) *
+      (1.0f - CRITICAL_SPEED_FUEL_LOSS * fatigue);
+  return speedBandFrom(mode,
+                       MatchRules::walkRunTransitionSpeed(player.heightMetres),
+                       critical, currentTopSpeedBinturong(player));
+}
+
 FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     const std::uint8_t* slots, std::size_t count, float dt, bool walking)
 {

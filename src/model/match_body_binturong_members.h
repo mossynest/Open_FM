@@ -32,6 +32,9 @@
   float injuryChanceBinturong(const MatchPlayer& player) const;
   /** Current top speed (m/s) after fatigue, sprint reserve and injury. */
   float currentTopSpeedBinturong(const MatchPlayer& player) const;
+  /** A movement mode's speed band for him now: his walk-run transition,
+   * critical speed and top speed as fuel has left them. */
+  SpeedBand speedBandBinturong(const MatchPlayer& player, MovementMode mode) const;
   float executionErrorScaleBinturong(const MatchPlayer& player) const;
   /** Moves the dribbled ball with its carrier; false if a heavy touch lost it.
    */

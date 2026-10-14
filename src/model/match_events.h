@@ -181,6 +181,10 @@ struct PlayerMatchStats
   /** The same two while he was slowing down. */
   float brakingEnergy = 0.0f;
   float brakingAnaerobicEnergy = 0.0f;
+  /** Time (s) and distance (m) in each movement mode by his own bands now
+   * (walk, jog, run, sprint: MovementMode). */
+  std::array<float, 4> modeSeconds{};
+  std::array<float, 4> modeMetres{};
   /** Elapsed match minutes when his fuel first ran out (-1: never). */
   float emptyAtMinute = -1.0f;
   /** Efforts above 7 m/s. */

@@ -2812,6 +2812,11 @@ void MatchEngine::accumulatePlayerLoad(float dt)
     entry.anaerobicEnergy += lanes.stepAnaerobicEnergy[lane];
     entry.brakingEnergy += stepBrakingEnergy[lane];
     entry.brakingAnaerobicEnergy += stepBrakingAnaerobicEnergy[lane];
+    static_assert(std::tuple_size_v<decltype(entry.modeSeconds)> ==
+                  MOVEMENT_MODE_COUNT);
+    const auto mode = static_cast<std::size_t>(movementModeAt(player, speed));
+    entry.modeSeconds[mode] += dt;
+    entry.modeMetres[mode] += metres;
     if (period == 2) entry.secondHalfDistanceMetres += metres;
     // Running speed, not the displacement from body contact.
     if (speed > entry.topSpeed)

@@ -146,6 +146,10 @@ struct MatchSample
   double full_match_anaerobic = 0.0;
   double full_match_braking_energy = 0.0;
   double full_match_braking_anaerobic = 0.0;
+  /** Their time (s) and distance (m) in each movement mode, by their own
+   * bands (walk, jog, run, sprint). */
+  std::array<double, MOVEMENT_MODE_COUNT> mode_seconds{};
+  std::array<double, MOVEMENT_MODE_COUNT> mode_metres{};
   int emptied_players = 0;
   double empty_minute_sum = 0.0;
   /** Movement jitter of both sides together (MatchEngine::getMovementJitter). */

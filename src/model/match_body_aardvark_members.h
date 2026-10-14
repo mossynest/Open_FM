@@ -32,6 +32,9 @@
   float injuryChanceAardvark(const MatchPlayer& player) const;
   /** Current top speed (m/s) after fatigue, sprint reserve and injury. */
   float currentTopSpeedAardvark(const MatchPlayer& player) const;
+  /** A movement mode's speed band for him now (the Aardvark body has no
+   * critical-speed model of its own: the Endurance stat, unfatigued). */
+  SpeedBand speedBandAardvark(const MatchPlayer& player, MovementMode mode) const;
   float executionErrorScaleAardvark(const MatchPlayer& player) const;
   /** Moves the dribbled ball with its carrier; false if a heavy touch lost it.
    */

@@ -90,6 +90,16 @@ float MatchEngine::currentTopSpeedAardvark(const MatchPlayer& player) const
          reserve * injury;
 }
 
+SpeedBand MatchEngine::speedBandAardvark(const MatchPlayer& player,
+                                         MovementMode mode) const
+{
+  return speedBandFrom(
+      mode, MatchRules::walkRunTransitionSpeed(player.heightMetres),
+      derivedPhysicalValue(DerivedStat::ENDURANCE,
+                           player.derivedStat(DerivedStat::ENDURANCE)),
+      currentTopSpeedAardvark(player));
+}
+
 FM_KERNEL_CLONES void MatchEngine::integrateMovementsAardvark(
     const std::uint8_t* slots, std::size_t count, float dt, bool walking)
 {

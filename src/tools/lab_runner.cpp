@@ -255,6 +255,11 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
         static_cast<double>(entry.brakingEnergy) / 1000.0;
     sample.full_match_braking_anaerobic +=
         static_cast<double>(entry.brakingAnaerobicEnergy) / 1000.0;
+    for (std::size_t mode = 0; mode < MOVEMENT_MODE_COUNT; ++mode)
+    {
+      sample.mode_seconds[mode] += static_cast<double>(entry.modeSeconds[mode]);
+      sample.mode_metres[mode] += static_cast<double>(entry.modeMetres[mode]);
+    }
     if (entry.emptyAtMinute >= 0.0f)
     {
       ++sample.emptied_players;
@@ -740,6 +745,25 @@ std::map<std::string, Estimate> matchMetrics(
   metrics["anaerobic_energy_share"] = ratioEstimate(
       column([](const MatchSample& s) { return s.full_match_anaerobic; }),
       column([](const MatchSample& s) { return s.full_match_energy; }));
+  // Time and distance in each movement mode, by each player's own bands.
+  const std::vector<double> modeTime = column(
+      [](const MatchSample& s)
+      {
+        double total = 0.0;
+        for (const double seconds : s.mode_seconds) total += seconds;
+        return total;
+      });
+  for (std::size_t mode = 0; mode < MOVEMENT_MODE_COUNT; ++mode)
+  {
+    const std::string name = movementModeName(static_cast<MovementMode>(mode));
+    metrics["mode_" + name + "_time_share"] = ratioEstimate(
+        column([mode](const MatchSample& s) { return s.mode_seconds[mode]; }),
+        modeTime);
+    metrics["mode_" + name + "_km"] = ratioEstimate(
+        column([mode](const MatchSample& s)
+               { return s.mode_metres[mode] / 1000.0; }),
+        fullMatchPlayers);
+  }
   metrics["braking_energy_share"] = ratioEstimate(
       column([](const MatchSample& s) { return s.full_match_braking_energy; }),
       column([](const MatchSample& s) { return s.full_match_energy; }));

@@ -94,6 +94,28 @@ float MatchEngine::fuelFatigue(const MatchPlayer& player) const
   return std::clamp((1.0f - player.stamina) / (1.0f - floor), 0.0f, 1.0f);
 }
 
+SpeedBand MatchEngine::speedBand(const MatchPlayer& player,
+                                 MovementMode mode) const
+{
+  switch (bodyOf(player.isHomeTeam))
+  {
+    case BodyId::AARDVARK:
+      break;
+    case BodyId::BINTURONG:
+      return speedBandBinturong(player, mode);
+  }
+  return speedBandAardvark(player, mode);
+}
+
+MovementMode MatchEngine::movementModeAt(const MatchPlayer& player,
+                                         float speed) const
+{
+  for (const MovementMode mode :
+       {MovementMode::SPRINT, MovementMode::RUN, MovementMode::JOG})
+    if (speed > speedBand(player, mode).low) return mode;
+  return MovementMode::WALK;
+}
+
 float MatchEngine::currentTopSpeed(const MatchPlayer& player) const
 {
   switch (bodyOf(player.isHomeTeam))

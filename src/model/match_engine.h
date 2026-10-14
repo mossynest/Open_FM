@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <limits>
@@ -85,6 +86,63 @@ enum class PlayerIntent
 };
 inline constexpr std::size_t PLAYER_INTENT_COUNT =
     static_cast<std::size_t>(PlayerIntent::GOALKEEP) + 1;
+
+/** How a player moves (fatigue plan 4.2): the brain's vocabulary, which the
+ * body turns into a speed band for him (MatchEngine::speedBand). */
+enum class MovementMode : std::uint8_t
+{
+  WALK,
+  JOG,
+  RUN,
+  SPRINT
+};
+inline constexpr std::size_t MOVEMENT_MODE_COUNT = 4;
+
+/** A range of speeds (m/s). */
+struct SpeedBand
+{
+  float low = 0.0f;
+  float high = 0.0f;
+};
+
+/** The first threshold (moderate-heavy boundary) as a share of critical
+ * speed: 82.3% (Hunter et al. 2024, 26 studies): where a jog becomes a run. */
+inline constexpr float JOG_RUN_CRITICAL_SHARE = 0.823f;
+
+/**
+ * A mode's band from a player's walk-run transition, critical speed and top
+ * speed (m/s), each now: walk up to the transition, jog to the first
+ * threshold, run to critical speed, sprint to top speed. The bands never
+ * pass his top speed, so as fatigue lowers his top speed the faster bands
+ * close (a spent player only walks).
+ */
+inline SpeedBand speedBandFrom(MovementMode mode, float transition,
+                               float critical, float top)
+{
+  const float walkTop = std::min(transition, top);
+  const float jogTop =
+      std::clamp(JOG_RUN_CRITICAL_SHARE * critical, walkTop, top);
+  const float runTop = std::clamp(critical, jogTop, top);
+  switch (mode)
+  {
+    case MovementMode::WALK:
+      return {0.0f, walkTop};
+    case MovementMode::JOG:
+      return {walkTop, jogTop};
+    case MovementMode::RUN:
+      return {jogTop, runTop};
+    case MovementMode::SPRINT:
+      return {runTop, top};
+  }
+  return {0.0f, walkTop};
+}
+
+inline const char* movementModeName(MovementMode mode)
+{
+  constexpr std::array<const char*, MOVEMENT_MODE_COUNT> NAMES{
+      "walk", "jog", "run", "sprint"};
+  return NAMES[static_cast<std::size_t>(mode)];
+}
 
 /** Tactical purpose of the most recently executed pass. */
 enum class PassIntent
@@ -1423,6 +1481,11 @@ class MatchEngine
   /** The lowest a side's body lets fuel (condition) fall: MINIMUM_STAMINA
    * for an Aardvark body, 0 (an empty tank) for a Binturong one. */
   float fuelFloor(bool homeTeam) const;
+  /** A movement mode's speed band for him now, as his side's body sees it
+   * (fatigue plan 4.2). */
+  SpeedBand speedBand(const MatchPlayer& player, MovementMode mode) const;
+  /** The mode whose band holds `speed` for him now. */
+  MovementMode movementModeAt(const MatchPlayer& player, float speed) const;
   const DrillRules& getDrillRules() const { return drillRules; }
 
   /**

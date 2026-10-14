@@ -441,6 +441,24 @@ void DebugInspector::renderPlayer(const SandboxRecorder& recorder,
                                   std::hypot(slot->velocity.x, slot->velocity.y),
                                   slot->maxSpeed,
                                   slot->isSprinting ? " · sprinting" : ""));
+    {
+      // His movement mode now and his own bands (fatigue plan 4.2).
+      const float speedNow = std::hypot(slot->velocity.x, slot->velocity.y);
+      std::string bands;
+      for (const MovementMode mode : {MovementMode::WALK, MovementMode::JOG,
+                                      MovementMode::RUN, MovementMode::SPRINT})
+        bands += std::format("{}{} ≤{:.2f}", bands.empty() ? "" : " · ",
+                             movementModeName(mode),
+                             engine.speedBand(*slot, mode).high);
+      property("Movement",
+               std::format("{} · {}",
+                           movementModeName(engine.movementModeAt(*slot, speedNow)),
+                           bands),
+               "His movement mode by his speed, and the top of each mode's "
+               "band for him now (m/s): walk to his walk-run transition, "
+               "jog to 0.82 x critical speed, run to critical speed, sprint "
+               "to his top speed. Fuel lowers the bands.");
+    }
     property("Facing", std::format("{:.0f}°", slot->facingAngle * 180.0f /
                                                   std::numbers::pi_v<float>));
     property("Stamina", std::format("{:.0f}% · sprint reserve {:.0f}%",
