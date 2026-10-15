@@ -46,7 +46,8 @@ class MatchSandboxScene : public GUIScene
   /**
    * @param kick_off_now Start a match with the default setup straight away.
    * @param open_drill Open this drill (by name, any case) in Watch mode.
-   * @param open_view How to open it: 0 Watch, 1 Measure, 2 Shot map.
+   * @param open_view How to open it: 0 Watch, 1 Measure, 2 Shot map; 3
+   * opens the contact view (no drill).
    */
   explicit MatchSandboxScene(GUIView* guiView_ptr, bool kick_off_now = false,
                              std::string open_drill = {},

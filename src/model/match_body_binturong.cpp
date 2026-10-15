@@ -28,6 +28,7 @@
 #include <tuple>
 #include <utility>
 
+#include "model/match_contact_binturong.h"
 #include "model/match_engine.h"
 #include "model/match_engine_internal.h"
 #include "model/match_recorder.h"
@@ -1501,8 +1502,12 @@ TouchResult MatchEngine::dribbleTouchBinturong(const MatchPlayer& player,
 }
 ContactProfile MatchEngine::touchProfileBinturong() const
 {
+  return touchContactProfile(touchKnobs);
+}
+
+ContactProfile touchContactProfile(const FirstTouchKnobs& knob)
+{
   using K = TouchKnob;
-  const FirstTouchKnobs& knob = touchKnobs;
   ContactProfile profile;
   profile.paceChangeWeight = knob[K::PACE_CHANGE_WEIGHT];
   profile.turnAngle = knob[K::TURN_ANGLE];
@@ -1541,6 +1546,13 @@ ContactProfile MatchEngine::touchProfileBinturong() const
 }
 
 ContactProfile MatchEngine::strikeProfileBinturong(StrikeKind kind) const
+{
+  return strikeContactProfile(strikeKnobs, kind, touchKnobs);
+}
+
+ContactProfile strikeContactProfile(const StrikeKnobs& strikeKnobs,
+                                    StrikeKind kind,
+                                    const FirstTouchKnobs& touchKnobs)
 {
   // Contact plan §3, from the strike knobs (match_strike_knobs.h): ground
   // passes are carried out; lofted balls and shots are still only
@@ -1748,10 +1760,46 @@ ContactAssessment MatchEngine::assessContactBinturong(
     const MatchPlayer& player, const ContactProfile& profile, Vector2F aim,
     float intendedSpeed, const TouchMoment& moment, bool ownBall) const
 {
-  constexpr float RIGHT_ANGLE = std::numbers::pi_v<float> * 0.5f;
-  const Vector2F facing = normalized(
+  ContactSituation situation;
+  situation.facing = normalized(
       {std::cos(player.facingAngle) * MatchTuning::Pitch::LENGTH_METRES,
        std::sin(player.facingAngle) * MatchTuning::Pitch::WIDTH_METRES});
+  situation.aim = aim;
+  situation.intendedSpeed = intendedSpeed;
+  situation.ballVelocity = ball.velocity;
+  situation.playerVelocity = player.velocity;
+  situation.playerMaxSpeed = player.maxSpeed;
+  situation.toBall = metricDirection(player.position, moment.contactPoint);
+  situation.gap = moment.gap;
+  situation.reach = moment.reach;
+  situation.height = moment.height;
+  situation.rightFooted =
+      !player.player || player.player->getFoot() == Foot::Right;
+  situation.surprise =
+      contactSurprise(profile, ownBall, ball.isPass,
+                      ball.intendedReceiver == player.player);
+  situation.nearestOpponentMetres = nearestOpponentDistance(player);
+  return assessContact(profile, situation);
+}
+
+float contactSurprise(const ContactProfile& profile, bool ownBall, bool isPass,
+                      bool meantForHim)
+{
+  // A ball he expected never surprises him.
+  return ownBall    ? 0.0f
+         : !isPass  ? profile.looseBallSurprise
+                    : (meantForHim ? 0.0f : 1.0f);
+}
+
+ContactAssessment assessContact(const ContactProfile& profile,
+                                const ContactSituation& situation)
+{
+  constexpr float RIGHT_ANGLE = std::numbers::pi_v<float> * 0.5f;
+  const Vector2F facing = situation.facing;
+  const Vector2F aim = situation.aim;
+  const float intendedSpeed = situation.intendedSpeed;
+  const Vector2F ballVelocity = situation.ballVelocity;
+  const Vector2F playerVelocity = situation.playerVelocity;
   ContactAssessment contact;
   contact.aim = aim;
   contact.intendedSpeed = intendedSpeed;
@@ -1759,10 +1807,10 @@ ContactAssessment MatchEngine::assessContactBinturong(
   // The line it came on: sending it back along it (a cushion) or on along
   // it (taking it on) is no turn; whichever is nearer what he means is the
   // reference, so a turn is 0-90 degrees. A still ball has no line.
-  const float incomingSpeed = length(ball.velocity);
+  const float incomingSpeed = length(ballVelocity);
   const bool moving = incomingSpeed > MatchTuning::Ball::STOP_SPEED;
-  const Vector2F incoming = moving ? Vector2F{ball.velocity.x / incomingSpeed,
-                                              ball.velocity.y / incomingSpeed}
+  const Vector2F incoming = moving ? Vector2F{ballVelocity.x / incomingSpeed,
+                                              ballVelocity.y / incomingSpeed}
                                    : Vector2F{0.0f, 0.0f};
   const bool rebound = moving && incoming.x * aim.x + incoming.y * aim.y < 0.0f;
   const Vector2F line = !moving   ? aim
@@ -1787,9 +1835,9 @@ ContactAssessment MatchEngine::assessContactBinturong(
   // How hard each job is: its size, then the conditions (each 0-1). How
   // fast it meets him and where from are read relative to him: a ball
   // rolling ahead at his own pace is a slow ball met from the front.
-  const Vector2F toBall = metricDirection(player.position, moment.contactPoint);
-  const Vector2F relative{ball.velocity.x - player.velocity.x,
-                          ball.velocity.y - player.velocity.y};
+  const Vector2F toBall = situation.toBall;
+  const Vector2F relative{ballVelocity.x - playerVelocity.x,
+                          ballVelocity.y - playerVelocity.y};
   const float meetingSpeed = length(relative);
   // Where it comes from: back along its path (relative to him), or where it
   // lies if it keeps pace with him.
@@ -1799,17 +1847,10 @@ ContactAssessment MatchEngine::assessContactBinturong(
           : toBall;
   // Which side of him it is on (+ his right), for the weaker foot.
   const float side = facing.y * toBall.x - facing.x * toBall.y;
-  const bool rightFooted =
-      !player.player || player.player->getFoot() == Foot::Right;
-  const float weakSide =
-      rightFooted ? std::max(-side, 0.0f) : std::max(side, 0.0f);
+  const float weakSide = situation.rightFooted ? std::max(-side, 0.0f)
+                                               : std::max(side, 0.0f);
   const auto clamp01 = [](float value)
   { return std::clamp(value, 0.0f, 1.0f); };
-  // A ball he expected never surprises him.
-  const float surprise =
-      ownBall        ? 0.0f
-      : !ball.isPass ? profile.looseBallSurprise
-                     : (ball.intendedReceiver == player.player ? 0.0f : 1.0f);
   contact.factors = {{
       {"pace to take off or add", TermSource::SITUATION,
        clamp01(std::abs(paceChange) / profile.referenceSpeed), 0.0f,
@@ -1830,21 +1871,23 @@ ContactAssessment MatchEngine::assessContactBinturong(
        clamp01((1.0f - (from.x * facing.x + from.y * facing.y)) * 0.5f),
        profile.fromBehind.angle, profile.fromBehind.weight},
       {"his own speed", TermSource::SITUATION,
-       clamp01(length(player.velocity) / std::max(player.maxSpeed, EPSILON)),
+       clamp01(length(playerVelocity) /
+               std::max(situation.playerMaxSpeed, EPSILON)),
        profile.ownSpeed.angle, profile.ownSpeed.weight},
       {"stretching for it", TermSource::SITUATION,
-       clamp01((moment.gap - profile.comfortGap) /
-               std::max(moment.reach - profile.comfortGap, EPSILON)),
+       clamp01((situation.gap - profile.comfortGap) /
+               std::max(situation.reach - profile.comfortGap, EPSILON)),
        profile.stretch.angle, profile.stretch.weight},
       {"on his weaker foot", TermSource::ATTRIBUTE, clamp01(weakSide),
        profile.weakerFoot.angle, profile.weakerFoot.weight},
       {"off the ground", TermSource::SITUATION,
-       clamp01(moment.height / MatchTuning::Ball::LOW_BALL_METRES),
+       clamp01(situation.height / MatchTuning::Ball::LOW_BALL_METRES),
        profile.offGround.angle, profile.offGround.weight},
-      {"not expecting it", TermSource::SITUATION, surprise,
+      {"not expecting it", TermSource::SITUATION, situation.surprise,
        profile.surprise.angle, profile.surprise.weight},
       {"pressure", TermSource::SITUATION,
-       clamp01(1.0f - nearestOpponentDistance(player) / profile.pressureRadius),
+       clamp01(1.0f -
+               situation.nearestOpponentMetres / profile.pressureRadius),
        profile.pressure.angle, profile.pressure.weight},
       // Where he sends it against where he faces: 0 straight ahead, a half
       // square across him, 1 straight behind.

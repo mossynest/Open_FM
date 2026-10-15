@@ -38,6 +38,7 @@
 //               --seed N, --set NAME=VALUE (e.g. "Shooter=1" for choice
 //               mode, "Keeper=0"), --csv [PATH]
 //   --shot-map-view  open the Shot map screen and run the default grid
+//   --contact-view  open the contact difficulty view
 
 #include <charconv>
 #include <cstdint>
@@ -151,6 +152,11 @@ int main(int argc, char* argv[])
       drillView = 1;
       continue;
     }
+    else if (argument == "--contact-view")
+    {
+      drillView = 3;
+      continue;
+    }
     else if (argument == "--shot-map-view")
     {
       drill = "shot";
@@ -213,7 +219,7 @@ int main(int argc, char* argv[])
            "   [--set NAME=VALUE]... [--repeats N] [--seed N] [--csv [PATH]]]\n"
            "  [--shot-map [--line A:B:N] [--side A:B:N] [--repeats N]\n"
            "   [--set NAME=VALUE]... [--csv [PATH]]]\n"
-           "  [--measure-view DRILL] [--shot-map-view]\n";
+           "  [--measure-view DRILL] [--shot-map-view] [--contact-view]\n";
     return 2;
   }
 

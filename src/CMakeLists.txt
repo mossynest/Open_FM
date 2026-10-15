@@ -179,6 +179,7 @@ set(FM_CORE_SOURCES
     model/match_handshake_binturong_members.h
     model/match_handshake_aardvark.cpp
     model/match_handshake_aardvark_members.h
+    model/match_contact_binturong.h
     model/match_engine.h
     model/match_engine_internal.h
     model/match_engine.cpp
@@ -688,6 +689,8 @@ add_executable(match_sandbox
     tools/match_sandbox_measure_scene.cpp
     tools/match_sandbox_shot_map.h
     tools/match_sandbox_shot_map.cpp
+    tools/match_sandbox_contact_view.h
+    tools/match_sandbox_contact_view.cpp
     tools/match_sandbox_pickers.h
     tools/match_sandbox_pickers.cpp
     tools/match_sandbox_test_teams.h

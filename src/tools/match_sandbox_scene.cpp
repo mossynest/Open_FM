@@ -38,6 +38,7 @@
 #include "model/team.h"
 #include "tools/lab_fixtures.h"
 #include "tools/match_sandbox_drill_scene.h"
+#include "tools/match_sandbox_contact_view.h"
 #include "tools/match_sandbox_measure_scene.h"
 #include "tools/match_sandbox_pickers.h"
 #include "tools/match_sandbox_test_teams.h"
@@ -229,6 +230,11 @@ void MatchSandboxScene::onEnter()
 
 void MatchSandboxScene::update(float /*deltaTime*/)
 {
+  if (drill_view == 3)
+  {
+    drill_view = 0;
+    guiView->overlayScene(std::make_unique<ContactViewScene>(guiView));
+  }
   if (!drill_pending.empty())
   {
     const auto lower = [](std::string text)
@@ -351,6 +357,13 @@ void MatchSandboxScene::renderDrills()
   ImGui::TextDisabled("Movement drills run by the AI, by a scripted bot on "
                       "the stick, or by you. Shooting drills are on the way.");
   ImGui::PopTextWrapPos();
+  ImGui::Spacing();
+  if (ImGui::Button("Contact difficulty"))
+    guiView->overlayScene(std::make_unique<ContactViewScene>(guiView));
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("How hard a touch or strike is across his reach: "
+                      "where he meets it, where it comes from, where he "
+                      "sends it (Binturong body).");
   UI::endCard();
   ImGui::SameLine();
   if (drills.empty()) return;
