@@ -13,6 +13,10 @@
 // clang-format off
   // --- Binturong brain: decisions (see the dispatchers' comments) ------------
   void refreshTacticalTargetsBinturong(float dt, bool planHome);
+  /** Off-ball players of a Binturong-brained side racing someone slower to
+   * the same target go round him when that still wins the race (movement
+   * targets plan 4a). Runs after the targets (and drill targets) are set. */
+  void planOvertakesBinturong();
   void assignMarksBinturong(bool home);
   Vector2F goalkeeperTargetBinturong(MatchPlayer& keeper, const MatchPlayer* carrier);
   BallAction chooseBallActionBinturong(MatchPlayer& carrier);

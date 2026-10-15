@@ -25,6 +25,8 @@
 #include <array>
 #include <cmath>
 #include <numbers>
+#include <tuple>
+#include <utility>
 
 #include "model/match_engine.h"
 #include "model/match_engine_internal.h"
@@ -43,11 +45,197 @@ namespace
 constexpr float ARRIVAL_BRAKING_SHARE = 0.7f;
 // He stops this close to his target rather than short of it.
 constexpr float ARRIVAL_TOLERANCE_METRES = 0.1f;
-// Following a moving target (fatigue plan step 6d): how its drift is
-// smoothed, and the step-to-step move that counts as a new target instead
-// (design choices: a target sliding at 10 m/s moves 1 m a step).
-constexpr float TARGET_DRIFT_SECONDS = 0.4f;
-constexpr float NEW_TARGET_JUMP_METRES = 2.0f;
+// A waypoint on his route is reached this close, if he has not moved on
+// from it already.
+constexpr float WAYPOINT_REACHED_METRES = 0.35f;
+// The radius of a turn that is no turn (straight on through a waypoint).
+constexpr float STRAIGHT_ON_RADIUS = 1.0e6f;
+// Following his line (movement targets plan 3b): he closes an offset from
+// it over the near-point time of steering (about 0.5 s ahead: Land & Lee
+// 1994, Salvucci & Gray 2004; a driving figure, none found for running).
+constexpr float NEAR_POINT_SECONDS = 0.5f;
+// He is on the arc of a turn within this much of it (else joining it).
+constexpr float ON_ARC_METRES = 0.5f;
+
+Vector2F rotatedBy(Vector2F vector, float angle)
+{
+  const float c = std::cos(angle);
+  const float s = std::sin(angle);
+  return {vector.x * c - vector.y * s, vector.x * s + vector.y * c};
+}
+
+Vector2F unitOf(Vector2F vector)
+{
+  const float size = std::sqrt(vector.x * vector.x + vector.y * vector.y);
+  return size > 1e-6f ? Vector2F{vector.x / size, vector.y / size}
+                      : Vector2F{0.0f, 0.0f};
+}
+
+// His turn through a waypoint (movement targets plan 3b), in metres: the
+// arc joining the leg in (from `from`) to the leg out (to `to`). Its apex
+// passes `apexOffset` inside the waypoint (negative: outside), and the line
+// may be pushed out up to `outwardRoom` at the corner to widen it; the turn
+// starts no more than half the shorter leg before the corner. Straight on
+// is no turn; a turn straight back (or a leg of no length) is a stop on the
+// spot.
+struct Turn
+{
+  bool straight = false;
+  /** 0: a stop at `spot`. */
+  float radius = 0.0f;
+  Vector2F centre{};
+  /** +1 turning left (anticlockwise), -1 right. */
+  float sense = 1.0f;
+  Vector2F spot{};
+  /** How far before the waypoint it starts (about). */
+  float lead = 0.0f;
+};
+
+Turn turnThrough(Vector2F from, Vector2F waypoint, Vector2F to,
+                 float apexOffset, float outwardRoom)
+{
+  Turn turn;
+  turn.spot = waypoint;
+  const Vector2F in{waypoint.x - from.x, waypoint.y - from.y};
+  const Vector2F out{to.x - waypoint.x, to.y - waypoint.y};
+  const float inLength = std::sqrt(in.x * in.x + in.y * in.y);
+  const float outLength = std::sqrt(out.x * out.x + out.y * out.y);
+  if (inLength < 1e-3f || outLength < 1e-3f) return turn;
+  const Vector2F inward = unitOf(Vector2F{out.x / outLength - in.x / inLength,
+                                          out.y / outLength - in.y / inLength});
+  const float cosine = std::clamp(
+      (in.x * out.x + in.y * out.y) / (inLength * outLength), -1.0f, 1.0f);
+  // Half the heading change, phi / 2.
+  const float halfCos = std::sqrt((1.0f + cosine) * 0.5f);
+  const float halfSin = std::sqrt((1.0f - cosine) * 0.5f);
+  if (halfSin < 1e-3f)
+  {
+    turn.straight = true;
+    turn.radius = STRAIGHT_ON_RADIUS;
+    return turn;
+  }
+  // A stop on a spot outside the waypoint passes outside it.
+  turn.spot = {waypoint.x + inward.x * std::min(apexOffset, 0.0f),
+               waypoint.y + inward.y * std::min(apexOffset, 0.0f)};
+  if (halfCos < 1e-3f) return turn;
+  const float halfTan = halfSin / halfCos;
+  // The apex of an arc of radius r lies r (1 / cos(phi/2) - 1) inside the
+  // corner its legs meet at.
+  const float bulge = 1.0f / halfCos - 1.0f;
+  const float radius =
+      std::min((outwardRoom + apexOffset) / bulge,
+               0.5f * std::min(inLength, outLength) / halfTan);
+  if (radius < 0.05f) return turn;
+  // The corner moves out as far as it must to put the apex where asked.
+  const float shift = std::max(0.0f, radius * bulge - apexOffset);
+  turn.radius = radius;
+  turn.centre = {waypoint.x + inward.x * (radius / halfCos - shift),
+                 waypoint.y + inward.y * (radius / halfCos - shift)};
+  turn.sense = in.x * out.y - in.y * out.x >= 0.0f ? 1.0f : -1.0f;
+  turn.lead = radius * halfTan;
+  return turn;
+}
+
+// Where his line through the turn points from `position` (metres), going
+// on to `next`, and how far it is to the start of the turn: off the arc,
+// the point where he joins it; on it, along it (aiming where it will be
+// after `ahead` metres), closing any offset over the near-point time at
+// `speed`. Also whether he has reached the arc's exit line to `next`.
+struct LineAim
+{
+  Vector2F direction{};
+  float toTurn = 0.0f;
+  bool exited = false;
+};
+
+LineAim aimThrough(const Turn& turn, Vector2F waypoint, Vector2F position,
+                   Vector2F next, float speed, float ahead)
+{
+  LineAim aim;
+  const Vector2F toWaypoint{waypoint.x - position.x, waypoint.y - position.y};
+  const float waypointMetres =
+      std::sqrt(toWaypoint.x * toWaypoint.x + toWaypoint.y * toWaypoint.y);
+  if (turn.straight)
+  {
+    // Straight on: through it, and on once past it.
+    aim.direction = unitOf(toWaypoint);
+    aim.toTurn = waypointMetres;
+    const Vector2F onward = unitOf({next.x - waypoint.x, next.y - waypoint.y});
+    aim.exited = waypointMetres <= WAYPOINT_REACHED_METRES ||
+                 -toWaypoint.x * onward.x - toWaypoint.y * onward.y >= 0.0f;
+    return aim;
+  }
+  if (turn.radius <= 0.0f)
+  {
+    const Vector2F toSpot{turn.spot.x - position.x, turn.spot.y - position.y};
+    aim.direction = unitOf(toSpot);
+    aim.toTurn = std::sqrt(toSpot.x * toSpot.x + toSpot.y * toSpot.y);
+    aim.exited = aim.toTurn <= WAYPOINT_REACHED_METRES;
+    return aim;
+  }
+  const float r = turn.radius;
+  const Vector2F fromCentre{position.x - turn.centre.x,
+                            position.y - turn.centre.y};
+  const float d =
+      std::sqrt(fromCentre.x * fromCentre.x + fromCentre.y * fromCentre.y);
+  const Vector2F radial = unitOf(fromCentre);
+  // The exit: where the line on to `next` leaves the arc.
+  const Vector2F nextFromCentre{next.x - turn.centre.x,
+                                next.y - turn.centre.y};
+  const float nextDistance = std::sqrt(nextFromCentre.x * nextFromCentre.x +
+                                       nextFromCentre.y * nextFromCentre.y);
+  Vector2F exit;
+  Vector2F exitHeading;
+  if (nextDistance > r)
+  {
+    const Vector2F e = rotatedBy(unitOf(nextFromCentre),
+                                 -turn.sense * std::acos(r / nextDistance));
+    exit = {turn.centre.x + e.x * r, turn.centre.y + e.y * r};
+    exitHeading = unitOf({next.x - exit.x, next.y - exit.y});
+  }
+  else
+  {
+    const Vector2F e = unitOf(nextFromCentre);
+    exit = {turn.centre.x + e.x * r, turn.centre.y + e.y * r};
+    exitHeading = {-e.y * turn.sense, e.x * turn.sense};
+  }
+  // He has reached it when round on the exit's side of the turn (not still
+  // where he joined a sharp one) and at or past the exit line, on the arc or
+  // swung wide of it (else, wide, he would be sent round to join it again).
+  const Vector2F exitRadial = unitOf({exit.x - turn.centre.x,
+                                      exit.y - turn.centre.y});
+  aim.exited = waypointMetres <= WAYPOINT_REACHED_METRES ||
+               (d <= r * 1.5f + ON_ARC_METRES &&
+                radial.x * exitRadial.x + radial.y * exitRadial.y > 0.0f &&
+                (position.x - exit.x) * exitHeading.x +
+                        (position.y - exit.y) * exitHeading.y >=
+                    0.0f);
+  if (d > r)
+  {
+    // Off the arc: to the point where he joins it.
+    const Vector2F t =
+        rotatedBy(radial, turn.sense * std::acos(std::min(r / d, 1.0f)));
+    const Vector2F join{turn.centre.x + t.x * r, turn.centre.y + t.y * r};
+    const Vector2F toJoin{join.x - position.x, join.y - position.y};
+    aim.toTurn = std::sqrt(toJoin.x * toJoin.x + toJoin.y * toJoin.y);
+    if (aim.toTurn > 1e-3f)
+    {
+      aim.direction = {toJoin.x / aim.toTurn, toJoin.y / aim.toTurn};
+      return aim;
+    }
+  }
+  // On it: along it, where it will be after this step, and back onto it.
+  const Vector2F along = rotatedBy(
+      Vector2F{-radial.y * turn.sense, radial.x * turn.sense},
+      turn.sense * ahead / r);
+  const float correction =
+      (d - r) / (NEAR_POINT_SECONDS * std::max(speed, 1.0f));
+  aim.direction = unitOf(
+      {along.x - radial.x * correction, along.y - radial.y * correction});
+  aim.toTurn = 0.0f;
+  return aim;
+}
+
 // Pivoting: from a standstill he can push off in any direction; on the move
 // he speeds up or brakes along his run and turns within a lateral limit.
 // The second takes over gradually, fully from this speed (no cliff).
@@ -113,6 +301,20 @@ inline float playerGrip(const MatchPlayer& player)
 {
   return derivedPhysicalValue(DerivedStat::AGILITY,
                               player.derivedStat(DerivedStat::AGILITY));
+}
+
+/** How fast his body turns (rad/s): his Agility rating, from the
+ * part-timer to the elite anchor, across the range (orientation plan). */
+inline float bodyTurnRate(const MatchPlayer& player)
+{
+  using P = MatchTuning::Player;
+  const DerivedStatInfo& info = derivedStatInfo(DerivedStat::AGILITY);
+  const float share = std::clamp(
+      (player.derivedStat(DerivedStat::AGILITY) - info.lowRating) /
+          (info.highRating - info.lowRating),
+      0.0f, 1.0f);
+  return P::BODY_TURN_RATE_LOW +
+         (P::BODY_TURN_RATE_HIGH - P::BODY_TURN_RATE_LOW) * share;
 }
 
 /** His fresh maximum acceleration A0 (m/s^2): the Acceleration stat. */
@@ -474,9 +676,26 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
   alignas(16) std::array<float, LANES> talk;
   alignas(16) std::array<float, LANES> shout;
   alignas(16) std::array<float, LANES> turnRate;
+  // A body orientation asked of him (orientation plan), and its angle.
+  alignas(16) std::array<std::int32_t, LANES> bodyRequested;
+  alignas(16) std::array<float, LANES> bodyRequest;
   alignas(16) std::array<float, LANES> grip;
   alignas(16) std::array<float, LANES> targetVelocityX;
   alignas(16) std::array<float, LANES> targetVelocityY;
+  // On a route: the metres beyond the waypoint he heads for, to the end.
+  alignas(16) std::array<float, LANES> routeBeyond;
+  alignas(16) std::array<std::int32_t, LANES> onRoute;
+  // On a route: where his line points (a unit vector, metres), the turn at
+  // his waypoint (its radius, and how far he still has to its start), the
+  // turn at the one after (radius, and its lead before that waypoint), and
+  // the leg between them.
+  alignas(16) std::array<float, LANES> aimX;
+  alignas(16) std::array<float, LANES> aimY;
+  alignas(16) std::array<float, LANES> cornerRadius;
+  alignas(16) std::array<float, LANES> toTurn;
+  alignas(16) std::array<float, LANES> nextCornerRadius;
+  alignas(16) std::array<float, LANES> nextCornerLead;
+  alignas(16) std::array<float, LANES> nextLeg;
   // Movement modes (when his brain uses them): his mode and its style.
   std::array<std::int8_t, LANES> modeOf;
   std::array<const MovementStyle*, LANES> styleOf;
@@ -494,7 +713,72 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     const bool urgent = !walking && player.urgentMovement;
     const float targetBlend =
         targetBlends[(player.isHomeTeam ? 0U : 2U) + (urgent ? 1U : 0U)];
-    if (targetBlend >= 1.0f)
+    // On a route (planned by a brain without target lag) he heads for its
+    // waypoints in turn, moving on to the next as he reaches each one. A
+    // restart walk has none.
+    if (walking) player.routeWaypoints = 0;
+    if (player.routeWaypoints == 1) player.nextTarget = target;
+    // A waypoint given him (not one he moved on to): its leg starts here.
+    if (player.routeWaypoints > 0 &&
+        (player.movementTarget.x != player.routeLegEnd.x ||
+         player.movementTarget.y != player.routeLegEnd.y))
+    {
+      player.routeLegStart = player.position;
+      player.routeLegEnd = player.movementTarget;
+    }
+    // His line through his waypoint (movement targets plan 3b), in metres:
+    // the turn there, and where the line points from where he is.
+    const float speedNow = length(player.velocity);
+    const auto lineThrough = [&]
+    {
+      const Vector2F waypoint = toMetres(player.movementTarget);
+      const Vector2F next = toMetres(player.nextTarget);
+      const Turn turn =
+          turnThrough(toMetres(player.routeLegStart), waypoint, next,
+                      player.routeApexOffset, player.routeOutwardRoom);
+      return std::pair{turn, aimThrough(turn, waypoint,
+                                        toMetres(player.position), next,
+                                        speedNow, speedNow * dt)};
+    };
+    // He moves on from his waypoint where his line leaves its turn.
+    if (player.routeWaypoints > 0 && lineThrough().second.exited)
+    {
+      player.routeLegStart = player.movementTarget;
+      player.movementTarget = player.nextTarget;
+      player.routeLegEnd = player.movementTarget;
+      --player.routeWaypoints;
+      ++player.routeAdvances;
+      if (player.routeWaypoints == 1) player.nextTarget = target;
+    }
+    // Dribbling, his body chases the ball (its target): his touches follow
+    // the route, which stays.
+    const bool hasRoute = player.routeWaypoints > 0;
+    const bool chasingBall =
+        hasRoute && ball.inTouch && ball.possessedBy == player.player;
+    const bool routed = hasRoute && !chasingBall;
+    Turn turn;
+    turn.straight = true;
+    turn.radius = STRAIGHT_ON_RADIUS;
+    Turn nextTurn = turn;
+    LineAim line;
+    if (hasRoute)
+    {
+      std::tie(turn, line) = lineThrough();
+      const float aimMetres = std::max(
+          1.0f, length(toMetres({player.movementTarget.x - player.position.x,
+                                 player.movementTarget.y - player.position.y})));
+      const Vector2F aimed =
+          toPitch({line.direction.x * aimMetres, line.direction.y * aimMetres});
+      player.routeAim = {player.position.x + aimed.x,
+                         player.position.y + aimed.y};
+      // With a second waypoint, the turn there too (into the end).
+      if (player.routeWaypoints > 1)
+        nextTurn = turnThrough(toMetres(player.movementTarget),
+                               toMetres(player.nextTarget), toMetres(target),
+                               player.routeApexOffset,
+                               player.routeOutwardRoom);
+    }
+    else if (targetBlend >= 1.0f)
     {
       player.movementTarget = target;
     }
@@ -505,37 +789,30 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
       player.movementTarget.y +=
           (target.y - player.movementTarget.y) * targetBlend;
     }
-    const Vector2F offset =
-        toMetres({player.movementTarget.x - player.position.x,
-                  player.movementTarget.y - player.position.y});
-    // How his target is drifting, step to step (smoothed): a jump is a new
-    // target, not drift. A target the brain gives a velocity (a carrier
-    // pressed, a man marked tight) is followed at that.
-    const Vector2F moved = toMetres(
-        {player.movementTarget.x - player.lastFollowedTarget.x,
-         player.movementTarget.y - player.lastFollowedTarget.y});
-    const bool jumped = !player.followsTarget || walking ||
-                        moved.x * moved.x + moved.y * moved.y >
-                            NEW_TARGET_JUMP_METRES * NEW_TARGET_JUMP_METRES;
-    const float settle = 1.0f - std::exp(-dt / TARGET_DRIFT_SECONDS);
-    player.targetDrift =
-        jumped ? Vector2F{0.0f, 0.0f}
-               : Vector2F{player.targetDrift.x +
-                              (moved.x / dt - player.targetDrift.x) * settle,
-                          player.targetDrift.y +
-                              (moved.y / dt - player.targetDrift.y) * settle};
-    player.lastFollowedTarget = player.movementTarget;
-    player.followsTarget = true;
-    const bool given =
-        player.targetVelocity.x != 0.0f || player.targetVelocity.y != 0.0f;
+    if (!hasRoute) player.nextTarget = player.movementTarget;
+    // The end of his run: the tactical target (lagged, for a brain with a
+    // target lag), whatever waypoints lie before it.
+    const Vector2F end = hasRoute ? target : player.movementTarget;
+    const Vector2F heading = chasingBall ? target : player.movementTarget;
+    const Vector2F offset = toMetres(
+        {heading.x - player.position.x, heading.y - player.position.y});
+    // The rest of the route beyond the waypoint he heads for.
+    const Vector2F onward =
+        toMetres({player.nextTarget.x - player.movementTarget.x,
+                  player.nextTarget.y - player.movementTarget.y});
+    const Vector2F last = toMetres(
+        {end.x - player.nextTarget.x, end.y - player.nextTarget.y});
+    const float beyond = routed ? length(onward) + length(last) : 0.0f;
+    // A moving end (the brain says how fast) is followed only on the last
+    // leg: waypoints stand still.
     const Vector2F movingTarget =
-        walking ? Vector2F{0.0f, 0.0f}
-                : (given ? player.targetVelocity : player.targetDrift);
+        walking || routed ? Vector2F{0.0f, 0.0f} : player.targetVelocity;
     // A player standing on his spot stays put (the common case in stoppages).
     if (offset.x * offset.x + offset.y * offset.y <=
             P::ARRIVAL_DEAD_ZONE_METRES * P::ARRIVAL_DEAD_ZONE_METRES &&
         player.velocity.x == 0.0f && player.velocity.y == 0.0f &&
-        movingTarget.x == 0.0f && movingTarget.y == 0.0f)
+        movingTarget.x == 0.0f && movingTarget.y == 0.0f &&
+        (!player.facingRequested || player.facingAngle == player.facingRequest))
       continue;
     const std::size_t lane = moving++;
     movers[lane] = &player;
@@ -543,6 +820,15 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     offsetY[lane] = offset.y;
     targetVelocityX[lane] = movingTarget.x;
     targetVelocityY[lane] = movingTarget.y;
+    routeBeyond[lane] = beyond;
+    onRoute[lane] = routed ? 1 : 0;
+    aimX[lane] = line.direction.x;
+    aimY[lane] = line.direction.y;
+    cornerRadius[lane] = turn.radius;
+    toTurn[lane] = line.toTurn;
+    nextCornerRadius[lane] = nextTurn.radius;
+    nextCornerLead[lane] = nextTurn.lead;
+    nextLeg[lane] = routed ? length(onward) : 0.0f;
     velocityX[lane] = player.velocity.x;
     velocityY[lane] = player.velocity.y;
     positionX[lane] = player.position.x;
@@ -582,7 +868,9 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     transition[lane] = MatchRules::walkRunTransitionSpeed(player.heightMetres);
     talk[lane] = talkOf(player.isHomeTeam);
     shout[lane] = shoutWorkRate(player.isHomeTeam);
-    turnRate[lane] = player.turnRate;
+    turnRate[lane] = bodyTurnRate(player);
+    bodyRequested[lane] = player.facingRequested ? 1 : 0;
+    bodyRequest[lane] = player.facingRequest;
     grip[lane] = playerGrip(player);
   }
 
@@ -592,6 +880,9 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     const float targetY = offsetY[lane];
     const float targetDistance =
         std::sqrt(targetX * targetX + targetY * targetY);
+    // How far he still has to go: on a route, to its end (the run's speed is
+    // the whole route's, not the next waypoint's).
+    const float remaining = targetDistance + routeBeyond[lane];
     const float fuel = stamina[lane];
     const float fatigue = std::clamp(1.0f - fuel, 0.0f, 1.0f);
     const float topSpeed =
@@ -607,7 +898,7 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
         walking ? intentScale[lane]
                 : std::max(intentScale[lane],
                            std::min(maxUrgency[lane],
-                                    targetDistance / urgencyDistance[lane]));
+                                    remaining / urgencyDistance[lane]));
     const float brake = braking[lane] * legs;
     // With movement modes: the top of his mode's band (a jog job by its
     // distance ramp), as a share of his fresh top speed.
@@ -622,7 +913,7 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
         topSpeed};
     const float modeShare =
         moded ? modeTargetSpeed(static_cast<MovementMode>(modeOf[lane]),
-                                targetDistance, styleOf[lane]->jogRampMetres,
+                                remaining, styleOf[lane]->jogRampMetres,
                                 tops) /
                     std::max(maxSpeed[lane], EPSILON)
               : 0.0f;
@@ -661,8 +952,55 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
         spendsBurst ? fullness : 0.0f, critical, transition[lane]);
     // Quotients are formed for every lane and discarded where unused.
     const bool aimed = targetDistance > EPSILON;
-    const float directionX = targetX / targetDistance;
-    const float directionY = targetY / targetDistance;
+    // On a route he follows his line; otherwise he heads for the target.
+    const bool onLine = onRoute[lane] != 0;
+    const float directionX = onLine ? aimX[lane] : targetX / targetDistance;
+    const float directionY = onLine ? aimY[lane] : targetY / targetDistance;
+    // His body against his run (orientation plan). Asked to face a way, he
+    // moves in one of eight directions to it (forward, the forward
+    // diagonals, sideways, the back diagonals, backward), or a blend of the
+    // two his angle falls between: each with its own speed, top band and
+    // drive (MatchTuning::Player::DIRECTION_*). Turning to the facing he
+    // glides at first, then drives more as the turn completes. With nothing
+    // asked his body follows his run, as before.
+    const bool bodyAsked = bodyRequested[lane] != 0;
+    const float bodyMetresX = std::cos(facing[lane]) * Pitch::LENGTH_METRES;
+    const float bodyMetresY = std::sin(facing[lane]) * Pitch::WIDTH_METRES;
+    const float bodyLength = std::max(
+        std::sqrt(bodyMetresX * bodyMetresX + bodyMetresY * bodyMetresY),
+        EPSILON);
+    const float alignment = std::clamp(
+        (bodyMetresX * directionX + bodyMetresY * directionY) / bodyLength,
+        -1.0f, 1.0f);
+    // Among the eight directions: his speed in each is its share of the
+    // job's speed, held to the top of its highest band, blended between the
+    // two his angle falls between.
+    const DirectionMix mix =
+        directionMix(bodyAsked && aimed ? std::acos(alignment) : 0.0f);
+    const auto directionCap = [&](std::size_t direction)
+    {
+      return P::DIRECTION_SPEED_SHARE[direction] *
+             std::min(speedCap,
+                      tops[static_cast<std::size_t>(P::DIRECTION_TOP_BAND[direction])]);
+    };
+    const float runCap = directionCap(mix.below) +
+                         (directionCap(mix.below + 1) - directionCap(mix.below)) *
+                             mix.onward;
+    const float drive = directionValue(P::DIRECTION_DRIVE_SHARE, mix);
+    float bodyTurn = bodyRequest[lane] - facing[lane];
+    bodyTurn = bodyTurn > PI    ? bodyTurn - TWO_PI
+               : bodyTurn < -PI ? bodyTurn + TWO_PI
+                                : bodyTurn;
+    // Through a turn: no push beyond the drive angle, then more as it
+    // completes.
+    const float turnDrive =
+        bodyAsked ? std::clamp(1.0f - std::abs(bodyTurn) /
+                                          P::BODY_TURN_DRIVE_RADIANS,
+                               0.0f, 1.0f)
+                  : 1.0f;
+    const bool gliding = turnDrive <= 0.0f;
+    const float driveHigh =
+        limits.high > 0.0f ? limits.high * drive * turnDrive : limits.high;
     // Arrive without overshooting: the desired speed falls off so he stops
     // on the target, braking as hard as the effort he is putting in (and
     // his power allows). A target moving away is closed on at that speed on
@@ -672,9 +1010,40 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
                                               std::min(brake, -limits.low) *
                                               std::min(effort, 1.0f)),
         std::max(-limits.low, EPSILON));
-    const float approach = targetDistance - ARRIVAL_TOLERANCE_METRES;
-    const float closing =
+    const float approach = remaining - ARRIVAL_TOLERANCE_METRES;
+    const float stopping =
         std::sqrt(2.0f * arrivalDeceleration * std::max(approach, 0.0f));
+    // On a route he must also make the turns at his waypoints: slowed to
+    // the speed of each where it starts (on a turn, held to it). The
+    // fastest he can take a turn of radius r is where his lateral limit
+    // (below) holds him on it,
+    // v^2 = a_lat(v) r with a_lat falling linearly with speed: the root of
+    // v^2 + B v - C = 0. (Chang & Kram 2007 measured about the same on
+    // flat curves: movement targets plan 3.)
+    const float turnGrip = grip[lane] * legs;
+    const auto turnSpeed = [&](float radius)
+    {
+      const float b = (P::LATERAL_ACCELERATION_SLOW -
+                       P::LATERAL_ACCELERATION_FAST) *
+                      turnGrip * radius / maxSpeed[lane];
+      const float c = P::LATERAL_ACCELERATION_SLOW * turnGrip * radius;
+      return 0.5f * (std::sqrt(b * b + 4.0f * c) - b);
+    };
+    const float firstTurn = turnSpeed(cornerRadius[lane]);
+    const float secondTurn = turnSpeed(nextCornerRadius[lane]);
+    const float cornering = std::sqrt(
+        firstTurn * firstTurn +
+        2.0f * arrivalDeceleration *
+            std::max(toTurn[lane], 0.0f));
+    const float nextCornering = std::sqrt(
+        secondTurn * secondTurn +
+        2.0f * arrivalDeceleration *
+            std::max(targetDistance + nextLeg[lane] - nextCornerLead[lane],
+                     0.0f));
+    const float closing =
+        onRoute[lane] != 0
+            ? std::min(stopping, std::min(cornering, nextCornering))
+            : stopping;
     // With movement modes he follows a moving target: its velocity plus a
     // closing speed that falls to nothing as he reaches it (a still target:
     // arrive and stop), within his mode's speed. Otherwise he heads for it,
@@ -685,14 +1054,14 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
         targetVelocityY[lane] + (aimed ? directionY : 0.0f) * closing;
     const float followSpeed = std::sqrt(followX * followX + followY * followY);
     const float followScale =
-        followSpeed > speedCap ? speedCap / followSpeed : 1.0f;
+        followSpeed > runCap ? runCap / followSpeed : 1.0f;
     const float receding =
         std::max(0.0f, aimed ? targetVelocityX[lane] * directionX +
                                    targetVelocityY[lane] * directionY
                              : 0.0f);
-    const float headingSpeed = std::min(speedCap, closing + receding);
+    const float headingSpeed = std::min(runCap, closing + receding);
     const float desiredSpeed =
-        moded ? std::min(speedCap, followSpeed) : headingSpeed;
+        moded ? std::min(runCap, followSpeed) : headingSpeed;
     const float desiredX = moded ? followX * followScale
                                  : (aimed ? directionX : 0.0f) * headingSpeed;
     const float desiredY = moded ? followY * followScale
@@ -702,7 +1071,7 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     const float changeY = desiredY - oldY;
     // From a standstill: push off straight toward the target.
     const float limit =
-        (desiredSpeed >= speed ? std::max(limits.high, 0.0f) : -limits.low) *
+        (desiredSpeed >= speed ? std::max(driveHigh, 0.0f) : -limits.low) *
         dt;
     const float magnitude = std::sqrt(changeX * changeX + changeY * changeY);
     const float shortfall = limit / magnitude;
@@ -716,14 +1085,22 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     const float normalY = tangentX;
     float along = changeX * tangentX + changeY * tangentY;
     float across = changeX * normalX + changeY * normalY;
-    along = std::clamp(along, limits.low * dt, limits.high * dt);
+    // Wanting more speed than he has (a tired man who cannot add it), he
+    // turns onto the heading he wants at his own speed: the sideways part of
+    // speed he cannot add would swing him past it, step after step.
+    const float wantedAcross =
+        (desiredX * normalX + desiredY * normalY) * speed /
+        std::max(desiredSpeed, EPSILON);
+    across = desiredSpeed > speed ? wantedAcross : across;
+    along = std::clamp(along, limits.low * dt, driveHigh * dt);
     const float speedShare = std::clamp(speed / maxSpeed[lane], 0.0f, 1.0f);
     const float lateral =
         (P::LATERAL_ACCELERATION_SLOW +
          (P::LATERAL_ACCELERATION_FAST - P::LATERAL_ACCELERATION_SLOW) *
              speedShare) *
         grip[lane] * legs * dt;
-    across = std::clamp(across, -lateral, lateral);
+    // Gliding through a body turn: no new push, and no steering either.
+    across = gliding ? 0.0f : std::clamp(across, -lateral, lateral);
     const float fastX = oldX + (tangentX * along + normalX * across);
     const float fastY = oldY + (tangentY * along + normalY * across);
     // The run's own rule takes over gradually with speed (none at a
@@ -754,8 +1131,9 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     velocityX[lane] = nextVelocityX;
     velocityY[lane] = nextVelocityY;
 
-    // Facing (normalised pitch space, for the renderers) turns toward the
-    // run at a limited rate; fastAtan2() without branches.
+    // His body's facing (normalised pitch space, as the renderers read it)
+    // turns at his turn rate toward the facing asked of him, else toward the
+    // run; fastAtan2() without branches.
     const float y = nextVelocityY * INVERSE_WIDTH;
     const float x = nextVelocityX * INVERSE_LENGTH;
     const float absX = std::abs(x);
@@ -771,7 +1149,8 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     angle = x < 0.0f ? 3.14159274f - angle : angle;
     angle = y < 0.0f ? -angle : angle;
     angle = std::max(absX, absY) < 1e-12f ? 0.0f : angle;
-    float difference = angle - facing[lane];
+    // Toward the facing asked of him, else his run.
+    float difference = (bodyAsked ? bodyRequest[lane] : angle) - facing[lane];
     difference = difference > PI    ? difference - TWO_PI
                  : difference < -PI ? difference + TWO_PI
                                     : difference;
@@ -784,7 +1163,7 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
                                             P::MOVEMENT_FACING_THRESHOLD;
     nextHeading[lane] = angle;
     turning[lane] = running ? 1 : 0;
-    nextFacing[lane] = running ? turned : facing[lane];
+    nextFacing[lane] = running || bodyAsked ? turned : facing[lane];
   }
 
   for (std::size_t lane = 0; lane < moving; ++lane)
@@ -940,7 +1319,9 @@ void MatchEngine::spendEnergyBinturong(FitnessLanes& lanes, std::size_t begin,
     const float anchor = carbohydratePower(
         metabolicPower(FUEL_ANCHOR_SHARE * fresh, 0.0f, transition),
         metabolicPower(fresh, 0.0f, transition));
-    const float power = metabolicPower(speed, acceleration, transition);
+    // Moving sideways or backward to his body costs more (orientation plan).
+    const float power = metabolicPower(speed, acceleration, transition) *
+                        physiology.directionCost[lane];
     const float criticalPower =
         std::max(metabolicPower(critical, 0.0f, transition), EPSILON);
     // Burst reserve (a share of the fresh burst capacity): energy, the burst

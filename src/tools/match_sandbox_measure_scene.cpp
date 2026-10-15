@@ -58,7 +58,7 @@ DrillMeasureScene::DrillMeasureScene(GUIView* guiView_ptr, Drill& drill_ref,
                                      bool runNow)
     : GUIScene(guiView_ptr), drill(drill_ref)
 {
-  // A first measure worth running: Pace, AI against the bot.
+  // A first measure worth running: Pace, with and without the ball.
   const auto parameters = drill.parameters();
   sweep.parameter = findParameter(parameters, "Pace");
   if (sweep.parameter < 0) sweep.parameter = 0;
@@ -70,7 +70,7 @@ DrillMeasureScene::DrillMeasureScene(GUIView* guiView_ptr, Drill& drill_ref,
     sweep.to = 95.0f;
     sweep.count = 12;
   }
-  by.parameter = findParameter(parameters, "Who runs");
+  by.parameter = findParameter(parameters, "With the ball");
   if (by.parameter >= 0) resetAxis(by);
   firstSeed = static_cast<int>(drill.seed);
   runPending = runNow;

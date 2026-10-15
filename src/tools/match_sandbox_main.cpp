@@ -23,12 +23,12 @@
 //   --measure   headless: run a drill over a sweep of one setting and print
 //               the results (no window). AXIS is "Pace=40:95:12"
 //               (from:to:count), "Pace=50,70,90", or a choice setting alone
-//               ("Who runs"). --preset fills in a drill's named situation;
+//               ("With the ball"). --preset fills in a drill's named situation;
 //               --set overrides any setting (beyond its slider range too).
 //               --csv writes every run (to Documents/Player12 drill results
 //               without a path). The same command runs from the lab (fm_lab
 //               drill). E.g.
-//               match_sandbox --measure turn --sweep Turn --by "Who runs"
+//               match_sandbox --measure turn --sweep Turn --by "With the ball"
 //               match_sandbox --measure "First touch" --preset "Driven pass
 //               to feet" --sweep "First Touch=30:90:4" --repeats 100
 //   --shot-map  headless: the Shot drill over a grid of spots; prints

@@ -63,6 +63,9 @@ json toJson(const MatchCommandRecord& command)
   json formation = json::array();
   for (const Vector2F& slot : command.formation)
     formation.push_back({slot.x, slot.y});
+  json route = json::array();
+  for (const Vector2F& waypoint : command.route)
+    route.push_back({waypoint.x, waypoint.y});
   return {{"step", command.step},
           {"type", static_cast<int>(command.type)},
           {"home", command.homeTeam},
@@ -77,6 +80,10 @@ json toJson(const MatchCommandRecord& command)
           {"target", command.target ? json{command.target->x, command.target->y}
                                     : json(nullptr)},
           {"urgent", command.urgent},
+          {"route", route},
+          {"apex_offset", command.apexOffset},
+          {"outward_room", command.outwardRoom},
+          {"facing", command.facing ? json(*command.facing) : json(nullptr)},
           {"feed_velocity", json{command.feedVelocity.x, command.feedVelocity.y}},
           {"feed_lift", command.feedLift},
           {"pass_style", static_cast<int>(command.passStyle)}};
@@ -103,6 +110,15 @@ MatchCommandRecord commandFromJson(const json& value)
       target != value.end() && !target->is_null())
     command.target = Vector2F{target->at(0).get<float>(), target->at(1).get<float>()};
   command.urgent = value.value("urgent", false);
+  if (const auto route = value.find("route"); route != value.end())
+    for (const auto& waypoint : *route)
+      command.route.push_back(
+          {waypoint.at(0).get<float>(), waypoint.at(1).get<float>()});
+  command.apexOffset = value.value("apex_offset", 0.0f);
+  command.outwardRoom = value.value("outward_room", 0.0f);
+  if (const auto facing = value.find("facing");
+      facing != value.end() && !facing->is_null())
+    command.facing = facing->get<float>();
   if (const auto feed = value.find("feed_velocity"); feed != value.end())
     command.feedVelocity = {feed->at(0).get<float>(), feed->at(1).get<float>()};
   command.feedLift = value.value("feed_lift", 0.0f);

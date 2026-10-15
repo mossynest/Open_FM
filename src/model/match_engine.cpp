@@ -421,14 +421,14 @@ bool MatchEngine::executeCommand(const MatchCommandRecord& command)
       if (command.target)
       {
         drillTargets.push_back({command.player, *command.target,
-                                command.urgent});
+                                command.urgent, command.route,
+                                command.apexOffset, command.outwardRoom,
+                                command.facing});
         // Taken at once, not at the next planner refresh (by his touches
         // too, when he is dribbling).
-        player->tacticalTarget = *command.target;
+        holdDrillTarget(*player, drillTargets.back());
         if (ball.inTouch && ball.possessedBy == player->player)
           ball.dribbleGoal = *command.target;
-        player->targetVelocity = {0.0f, 0.0f};
-        player->urgentMovement = command.urgent;
       }
       ++inputRevision;
       return true;
@@ -1432,6 +1432,7 @@ void MatchEngine::startShootout()
     player.movementTarget = player.position;
     player.tacticalTarget = player.position;
     player.targetVelocity = {0.0f, 0.0f};
+    player.routeWaypoints = 0;
   }
   updateTeamPhases();
   logEvent(MatchEventType::PENALTY_SHOOTOUT);
@@ -1693,6 +1694,7 @@ void MatchEngine::updateMovement(float dt)
   {
     tacticalOwner = ball.possessedBy;
     tacticalFlags = flags;
+    if (forced) ++planEpoch;
     // A player the plan switches into pressing the ball starts a pressure.
     std::array<PlayerIntent, 32> previousIntents{};
     const std::size_t planned = std::min(players.size(), previousIntents.size());
@@ -1709,6 +1711,9 @@ void MatchEngine::updateMovement(float dt)
     refreshTacticalTargets(dt, false);
     // Drills hold some players' targets over the plan.
     if (!drillTargets.empty()) applyDrillTargets();
+    // Then each side's overtakes, on the targets as they now stand.
+    if (brainOf(true) == BrainId::BINTURONG || brainOf(false) == BrainId::BINTURONG)
+      planOvertakesBinturong();
     // Where the owner of a claimed ball means to take it: the chase below
     // overrides his movement, his touches aim here.
     if (ball.inTouch)
@@ -1733,7 +1738,10 @@ void MatchEngine::updateMovement(float dt)
           keepers[player.isHomeTeam ? 0 : 1].state == GoalkeeperState::DIVE)
         continue;
       if (!(ball.isPass && ball.intendedReceiver == player.player))
+      {
         player.tacticalTarget = goalkeeperTarget(player, holder);
+        player.routeWaypoints = 0;
+      }
     }
   }
 
@@ -2596,6 +2604,12 @@ void MatchEngine::updateRestartMovement(float dt)
     updateRestartSupport(player, taker);
     player.intent = player.isGoalkeeper ? PlayerIntent::GOALKEEP
                                         : PlayerIntent::RECOVER_SHAPE;
+    // His restart spot is where he is going: his tactical target too, as
+    // the brain reads it when play restarts (still, and with no route).
+    player.tacticalTarget = player.movementTarget;
+    player.targetVelocity = {0.0f, 0.0f};
+    player.routeWaypoints = 0;
+    player.facingRequested = false;
     batch[batched++] = static_cast<std::uint8_t>(slot);
   }
   movePlayers(batch.data(), batched, dt, true);
@@ -2773,6 +2787,23 @@ void MatchEngine::accumulatePlayerLoad(float dt)
     enduranceLanes.transitionSpeed[lane] =
         MatchRules::walkRunTransitionSpeed(player.heightMetres);
     enduranceLanes.previousSpeed[lane] = player.loadSpeed;
+    // Moving at an angle to a body orientation asked of him costs more per
+    // metre: the eight directions' figure, blended by his angle.
+    float directionCost = 1.0f;
+    const Vector2F moved = toMetres(
+        {player.position.x - previous.x, player.position.y - previous.y});
+    const float movedMetres = length(moved);
+    if (player.facingRequested && movedMetres > EPSILON)
+    {
+      const Vector2F body = normalized(
+          {std::cos(player.facingAngle) * MatchTuning::Pitch::LENGTH_METRES,
+           std::sin(player.facingAngle) * MatchTuning::Pitch::WIDTH_METRES});
+      const float alignment = std::clamp(
+          (body.x * moved.x + body.y * moved.y) / movedMetres, -1.0f, 1.0f);
+      directionCost = directionValue(MatchTuning::Player::DIRECTION_ENERGY,
+                                     directionMix(std::acos(alignment)));
+    }
+    enduranceLanes.directionCost[lane] = directionCost;
   }
   spendEnergy(lanes, 0, homeLanes, dt, true);
   spendEnergy(lanes, homeLanes, count, dt, false);
@@ -4960,9 +4991,12 @@ MatchEngine::DribbleAim MatchEngine::dribbleAim(const MatchPlayer& player) const
                 (controlInput.sprint ? 1.0f : MatchTuning::Control::JOG_SPEED_SHARE);
     return aim;
   }
-  // Toward his plan's target, at the pace his brain would run there.
-  const Vector2F offset = toMetres({ball.dribbleGoal.x - player.position.x,
-                                    ball.dribbleGoal.y - player.position.y});
+  // Toward his plan's target (on a route, along his line through its
+  // waypoints), at the pace his brain would run there.
+  const Vector2F goal =
+      player.routeWaypoints > 0 ? player.routeAim : ball.dribbleGoal;
+  const Vector2F offset = toMetres({goal.x - player.position.x,
+                                    goal.y - player.position.y});
   const float metres = length(offset);
   aim.metres = metres;
   if (metres <= MatchTuning::Player::ARRIVAL_DEAD_ZONE_METRES) return aim;
@@ -5174,6 +5208,8 @@ void MatchEngine::chaseTouchedBall()
         topSpeed * elapsed)
       break;
   }
+  // His body chases the ball; a route he has stays, for his touches (and
+  // is moved on as he passes its waypoints).
   owner->tacticalTarget = meet;
   // Running with it, not pulling up at the point: a moving target, so his
   // run matches the ball's (a still ball: he stops on it).
@@ -6808,18 +6844,29 @@ bool MatchEngine::removeBeforeKickOff(PlayerID playerId)
   player->movementTarget = player->position;
   player->tacticalTarget = player->position;
   player->targetVelocity = {0.0f, 0.0f};
+  player->routeWaypoints = 0;
   if (ball.possessedBy == player->player) clearPossession();
   return true;
 }
 
 void MatchEngine::setDrillTarget(PlayerID playerId,
-                                 std::optional<Vector2F> target, bool urgent)
+                                 std::optional<Vector2F> target, bool urgent,
+                                 const std::vector<Vector2F>& route,
+                                 float apexOffsetMetres,
+                                 float outwardRoomMetres,
+                                 std::optional<float> facing)
 {
   MatchCommandRecord command;
   command.type = MatchCommandType::DRILL_TARGET;
   command.player = playerId;
   command.target = target;
   command.urgent = urgent;
+  command.route.assign(route.begin(),
+                       route.begin() + std::min<std::ptrdiff_t>(
+                                           std::ssize(route), 2));
+  command.apexOffset = apexOffsetMetres;
+  command.outwardRoom = outwardRoomMetres;
+  command.facing = facing;
   recordCommand(command);
 }
 
@@ -6891,15 +6938,31 @@ void MatchEngine::setDerivedStat(PlayerID playerId, DerivedStat stat,
   }
 }
 
+void MatchEngine::holdDrillTarget(MatchPlayer& player, const DrillTarget& held)
+{
+  player.tacticalTarget = held.target;
+  player.targetVelocity = {0.0f, 0.0f};
+  player.urgentMovement = held.urgent;
+  // His route: the waypoints in order, then the target.
+  player.routeWaypoints = static_cast<std::uint8_t>(held.route.size());
+  player.routeApexOffset = held.apexOffset;
+  player.routeOutwardRoom = held.outwardRoom;
+  player.facingRequested = held.facing.has_value();
+  player.facingRequest = held.facing.value_or(0.0f);
+  if (!held.route.empty())
+  {
+    player.movementTarget = held.route[0];
+    player.nextTarget = held.route.size() > 1 ? held.route[1] : held.target;
+  }
+}
+
 void MatchEngine::applyDrillTargets()
 {
   for (const DrillTarget& held : drillTargets)
     if (MatchPlayer* player = drillPlayer(held.player);
         player && active(*player))
     {
-      player->tacticalTarget = held.target;
-      player->targetVelocity = {0.0f, 0.0f};
-      player->urgentMovement = held.urgent;
+      holdDrillTarget(*player, held);
       if (held.urgent && drillRules.chaseEffort)
         player->intent = PlayerIntent::CLAIM_LOOSE_BALL;
       player->isPressing = false;

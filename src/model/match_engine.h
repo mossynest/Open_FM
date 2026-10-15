@@ -255,9 +255,45 @@ struct MatchPlayer
   Vector2F tacticalTarget{MatchTuning::Pitch::CENTRE,
                           MatchTuning::Pitch::CENTRE};
   bool urgentMovement = false;
-  /** How fast the tactical target itself moves (m/s), when the brain pins
-   * it to something moving (a man to press or mark); zero otherwise. */
+  /** How fast the tactical target itself moves (m/s): a man pressed or
+   * marked tight, or (Binturong brain) the target's own move since the last
+   * plan on the same job; zero on a new job. */
   Vector2F targetVelocity{0.0f, 0.0f};
+  /** A route to the tactical target (Binturong body): movementTarget is the
+   * point he heads for now and nextTarget the one after. routeWaypoints is
+   * how many of the two are waypoints short of the tactical target (0: both
+   * are it). Planned by the brain, advanced by the body as he reaches each
+   * waypoint, and cleared by every other writer of the tactical target. */
+  Vector2F nextTarget{MatchTuning::Pitch::CENTRE, MatchTuning::Pitch::CENTRE};
+  std::uint8_t routeWaypoints = 0;
+  /** His line through each waypoint of the route (movement targets plan
+   * 3b): how far (m) inside the waypoint the turn's apex may pass
+   * (negative: outside it), and how far the line may be pushed out at the
+   * corner to widen the turn. Together they set how fast he takes it. */
+  float routeApexOffset = 0.0f;
+  float routeOutwardRoom = 0.0f;
+  /** Where his line points now (normalised pitch), on a route: what his
+   * touches aim at when he is dribbling. */
+  Vector2F routeAim{};
+  /** The player he is overtaking (slot, -1: none) and on which side (+1
+   * his left), kept between refreshes so he does not swap sides on a near
+   * tie (movement targets plan 4a). */
+  std::int8_t overtaking = -1;
+  std::int8_t overtakeSide = 0;
+  /** A body orientation asked of him (orientation plan, stage 1), as an
+   * angle like facingAngle (normalised pitch space): his body turns to it
+   * and he moves forward, sideways or backward relative to it. Without one
+   * his body follows his run. Set by drills (the brain, later); cleared at
+   * each refresh and on restart walks. */
+  bool facingRequested = false;
+  float facingRequest = 0.0f;
+  /** Waypoints reached so far (counts up; the planner reads it to move its
+   * plan on). */
+  std::uint32_t routeAdvances = 0;
+  /** Where the leg to his waypoint began (the waypoint before, or where he
+   * was when given it), and that waypoint (body's own bookkeeping). */
+  Vector2F routeLegStart{};
+  Vector2F routeLegEnd{};
 
   float facingAngle = 0.0f;
   float targetAngle = 0.0f;
@@ -281,12 +317,15 @@ struct MatchPlayer
   /** His speed over the last load period (m/s), for the next one's
    * acceleration in the energy model. */
   float loadSpeed = 0.0f;
-  /** The movement target he followed last step, and how it has been
-   * drifting (metric m/s, smoothed): a Binturong body follows a moving
-   * target at its pace when the brain gives it none. */
-  Vector2F lastFollowedTarget{};
-  Vector2F targetDrift{};
-  bool followsTarget = false;
+  /** The Binturong brain's last plan for him: its target, its job (the
+   * planner's branch and the choices made in it), the step and the plan
+   * epoch. A refresh on the same job turns the target's move since then
+   * into targetVelocity. */
+  Vector2F plannedTarget{};
+  std::uint64_t plannedJob = 0;
+  std::uint64_t plannedStep = 0;
+  std::uint32_t plannedEpoch = 0;
+  bool planned = false;
   /** Fresh top speed (m/s), maximum acceleration A0 and braking (m/s^2).
    * A Binturong body reads A0 from the Acceleration derived stat instead. */
   float maxSpeed = MatchTuning::Player::TOP_SPEED_BASE;
@@ -804,6 +843,14 @@ struct MatchCommandRecord
    * releases him. */
   std::optional<Vector2F> target;
   bool urgent = false;
+  /** DRILL_TARGET: up to two waypoints on the way to `target`, and his
+   * line through them (MatchPlayer::routeApexOffset, routeOutwardRoom). */
+  std::vector<Vector2F> route;
+  float apexOffset = 0.0f;
+  float outwardRoom = 0.0f;
+  /** DRILL_TARGET: a body orientation asked of him (MatchPlayer::
+   * facingRequest), if any. */
+  std::optional<float> facing;
   /** FEED_BALL: played from `target` with this velocity along the ground
    * (m/s) and this upward speed (m/s), to `player` (0: loose). */
   Vector2F feedVelocity{0.0f, 0.0f};
@@ -1535,13 +1582,20 @@ class MatchEngine
   bool startDrill(const MatchScenario& scenario);
 
   /**
-   * Drills: holds a player's movement target (normalised pitch), which then
-   * replaces the planner's; `urgent` makes him run at it flat out. No
-   * target releases him to the planner. Logged and replayed like any
-   * manager change.
+   * Drills: holds a player's tactical target (normalised pitch), which then
+   * replaces the planner's; `urgent` makes him run at it flat out. A route
+   * gives up to two waypoints on the way, and his line through them: how
+   * far inside each the turn's apex may pass (`apexOffsetMetres`; negative
+   * is outside) and how far out the line may be pushed to widen it
+   * (`outwardRoomMetres`). `facing` asks his body to face that way (an
+   * angle like facingAngle) whichever way he moves. No target releases him
+   * to the planner. Logged and replayed like any manager change.
    */
   void setDrillTarget(PlayerID playerId, std::optional<Vector2F> target,
-                      bool urgent);
+                      bool urgent, const std::vector<Vector2F>& route = {},
+                      float apexOffsetMetres = 0.0f,
+                      float outwardRoomMetres = 0.0f,
+                      std::optional<float> facing = std::nullopt);
   /** The target a drill holds for a player, if any. */
   std::optional<Vector2F> getDrillTarget(PlayerID playerId) const;
 
@@ -1605,8 +1659,16 @@ class MatchEngine
     PlayerID player = 0;
     Vector2F target{0.0f, 0.0f};
     bool urgent = false;
+    /** Up to two waypoints before it, and his line through them. */
+    std::vector<Vector2F> route;
+    float apexOffset = 0.0f;
+    float outwardRoom = 0.0f;
+    /** A body orientation asked of him, if any. */
+    std::optional<float> facing;
   };
   std::vector<DrillTarget> drillTargets;
+  /** Puts a player on a held drill target (and its route). */
+  void holdDrillTarget(MatchPlayer& player, const DrillTarget& held);
   /** A forced shot waiting for its shooter to be able to act (0: none). */
   PlayerID forcedShooter = 0;
   /** A forced pass waiting for its passer to be able to act (passer 0:
@@ -1858,6 +1920,9 @@ class MatchEngine
   /** Ball situation at the last tactical refresh (event-driven refresh). */
   const Player* tacticalOwner = nullptr;
   std::uint8_t tacticalFlags = 0;
+  /** Counts the forced refreshes (the ball changed hands, or a flight
+   * started or ended): every player's plan starts afresh at one. */
+  std::uint32_t planEpoch = 0;
   /** Seconds and anchor positions since the last load accounting. */
   float loadSeconds = 0.0f;
   std::vector<Vector2F> loadAnchors;
@@ -2193,6 +2258,9 @@ class MatchEngine
     alignas(16) std::array<float, LANES> fuelSeconds{};
     alignas(16) std::array<float, LANES> transitionSpeed{};
     alignas(16) std::array<float, LANES> previousSpeed{};
+    /** What his movement costs against forward running at the same speed
+     * (more, moving sideways or backward to his body: orientation plan). */
+    alignas(16) std::array<float, LANES> directionCost{};
   };
   EnduranceLanes enduranceLanes;
   /** Stamina drain and sprint-reserve drain or recovery for lanes

@@ -202,6 +202,48 @@ struct MatchTuning final
     static constexpr float ARRIVAL_DEAD_ZONE_METRES = 0.35f;
     static constexpr float FACING_TURN_RATE_RADIANS = 9.0f;
     static constexpr float MOVEMENT_FACING_THRESHOLD = 0.3f;
+    /** Orientation plan, stage 1 (Binturong body). How fast his body turns
+     * (rad/s), set by Agility: a 180 deg spin in 0.35 s to 0.17 s, from the
+     * part-timer to the elite anchor ratings (a design choice: no research
+     * figure for turning on the move; tried at 6.3-12.6 first, which looked
+     * slow). */
+    static constexpr float BODY_TURN_RATE_LOW = 9.0f;
+    static constexpr float BODY_TURN_RATE_HIGH = 18.0f;
+    /**
+     * Moving at an angle to his body (orientation plan): the eight
+     * directions, as the angle between body and run, from 0 (forward) by
+     * 45 deg steps to 180 (backward), the same to his left and right.
+     * Angles between two of them blend the two. For each direction:
+     * - the top band he has (MovementMode: 3 sprint, 2 run, 1 jog);
+     * - his speed as a share of the same forward band;
+     * - his drive (acceleration) as a share;
+     * - his energy per metre against forward running.
+     * Sources:
+     * - backward and sideways at 0.7, walk and jog only (the user's call):
+     *   backward 1.3-1.5x the time over 5-20 m (Sammoud et al. 2023), the
+     *   100 m backward record ~70% of the forward record's speed;
+     *   sideways provisional, no measured figure;
+     * - energy x1.3: 20-40% more for high-intensity backward and lateral
+     *   movement (the review cited by Bloomfield et al. 2007);
+     * - the diagonals harder than their neighbours (the user): 0.6 and x1.4,
+     *   the forward diagonal up to a run (design choices, to judge on
+     *   screen);
+     * - the drive shares (design choices).
+     */
+    static constexpr std::array<int, 5> DIRECTION_TOP_BAND{3, 2, 1, 1, 1};
+    static constexpr std::array<float, 5> DIRECTION_SPEED_SHARE{1.0f, 0.6f, 0.7f,
+                                                                0.6f, 0.7f};
+    static constexpr std::array<float, 5> DIRECTION_DRIVE_SHARE{1.0f, 0.6f, 0.7f,
+                                                                0.6f, 0.7f};
+    static constexpr std::array<float, 5> DIRECTION_ENERGY{1.0f, 1.4f, 1.3f,
+                                                           1.4f, 1.3f};
+    /** Turning his body to a facing asked of him by more than this, he
+     * cannot drive: he glides on his momentum (the user's model of a
+     * transition). Within it he starts to push, more as the turn
+     * completes, as a player drives off the back foot through the last of a
+     * turn (a design choice; tried at 20 deg first, a standstill through
+     * nearly all of a half-turn). */
+    static constexpr float BODY_TURN_DRIVE_RADIANS = 1.5708f;
     static constexpr float MINIMUM_STAMINA = 0.35f;
     // Fatigue lowers top speed far more than the first-step push.
     static constexpr float FATIGUE_TOP_SPEED_LOSS = 0.14f;

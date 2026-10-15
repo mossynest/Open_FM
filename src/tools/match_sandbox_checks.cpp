@@ -250,13 +250,12 @@ bool runDrillChecks(const Team& home, const Team& away,
       shooter->getName(), summary, repeatable ? "yes" : "NO");
 
   // The drill framework: every drill, run twice to its end through
-  // DrillRun, reports the same and its run rewinds exactly, by the AI and
-  // by the bot on the stick (the two movement paths), and the movement
-  // drills again with the ball.
+  // DrillRun, reports the same and its run rewinds exactly, by the AI (the
+  // headless movement path), and the movement drills again with the ball.
   bool framework = true;
   for (const auto& drill : makeDrills())
   for (const float withBall : {0.0f, 1.0f})
-  for (const float path : {0.0f, 1.0f})
+  for (const float path : {0.0f})
   {
     bool hasPath = false;
     bool hasBall = false;
@@ -311,7 +310,7 @@ bool runDrillChecks(const Team& home, const Team& away,
     framework = framework && completed;
     std::cout << std::format(
         "Drill {}{}{}: {}  ·  same twice and rewinds: {}{}\n", drill->name(),
-        !hasPath ? "" : path > 0.0f ? " (bot)" : " (AI)",
+        hasPath ? " (AI)" : "",
         withBall > 0.0f ? " with the ball" : "", result, same ? "yes" : "NO",
         completed ? "" : "  ·  DID NOT FINISH");
     if (hasBall)
@@ -330,7 +329,7 @@ bool runDrillChecks(const Team& home, const Team& away,
       before.push_back(*parameter.value);
     MeasureSpec spec;
     spec.sweep = {"Pace", {50.0f, 70.0f}};
-    spec.by = MeasureAxis{"Who runs", {0.0f, 1.0f}};
+    spec.by = MeasureAxis{"With the ball", {0.0f, 1.0f}};
     spec.repeats = 2;
     DrillMeasure measure(sprint, config, spec);
     while (measure.work(1.0))
@@ -339,12 +338,12 @@ bool runDrillChecks(const Team& home, const Team& away,
     std::vector<float> after;
     for (const DrillParameter& parameter : sprint.parameters())
       after.push_back(*parameter.value);
-    // The same point run directly: Pace 70 by the bot, seed 2.
+    // The same point run directly: Pace 70 with the ball, seed 2.
     double direct = -1.0;
     for (const DrillParameter& parameter : sprint.parameters())
     {
       if (std::string_view(parameter.name) == "Pace") *parameter.value = 70.0f;
-      if (std::string_view(parameter.name) == "Who runs") *parameter.value = 1.0f;
+      if (std::string_view(parameter.name) == "With the ball") *parameter.value = 1.0f;
     }
     sprint.seed = 2;
     {
@@ -363,7 +362,7 @@ bool runDrillChecks(const Team& home, const Team& away,
     measureOk = measure.runs().size() == 8 && before == after &&
                 direct == measured;
     std::cout << std::format(
-        "Drill measure (sprint, Pace × who runs × 2 seeds): {} runs, "
+        "Drill measure (sprint, Pace × with the ball × 2 seeds): {} runs, "
         "matches a direct run: {}, settings restored: {}\n",
         measure.runs().size(), direct == measured ? "yes" : "NO",
         before == after ? "yes" : "NO");

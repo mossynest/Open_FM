@@ -21,7 +21,7 @@ struct StatsConfig;
 
 /**
  * Measure mode: a drill run headless many times over a sweep of one setting
- * (optionally for each value of a second, e.g. AI against the bot), each
+ * (optionally for each value of a second, e.g. with and without the ball), each
  * point repeated over consecutive seeds. Results are the drill's metrics,
  * per run and as mean and spread per point.
  */

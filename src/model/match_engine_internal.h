@@ -49,6 +49,31 @@ constexpr auto RUN_TIMING_EPOCH_STEPS =
     static_cast<std::uint32_t>(MatchTuning::Passing::RUN_TIMING_EPOCH_SECONDS /
                                MatchTuning::Timing::FIXED_STEP_SECONDS);
 
+/** Where an angle between body and run (0 forward to pi backward) falls
+ * among the eight directions (MatchTuning::Player::DIRECTION_*): the
+ * direction below it (0-3), and how far on toward the next (0-1). */
+struct DirectionMix
+{
+  std::size_t below = 0;
+  float onward = 0.0f;
+};
+inline DirectionMix directionMix(float angle)
+{
+  constexpr float STEP = 0.25f * 3.14159265f;
+  const float steps = std::clamp(angle / STEP, 0.0f, 4.0f);
+  const std::size_t below = std::min<std::size_t>(static_cast<std::size_t>(steps), 3);
+  return {below, steps - static_cast<float>(below)};
+}
+/** A direction figure at a mix, blended between its two directions. */
+template <typename Table>
+inline float directionValue(const Table& table, DirectionMix mix)
+{
+  return static_cast<float>(table[mix.below]) +
+         (static_cast<float>(table[mix.below + 1]) -
+          static_cast<float>(table[mix.below])) *
+             mix.onward;
+}
+
 inline float length(Vector2F vector)
 {
   return std::sqrt(vector.x * vector.x + vector.y * vector.y);

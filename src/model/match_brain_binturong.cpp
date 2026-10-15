@@ -38,6 +38,68 @@ using namespace MatchEngineInternal;
 
 namespace
 {
+/** The planner's branches. A player's job is the branch his target came
+ * from plus the choices made in it (a slot, a side, a man): moving to
+ * another branch, or changing a choice, is a new job and a new target, not
+ * the old one moving (movement targets plan, step 2). */
+enum class PlanBranch : std::uint8_t
+{
+  SHAPE,
+  CARRY,
+  RUN,
+  BOX_ARRIVAL,
+  OVERLAP,
+  SUPPORT,
+  FORWARD_SHORT,
+  PRESS,
+  DOUBLE_UP,
+  BLOCK_LANE,
+  COVER,
+  TIGHT_MARK,
+  TRANSITION_RECOVER,
+  ZONAL_MARK,
+  RECEIVE,
+  FLIGHT_SUPPORT,
+  LOOSE_BALL,
+  LOOSE_COVER,
+  TRANSITION_RUN,
+  TRANSITION_SUPPORT,
+  RECOVER,
+  AERIAL_HOLD,
+  GOALKEEPER,
+};
+
+/** A job: its branch, small choices (slots, sides, switches: under 2^24)
+ * and a detail (a man's slot, an epoch). */
+constexpr std::uint64_t planJob(PlanBranch branch, std::uint32_t choices = 0,
+                                std::uint32_t detail = 0)
+{
+  return static_cast<std::uint64_t>(branch) |
+         static_cast<std::uint64_t>(choices & 0xFFFFFFU) << 8 |
+         static_cast<std::uint64_t>(detail) << 32;
+}
+
+// Overtaking in a race to a shared target (movement targets plan 4a).
+// Walkers adjust only when their predicted closest approach is under ~1 m
+// (Olivier et al. 2012), and look ahead about 3 s (time to collision:
+// Karamouzas, Skinner & Guy 2014). Design choices: a team-mate is passed
+// at the body-contact distance; "the same target" and "the same way"; a
+// side kept unless the other is this much shorter; running speeds below
+// this are not racing.
+constexpr float OVERTAKE_OPPONENT_CLEARANCE_METRES = 1.0f;
+constexpr float OVERTAKE_TEAM_MATE_CLEARANCE_METRES =
+    MatchTuning::Player::MINIMUM_BODY_SEPARATION_METRES;
+constexpr float OVERTAKE_HORIZON_SECONDS = 3.0f;
+constexpr float OVERTAKE_SAME_TARGET_METRES = 2.0f;
+constexpr float OVERTAKE_SAME_DIRECTION_COSINE = 0.7071f;
+constexpr float OVERTAKE_STICKY_METRES = 0.5f;
+constexpr float OVERTAKE_MINIMUM_SPEED = 1.0f;
+// A loose ball's path is projected this far ahead (5 s, as for a first
+// touch); the player already after it keeps it on a near tie by one tick.
+constexpr int LOOSE_BALL_PATH_TICKS = 50;
+constexpr float LOOSE_BALL_CONTINUITY_SECONDS =
+    MatchTuning::Timing::FIXED_STEP_SECONDS;
+
 /** How hard each intent runs, as a share of the fresh top speed. */
 float movementSpeedScale(PlayerIntent intent)
 {
@@ -212,8 +274,92 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
   const StrategySliders homeSliders = getEffectiveSliders(true);
   const StrategySliders awaySliders = getEffectiveSliders(false);
 
+  // A loose ball's path, from the ball's own physics (flight, bounces,
+  // rolling to a stop): where it will be each tick, and whether it is low
+  // enough there to be played. Who gets to it first is who can meet it
+  // first on this path (interception: walkers and catchers head for a
+  // meeting point, not for where it is now; Fajen & Warren).
+  struct PathPoint
+  {
+    float seconds = 0.0f;
+    Vector2F at{};
+    bool low = true;
+  };
+  std::array<PathPoint, LOOSE_BALL_PATH_TICKS + 1> loosePath{};
+  std::size_t loosePoints = 0;
+  if (!carrier)
+  {
+    const float speed = length(ball.velocity);
+    const Vector2F heading = speed > EPSILON
+                                 ? Vector2F{ball.velocity.x / speed,
+                                            ball.velocity.y / speed}
+                                 : Vector2F{0.0f, 0.0f};
+    FlightState flight{speed, ball.velocityZ,
+                       ball.z * MatchTuning::Units::BALL_Z_METRES, false};
+    Vector2F at = toMetres(ball.position);
+    constexpr int SUBSTEPS = MatchTuning::Timing::BALL_SUBSTEPS;
+    constexpr float TICK = MatchTuning::Timing::FIXED_STEP_SECONDS;
+    loosePath[loosePoints++] = {0.0f, at,
+                                flight.height <= MatchTuning::Aerial::CONTROL_CEILING_METRES};
+    for (int tick = 1; tick <= LOOSE_BALL_PATH_TICKS; ++tick)
+    {
+      for (int sub = 0; sub < SUBSTEPS; ++sub)
+      {
+        const float moved = stepFlight(flight, TICK / SUBSTEPS);
+        at = {at.x + heading.x * moved, at.y + heading.y * moved};
+      }
+      loosePath[loosePoints++] = {
+          static_cast<float>(tick) * TICK, at,
+          flight.height <= MatchTuning::Aerial::CONTROL_CEILING_METRES};
+      // At rest: the rest of the path is this spot.
+      if (flight.horizontalSpeed <= 0.0f && flight.height <= 0.0f &&
+          flight.verticalSpeed <= 0.0f)
+        break;
+    }
+  }
+  // When and where a candidate can first meet the loose ball on its path
+  // (within his reach of it), at his pursuit speed toward each point; at
+  // its resting spot if he cannot catch it up.
+  const auto interception = [&](const MatchPlayer& candidate)
+  {
+    const Vector2F from = toMetres(candidate.position);
+    float seconds = 0.0f;
+    Vector2F meet = loosePath[0].at;
+    for (std::size_t index = 0; index < loosePoints; ++index)
+    {
+      const PathPoint& point = loosePath[index];
+      const Vector2F toPoint{point.at.x - from.x, point.at.y - from.y};
+      const float metres = length(toPoint);
+      const float toward =
+          metres > EPSILON ? std::max(0.0f, (candidate.velocity.x * toPoint.x +
+                                             candidate.velocity.y * toPoint.y) /
+                                                metres)
+                           : 0.0f;
+      const float pursuit = std::max(
+          currentTopSpeed(candidate) +
+              toward * MatchTuning::Player::CURRENT_VELOCITY_PURSUIT_WEIGHT,
+          MatchTuning::Player::MINIMUM_PURSUIT_SPEED);
+      const float reach =
+          std::max(0.0f, metres - MatchTuning::Ball::OUTFIELD_CONTROL_RADIUS_METRES) /
+          pursuit;
+      seconds = std::max(point.seconds, reach);
+      meet = point.at;
+      if (point.low && reach <= point.seconds) break;
+    }
+    return std::pair{seconds, toPitch(meet)};
+  };
+
   const auto estimatedArrivalTime = [&](const MatchPlayer& candidate)
   {
+    if (!carrier && loosePoints > 0)
+    {
+      // A loose ball: when he can meet it, the one already after it a tick
+      // ahead (so a near tie does not swap who goes, step to step).
+      float arrival = interception(candidate).first;
+      if (candidate.intent == PlayerIntent::CLAIM_LOOSE_BALL)
+        arrival = std::max(0.0f, arrival - LOOSE_BALL_CONTINUITY_SECONDS);
+      return arrival;
+    }
     const Vector2F toTarget =
         toMetres({pressurePosition.x - candidate.position.x,
                   pressurePosition.y - candidate.position.y});
@@ -753,8 +899,11 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
                       *lastControlledTeamHome == player.isHomeTeam;
     Vector2F target =
         ownControl ? possessionAnchorBinturong(player) : player.basePosition;
-    // How fast the target itself moves, when it is pinned to a moving man.
+    // How fast the target itself moves, when it is pinned to a moving man
+    // (otherwise worked out from his last plan, below), and his job.
     Vector2F targetVelocity{0.0f, 0.0f};
+    bool pinned = false;
+    std::uint64_t job = planJob(PlanBranch::SHAPE);
     player.intent = PlayerIntent::HOLD_SHAPE;
     player.isPressing = false;
     player.isMakingRun = false;
@@ -821,6 +970,7 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
     {
       player.intent = PlayerIntent::CARRY_BALL;
       target = carryTargetBinturong(player);
+      job = planJob(PlanBranch::CARRY);
     }
     else if (ownPossession)
     {
@@ -878,12 +1028,14 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
                                      : std::max(target.x, onsideTarget);
 
         float channel = runChannel(player);
+        bool channelMoved = false;
         if (runnerSlot > 0 && runners[0])
         {
           const float primaryChannel = runChannel(*runners[0]);
           if (std::abs(channel - primaryChannel) <
               MatchTuning::Shape::MINIMUM_RUN_CHANNEL_SEPARATION)
           {
+            channelMoved = true;
             channel = primaryChannel <= MatchTuning::Pitch::CENTRE
                           ? MatchTuning::Shape::RIGHT_INSIDE_FORWARD_CHANNEL
                           : MatchTuning::Shape::LEFT_INSIDE_FORWARD_CHANNEL;
@@ -894,9 +1046,19 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
 
         // Only a runner caught clearly beyond the line checks back; one who
         // is marginally off relies on his timing (and sometimes gets caught).
-        if (isOffside(player, player.isHomeTeam, defenderLine,
-                      MatchTuning::Passing::RUN_TIMING_GAMBLE * 0.75f))
+        const bool checkingBack =
+            isOffside(player, player.isHomeTeam, defenderLine,
+                      MatchTuning::Passing::RUN_TIMING_GAMBLE * 0.75f);
+        if (checkingBack)
           target.x -= attackDirection * MatchTuning::Shape::ONSIDE_RECOVERY;
+        // His timing is drawn afresh each epoch: a new run.
+        job = planJob(PlanBranch::RUN,
+                      static_cast<std::uint32_t>(runnerSlot) |
+                          (timing != 0.0f ? 1U << 8 : 0U) |
+                          (channelMoved ? 1U << 9 : 0U) |
+                          (checkingBack ? 1U << 10 : 0U),
+                      static_cast<std::uint32_t>(
+                          stepCounter / RUN_TIMING_EPOCH_STEPS));
       }
       else
       {
@@ -932,10 +1094,13 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
           target.y = MatchTuning::Pitch::CENTRE -
                      ballSide * (farPost ? S::FAR_POST_ARRIVAL_WIDTH
                                          : S::MIDFIELD_ARRIVAL_WIDTH);
+          job = planJob(PlanBranch::BOX_ARRIVAL,
+                        (farPost ? 1U : 0U) | (ballSide > 0.0f ? 2U : 0U));
         }
         else if (&player == overlappingFullback)
         {
           player.intent = PlayerIntent::OVERLAP;
+          job = planJob(PlanBranch::OVERLAP);
           target.x += attackDirection *
                       MatchTuning::Shape::FINAL_THIRD_FULLBACK_OVERLAP;
         }
@@ -968,11 +1133,17 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
           target = carrier->position;
           target.x -= attackDirection * supportDepth;
           target.y += supportSide * supportWidth;
-          if (teamPhase == TeamPhase::ATTACKING_TRANSITION)
+          const bool transitionBonus =
+              teamPhase == TeamPhase::ATTACKING_TRANSITION;
+          if (transitionBonus)
           {
             target.x += attackDirection *
                         MatchTuning::Shape::TRANSITION_SUPPORT_FORWARD_BONUS;
           }
+          job = planJob(PlanBranch::SUPPORT,
+                        static_cast<std::uint32_t>(supportSlot) |
+                            (supportSide > 0.0f ? 1U << 8 : 0U) |
+                            (transitionBonus ? 1U << 9 : 0U));
         }
         else if (forward)
         {
@@ -989,10 +1160,14 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
               carrier->position.y +
               lateralDirection *
                   MatchTuning::Shape::FORWARD_SHORT_OPTION_LATERAL_SEPARATION;
+          job = planJob(PlanBranch::FORWARD_SHORT,
+                        lateralDirection > 0.0f ? 1U : 0U);
         }
         if (distance(target, carrier->position) >
             MatchTuning::Shape::MAX_SUPPORT_DISTANCE_METRES)
         {
+          // Pulled in from too far away: a different spot.
+          job |= std::uint64_t{1} << 31;
           target.x += (carrier->position.x - target.x) *
                       MatchTuning::Shape::SUPPORT_LONGITUDINAL_PULL;
           target.y += (carrier->position.y - target.y) *
@@ -1016,6 +1191,8 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
         target.x -= attackDirection * standOff;
         target.y += weakFootShadeBinturong(*carrier);
         targetVelocity = carrier->velocity;
+        pinned = true;
+        job = planJob(PlanBranch::PRESS);
       }
       else if (const auto doubling =
                    pressers[1] == &player
@@ -1026,6 +1203,7 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
         player.intent = PlayerIntent::COVER_PRESS;
         player.isPressing = true;
         target = *doubling;
+        job = planJob(PlanBranch::DOUBLE_UP);
       }
       else if (pressers[1] == &player &&
                sliders.pressing > MatchTuning::Shape::COVER_PRESS_MINIMUM)
@@ -1044,6 +1222,8 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
                          MatchTuning::Shape::COVER_LANE_INTERCEPTION_POINT;
           target.x -=
               attackDirection * MatchTuning::Shape::COVER_LANE_GOAL_SIDE_OFFSET;
+          job = planJob(PlanBranch::BLOCK_LANE, 0,
+                        static_cast<std::uint32_t>(slotOf(*coverOutlet)));
         }
         else
         {
@@ -1055,6 +1235,7 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
           target.y =
               pressurePosition.y +
               lateralSide * MatchTuning::Shape::COVER_FALLBACK_LATERAL_OFFSET;
+          job = planJob(PlanBranch::COVER, lateralSide > 0.0f ? 1U : 0U);
         }
       }
       else if (const MatchPlayer* tight = tightMarkTargetBinturong(player))
@@ -1064,6 +1245,9 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
         player.intent = PlayerIntent::MARK_OPPONENT;
         target = tightMarkPointBinturong(player, *tight, target);
         targetVelocity = tightMarkVelocityBinturong(*tight);
+        pinned = true;
+        job = planJob(PlanBranch::TIGHT_MARK, 0,
+                      static_cast<std::uint32_t>(slotOf(*tight)));
       }
       else if (teamPhase == TeamPhase::DEFENSIVE_TRANSITION)
       {
@@ -1075,6 +1259,7 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
             attackDirection * MatchTuning::Shape::DEFENSIVE_TRANSITION_RECOVERY;
         target.y += (shapeAnchor.y - target.y) *
                     MatchTuning::Shape::DEFENSIVE_TRANSITION_BALL_COMPACTNESS;
+        job = planJob(PlanBranch::TRANSITION_RECOVER);
       }
       else
       {
@@ -1096,7 +1281,11 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
           Vector2F markPoint = mark->position;
           const float markDanger =
               player.isHomeTeam ? 1.0f - mark->position.x : mark->position.x;
-          if (markDanger >= MatchTuning::Shape::TIGHT_MARK_DANGER_DEPTH)
+          const bool goalSide =
+              markDanger >= MatchTuning::Shape::TIGHT_MARK_DANGER_DEPTH;
+          job = planJob(PlanBranch::ZONAL_MARK, goalSide ? 1U : 0U,
+                        static_cast<std::uint32_t>(assigned));
+          if (goalSide)
           {
             // Near the own goal a marker stays tight and goal-side.
             markWeight =
@@ -1122,6 +1311,7 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
           // Meet the ball on its path instead of chasing where it is: the
           // closest point of the remaining flight line ahead of the ball.
           player.intent = PlayerIntent::RECEIVE_PASS;
+          job = planJob(PlanBranch::RECEIVE);
           const float ballSpeed = length(ball.velocity);
           const Vector2F lookahead = toPitch(
               {ball.velocity.x *
@@ -1148,6 +1338,7 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
                 toPitch({ball.velocity.x * fallSeconds * AIR_TRAVEL_SHARE,
                          ball.velocity.y * fallSeconds * AIR_TRAVEL_SHARE});
             meet = {ball.position.x + landing.x, ball.position.y + landing.y};
+            job = planJob(PlanBranch::RECEIVE, 1U);
           }
           else if (ballSpeed > EPSILON)
           {
@@ -1159,6 +1350,8 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
             const float along = offset.x * heading.x + offset.y * heading.y;
             if (along > 0.0f)
             {
+              // On its path, not where it is: a different spot.
+              job = planJob(PlanBranch::RECEIVE, 2U);
               const Vector2F ahead =
                   toPitch({heading.x * along, heading.y * along});
               meet = {ball.position.x + ahead.x, ball.position.y + ahead.y};
@@ -1176,7 +1369,8 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
           // every supporting player back toward the formation anchor for the
           // duration of each pass; drift gently forward and toward the ball
           // (rates per second, so a long pass does not accumulate a run).
-          target = player.movementTarget;
+          job = planJob(PlanBranch::FLIGHT_SUPPORT);
+          target = player.tacticalTarget;
           target.x += attackDirection *
                       MatchTuning::Shape::IN_FLIGHT_SUPPORT_ADVANCE_PER_SECOND *
                       dt;
@@ -1197,18 +1391,13 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
         player.intent = pressers[0] == &player ? PlayerIntent::CLAIM_LOOSE_BALL
                                                : PlayerIntent::COVER_PRESS;
         player.isPressing = true;
-        // Run at where the ball will be when he gets there.
-        const float lookaheadSeconds =
-            std::min(distance(player.position, pressurePosition) /
-                         std::max(currentTopSpeed(player), EPSILON),
-                     MatchTuning::Player::MAX_LOOSE_BALL_LOOKAHEAD_SECONDS);
-        const Vector2F lead = toPitch({ball.velocity.x * lookaheadSeconds,
-                                       ball.velocity.y * lookaheadSeconds});
-        target = {std::clamp(pressurePosition.x + lead.x,
-                             MatchTuning::Pitch::PLAYER_MIN_X,
+        job = planJob(pressers[0] == &player ? PlanBranch::LOOSE_BALL
+                                             : PlanBranch::LOOSE_COVER);
+        // Run at where he can first meet it on its path.
+        const Vector2F meet = interception(player).second;
+        target = {std::clamp(meet.x, MatchTuning::Pitch::PLAYER_MIN_X,
                              MatchTuning::Pitch::PLAYER_MAX_X),
-                  std::clamp(pressurePosition.y + lead.y,
-                             MatchTuning::Pitch::PLAYER_MIN_Y,
+                  std::clamp(meet.y, MatchTuning::Pitch::PLAYER_MIN_Y,
                              MatchTuning::Pitch::PLAYER_MAX_Y)};
         if (pressers[1] == &player)
         {
@@ -1228,6 +1417,9 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
           player.intent = PlayerIntent::MARK_OPPONENT;
           target = tightMarkPointBinturong(player, *tight, target);
           targetVelocity = tightMarkVelocityBinturong(*tight);
+          pinned = true;
+          job = planJob(PlanBranch::TIGHT_MARK, 0,
+                        static_cast<std::uint32_t>(slotOf(*tight)));
         }
         else if (teamPhase == TeamPhase::DEFENSIVE_TRANSITION)
         {
@@ -1236,6 +1428,7 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
                       MatchTuning::Shape::DEFENSIVE_TRANSITION_RECOVERY;
           target.y += (shapeAnchor.y - target.y) *
                       MatchTuning::Shape::DEFENSIVE_TRANSITION_BALL_COMPACTNESS;
+          job = planJob(PlanBranch::TRANSITION_RECOVER);
         }
         else
         {
@@ -1261,17 +1454,23 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
                    : MatchTuning::Shape::ATTACKING_TRANSITION_SUPPORT_ADVANCE);
           target.y += (shapeAnchor.y - target.y) *
                       MatchTuning::Shape::ATTACKING_TRANSITION_BALL_PULL;
-          if (transitionRunner &&
-              isOffside(player, player.isHomeTeam, lineFor(player.isHomeTeam)))
+          const bool checkingBack =
+              transitionRunner &&
+              isOffside(player, player.isHomeTeam, lineFor(player.isHomeTeam));
+          if (checkingBack)
           {
             target.x -= attackDirection * MatchTuning::Shape::ONSIDE_RECOVERY;
           }
+          job = planJob(transitionRunner ? PlanBranch::TRANSITION_RUN
+                                         : PlanBranch::TRANSITION_SUPPORT,
+                        checkingBack ? 1U : 0U);
         }
         else
         {
           player.intent = PlayerIntent::RECOVER_SHAPE;
           target.x -= attackDirection *
                       MatchTuning::Shape::DEFENSIVE_TRANSITION_RECOVERY;
+          job = planJob(PlanBranch::RECOVER);
         }
       }
     }
@@ -1282,8 +1481,10 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
         ball.passByHome != player.isHomeTeam &&
         player.intent != PlayerIntent::CLAIM_LOOSE_BALL)
     {
-      target = player.movementTarget;
+      target = player.tacticalTarget;
       targetVelocity = {0.0f, 0.0f};
+      pinned = true;
+      job = planJob(PlanBranch::AERIAL_HOLD);
     }
 
     if (goalkeeper)
@@ -1293,12 +1494,40 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
           player.intent == PlayerIntent::RECEIVE_PASS;
       player.intent = PlayerIntent::GOALKEEP;
       targetVelocity = {0.0f, 0.0f};
+      pinned = false;
       if (keepers[player.isHomeTeam ? 0 : 1].state == GoalkeeperState::DIVE)
         continue;
       // A keeper receiving a team-mate's pass steps onto the ball's path.
       if (!receivingBackPass)
+      {
         target = goalkeeperTargetBinturong(player, carrier);
+        job = planJob(PlanBranch::GOALKEEPER);
+      }
     }
+
+    // Unless it is pinned to a man, how fast his target moves is its move
+    // since his last plan, if he is still on the same job: the same branch
+    // and choices, no forced refresh since, and planned no more than one
+    // refresh ago. A new job is a new target, standing still.
+    const std::uint64_t sincePlan = stepCounter - player.plannedStep;
+    const bool sameJob =
+        player.planned && player.plannedJob == job &&
+        player.plannedEpoch == planEpoch && sincePlan > 0 &&
+        sincePlan <= MatchTuning::Timing::TACTICAL_REFRESH_STEPS;
+    if (!pinned && sameJob)
+    {
+      const Vector2F moved =
+          toMetres({target.x - player.plannedTarget.x,
+                    target.y - player.plannedTarget.y});
+      const float seconds = static_cast<float>(sincePlan) *
+                            MatchTuning::Timing::FIXED_STEP_SECONDS;
+      targetVelocity = {moved.x / seconds, moved.y / seconds};
+    }
+    player.plannedTarget = target;
+    player.plannedJob = job;
+    player.plannedStep = stepCounter;
+    player.plannedEpoch = planEpoch;
+    player.planned = true;
 
     // Keepers shuffle constantly to stay on the ball-goal line.
     const bool urgentTarget = player.intent == PlayerIntent::PRESS_BALL ||
@@ -1307,6 +1536,262 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
     player.tacticalTarget = target;
     player.targetVelocity = targetVelocity;
     player.urgentMovement = urgentTarget;
+    // No route planning yet (overtakes are added after), and no body
+    // orientation asked: he heads straight for it, his body following.
+    player.routeWaypoints = 0;
+    player.facingRequested = false;
+  }
+}
+
+void MatchEngine::planOvertakesBinturong()
+{
+  // Racing someone to the same target (movement targets plan 4a): two
+  // players running the same way to about the same point, the one behind
+  // closing and about to run into the other (predicted closest approach
+  // under the clearance) before he gets there. He goes round, on the
+  // shorter side that still wins the race and that nobody else is about to
+  // run into; else he carries on (and bumps).
+  const auto metresAt = [](Vector2F pitch) { return toMetres(pitch); };
+  const auto lengthOf = [](Vector2F v) { return std::sqrt(v.x * v.x + v.y * v.y); };
+  const auto clearanceFor = [](const MatchPlayer& a, const MatchPlayer& b)
+  {
+    return a.isHomeTeam == b.isHomeTeam ? OVERTAKE_TEAM_MATE_CLEARANCE_METRES
+                                        : OVERTAKE_OPPONENT_CLEARANCE_METRES;
+  };
+  // When he reaches a target moving at `velocity` (metres) from `from`,
+  // running at `speed`, after `already` seconds, and where it is then.
+  const auto arrival = [&](Vector2F from, Vector2F target, Vector2F velocity,
+                           float speed, float already)
+  {
+    Vector2F at = target;
+    float seconds = already;
+    for (int pass = 0; pass < 3; ++pass)
+    {
+      seconds = already + lengthOf({at.x - from.x, at.y - from.y}) / speed;
+      at = {target.x + velocity.x * seconds, target.y + velocity.y * seconds};
+    }
+    return std::pair{seconds, at};
+  };
+  // The closest two straight runs come within `window` seconds: one from
+  // `a` at `va`, the other from `b` at `vb`.
+  const auto closestApproach = [&](Vector2F a, Vector2F va, Vector2F b,
+                                   Vector2F vb, float window)
+  {
+    const Vector2F r{b.x - a.x, b.y - a.y};
+    const Vector2F v{vb.x - va.x, vb.y - va.y};
+    const float vv = v.x * v.x + v.y * v.y;
+    const float t =
+        vv > 1e-6f ? std::clamp(-(r.x * v.x + r.y * v.y) / vv, 0.0f, window)
+                   : 0.0f;
+    return std::pair{lengthOf({r.x + v.x * t, r.y + v.y * t}), t};
+  };
+  // When `who` reaches his target from `from` (after `already` seconds) at
+  // `speed`, by the waypoints of his route, and where it is then.
+  const auto finishTime = [&](const MatchPlayer& who, Vector2F from,
+                              float already, float speed)
+  {
+    float seconds = already;
+    Vector2F at = from;
+    const std::array<Vector2F, 2> waypoints{metresAt(who.movementTarget),
+                                            metresAt(who.nextTarget)};
+    for (int index = 0; index < std::min<int>(who.routeWaypoints, 2); ++index)
+    {
+      const Vector2F next = waypoints[static_cast<std::size_t>(index)];
+      seconds += lengthOf({next.x - at.x, next.y - at.y}) / speed;
+      at = next;
+    }
+    return arrival(at, metresAt(who.tacticalTarget), who.targetVelocity, speed,
+                   seconds);
+  };
+
+  for (std::size_t slot = 0; slot < players.size(); ++slot)
+  {
+    MatchPlayer& runner = players[slot];
+    if (!active(runner) || runner.isGoalkeeper ||
+        brainOf(runner.isHomeTeam) != BrainId::BINTURONG ||
+        bodyOf(runner.isHomeTeam) != BodyId::BINTURONG ||
+        ball.possessedBy == runner.player)
+    {
+      runner.overtaking = -1;
+      continue;
+    }
+    const Vector2F position = metresAt(runner.position);
+    const float speed = lengthOf(runner.velocity);
+    const Vector2F target = metresAt(runner.tacticalTarget);
+    // Where he is running now: his route's next waypoint, else his target.
+    const bool routed = runner.routeWaypoints > 0;
+    const Vector2F aimed =
+        routed ? metresAt(runner.movementTarget) : target;
+    const float toTarget = lengthOf({aimed.x - position.x, aimed.y - position.y});
+    if (speed < OVERTAKE_MINIMUM_SPEED || toTarget < 1e-3f)
+    {
+      runner.overtaking = -1;
+      continue;
+    }
+    // His run as he means it (straight at where he is running), not as his
+    // feet point mid-swerve: judged on that, a way round once found is kept
+    // until he is past (judged on his velocity, it switched itself off).
+    const Vector2F heading{(aimed.x - position.x) / toTarget,
+                           (aimed.y - position.y) / toTarget};
+    const Vector2F velocity{heading.x * speed, heading.y * speed};
+    // The one he would run into first, if any.
+    int ahead = -1;
+    float meetAt = 0.0f;
+    for (std::size_t other = 0; other < players.size(); ++other)
+    {
+      const MatchPlayer& leader = players[other];
+      if (other == slot || !active(leader)) continue;
+      const float leaderSpeed = lengthOf(leader.velocity);
+      if (leaderSpeed < OVERTAKE_MINIMUM_SPEED) continue;
+      const Vector2F leaderTarget = metresAt(leader.tacticalTarget);
+      if (lengthOf({leaderTarget.x - target.x, leaderTarget.y - target.y}) >
+          OVERTAKE_SAME_TARGET_METRES)
+        continue;
+      if ((leader.velocity.x * heading.x + leader.velocity.y * heading.y) /
+              leaderSpeed <
+          OVERTAKE_SAME_DIRECTION_COSINE)
+        continue;
+      const Vector2F leaderAt = metresAt(leader.position);
+      if ((leaderAt.x - position.x) * heading.x +
+              (leaderAt.y - position.y) * heading.y <=
+          0.0f)
+        continue;
+      const auto [closest, when] = closestApproach(
+          position, velocity, leaderAt, leader.velocity,
+          std::min(OVERTAKE_HORIZON_SECONDS, toTarget / speed));
+      if (closest >= clearanceFor(runner, leader)) continue;
+      if (ahead < 0 || when < meetAt)
+      {
+        ahead = static_cast<int>(other);
+        meetAt = when;
+      }
+    }
+    if (ahead < 0)
+    {
+      runner.overtaking = -1;
+      continue;
+    }
+    const MatchPlayer& leader = players[static_cast<std::size_t>(ahead)];
+    const float clearance = clearanceFor(runner, leader);
+    const Vector2F leaderAt = metresAt(leader.position);
+    const float leaderSpeed = lengthOf(leader.velocity);
+    // The race is to where he is running now: on a route, its next
+    // waypoint (a turn there is no place to be alongside someone), else his
+    // target. The overtake must be over before he gets there: level with
+    // the leader and clear of him by the clearance.
+    if (meetAt * speed + clearance > toTarget)
+    {
+      runner.overtaking = -1;
+      continue;
+    }
+    const float leaderTime =
+        routed ? lengthOf({aimed.x - leaderAt.x, aimed.y - leaderAt.y}) / leaderSpeed
+               : finishTime(leader, leaderAt, 0.0f, leaderSpeed).first;
+    // Where the leader will be when they draw level, and a waypoint beside
+    // him there, either side.
+    const Vector2F level{leaderAt.x + leader.velocity.x * meetAt,
+                         leaderAt.y + leader.velocity.y * meetAt};
+    const Vector2F across{-heading.y, heading.x};
+    struct Option
+    {
+      bool ok = false;
+      Vector2F waypoint{};
+      float metres = 0.0f;
+    };
+    std::array<Option, 2> options;
+    for (std::size_t index = 0; index < 2; ++index)
+    {
+      const float side = index == 0 ? 1.0f : -1.0f;
+      Option& option = options[index];
+      option.waypoint = {level.x + across.x * side * clearance,
+                         level.y + across.y * side * clearance};
+      const Vector2F toWaypoint{option.waypoint.x - position.x,
+                                option.waypoint.y - position.y};
+      const float firstLeg = lengthOf(toWaypoint);
+      const float firstTime = firstLeg / speed;
+      // Then on to where he is running (his route's next waypoint, or his
+      // target, moving or not).
+      const Vector2F onTo = routed ? aimed : finishTime(runner, option.waypoint,
+                                                        firstTime, speed).second;
+      const Vector2F toEnd{onTo.x - option.waypoint.x, onTo.y - option.waypoint.y};
+      const float time = firstTime + lengthOf(toEnd) / speed;
+      option.metres = time * speed;
+      // He must still win.
+      if (time >= leaderTime) continue;
+      // And nobody else may be about to run into his way round.
+      const Vector2F firstVelocity{toWaypoint.x / std::max(firstTime, 1e-3f),
+                                   toWaypoint.y / std::max(firstTime, 1e-3f)};
+      const float secondTime = std::max(lengthOf(toEnd) / speed, 1e-3f);
+      const Vector2F secondVelocity{toEnd.x / secondTime, toEnd.y / secondTime};
+      bool clear = true;
+      for (std::size_t other = 0; other < players.size() && clear; ++other)
+      {
+        const MatchPlayer& third = players[other];
+        if (other == slot || other == static_cast<std::size_t>(ahead) ||
+            !active(third))
+          continue;
+        const Vector2F at = metresAt(third.position);
+        const float room = clearanceFor(runner, third);
+        const float window = std::min(firstTime, OVERTAKE_HORIZON_SECONDS);
+        if (closestApproach(position, firstVelocity, at, third.velocity, window)
+                .first < room)
+          clear = false;
+        else if (firstTime < OVERTAKE_HORIZON_SECONDS)
+        {
+          const Vector2F later{at.x + third.velocity.x * firstTime,
+                               at.y + third.velocity.y * firstTime};
+          if (closestApproach(option.waypoint, secondVelocity, later,
+                              third.velocity,
+                              std::min(secondTime,
+                                       OVERTAKE_HORIZON_SECONDS - firstTime))
+                  .first < room)
+            clear = false;
+        }
+      }
+      option.ok = clear;
+    }
+    // The shorter side that works; the one he chose before unless the other
+    // is clearly shorter.
+    int chosen = -1;
+    for (int index = 0; index < 2; ++index)
+      if (options[static_cast<std::size_t>(index)].ok &&
+          (chosen < 0 || options[static_cast<std::size_t>(index)].metres <
+                             options[static_cast<std::size_t>(chosen)].metres))
+        chosen = index;
+    if (chosen >= 0 && runner.overtaking == ahead && runner.overtakeSide != 0)
+    {
+      const int previous = runner.overtakeSide > 0 ? 0 : 1;
+      if (previous != chosen && options[static_cast<std::size_t>(previous)].ok &&
+          options[static_cast<std::size_t>(previous)].metres <=
+              options[static_cast<std::size_t>(chosen)].metres +
+                  OVERTAKE_STICKY_METRES)
+        chosen = previous;
+    }
+    if (chosen < 0)
+    {
+      runner.overtaking = -1;
+      continue;
+    }
+    const Option& option = options[static_cast<std::size_t>(chosen)];
+    runner.overtaking = static_cast<std::int8_t>(ahead);
+    runner.overtakeSide = chosen == 0 ? 1 : -1;
+    const Vector2F waypoint = toPitch(option.waypoint);
+    if (routed)
+    {
+      // Ahead of his route: the way round first, then its next waypoint
+      // (its line through them as it was).
+      runner.nextTarget = runner.movementTarget;
+      runner.movementTarget = waypoint;
+      runner.routeWaypoints = 2;
+    }
+    else
+    {
+      runner.movementTarget = waypoint;
+      runner.nextTarget = runner.tacticalTarget;
+      runner.routeWaypoints = 1;
+      runner.routeApexOffset = 0.0f;
+      runner.routeOutwardRoom = clearance;
+    }
   }
 }
 
@@ -2603,9 +3088,9 @@ MatchEngine::PassOption MatchEngine::evaluatePassOptionBinturong(
                   std::clamp(receiver.position.y + lead.y, 0.0f, 1.0f)};
   if (intent == PassIntent::THROUGH_BALL)
   {
-    target.x += (receiver.movementTarget.x - target.x) *
+    target.x += (receiver.tacticalTarget.x - target.x) *
                 MatchTuning::Passing::THROUGH_BALL_TARGET_BLEND;
-    target.y += (receiver.movementTarget.y - target.y) *
+    target.y += (receiver.tacticalTarget.y - target.y) *
                 MatchTuning::Passing::THROUGH_BALL_TARGET_BLEND;
     target.x += direction * MatchTuning::Passing::THROUGH_BALL_FORWARD_LEAD;
     target.x = std::clamp(target.x, MatchTuning::Pitch::PLAYER_MIN_X,
@@ -2615,9 +3100,9 @@ MatchEngine::PassOption MatchEngine::evaluatePassOptionBinturong(
   }
   else if (intent == PassIntent::CROSS)
   {
-    target.x += (receiver.movementTarget.x - target.x) *
+    target.x += (receiver.tacticalTarget.x - target.x) *
                 MatchTuning::Passing::CROSS_TARGET_BLEND;
-    target.y += (receiver.movementTarget.y - target.y) *
+    target.y += (receiver.tacticalTarget.y - target.y) *
                 MatchTuning::Passing::CROSS_TARGET_BLEND;
   }
   const float travelDistance = distance(passer.position, target);
@@ -3590,10 +4075,10 @@ MatchEngine::RestartPlay MatchEngine::chooseCornerPlayBinturong(
     if (!active(candidate) || &candidate == &taker ||
         candidate.isHomeTeam != taker.isHomeTeam || candidate.isGoalkeeper)
       continue;
-    if (!inPenaltyArea(candidate.movementTarget, !taker.isHomeTeam)) continue;
-    const float targetMetres = distance(candidate.movementTarget, goal);
+    if (!inPenaltyArea(candidate.tacticalTarget, !taker.isHomeTeam)) continue;
+    const float targetMetres = distance(candidate.tacticalTarget, goal);
     const float sideMetres =
-        (candidate.movementTarget.y - MatchTuning::Pitch::CENTRE) *
+        (candidate.tacticalTarget.y - MatchTuning::Pitch::CENTRE) *
         (ball.position.y < MatchTuning::Pitch::CENTRE ? -1.0f : 1.0f) *
         MatchTuning::Pitch::WIDTH_METRES;
     const float threat = MatchRules::headerReachMetres(candidate.heightMetres,
@@ -3616,7 +4101,7 @@ MatchEngine::RestartPlay MatchEngine::chooseCornerPlayBinturong(
     return {RestartPlay::Kind::HOLD, std::nullopt, false};
   }
   PassOption delivery = evaluatePassOptionBinturong(taker, *target);
-  delivery.targetPoint = target->movementTarget;
+  delivery.targetPoint = target->tacticalTarget;
   delivery.passDistance = distance(taker.position, delivery.targetPoint);
   delivery.lofted = true;
   delivery.intent = PassIntent::CROSS;

@@ -377,10 +377,12 @@ class LapsDrill final : public TrainingDrill
     engine.startDrill(scenario);
     for (Runner& runner : runners)
     {
-      if (!runner.topSpeed)
-        if (const MatchPlayer* player = slotOf(engine, runner.id))
-          runner.topSpeed = player->maxSpeed;
-      engine.setDrillTarget(runner.id, corners[runner.next], true);
+      const MatchPlayer* player = slotOf(engine, runner.id);
+      if (!runner.topSpeed && player) runner.topSpeed = player->maxSpeed;
+      if (player && routes(engine, *player))
+        planLap(engine, runner);
+      else
+        engine.setDrillTarget(runner.id, corners[runner.next], true);
     }
   }
 
@@ -395,8 +397,29 @@ class LapsDrill final : public TrainingDrill
       const Vector2F at = player->position;
       runner.metres += metresBetween(runner.previous, at);
       runner.previous = at;
+      if (routes(engine, *player))
+      {
+        // As his body moves on from a corner (heading for a later one: his
+        // next waypoint, or with none left his target), the plan moves on
+        // one corner, so he never skips one (a way round someone ahead can
+        // push the second out of his route for a moment). A way round is
+        // not a corner.
+        const Vector2F heading = player->routeWaypoints > 0
+                                     ? player->movementTarget
+                                     : player->tacticalTarget;
+        for (std::size_t ahead = 1; ahead <= 2; ++ahead)
+        {
+          const Vector2F corner = corners[(runner.next + ahead) % 4];
+          if (heading.x == corner.x && heading.y == corner.y)
+          {
+            runner.next = (runner.next + 1) % 4;
+            planLap(engine, runner);
+            break;
+          }
+        }
+      }
       // Round the cone: on to the next once he is close to this one.
-      if (metresBetween(at, corners[runner.next]) <= CORNER_RADIUS_METRES)
+      else if (metresBetween(at, corners[runner.next]) <= CORNER_RADIUS_METRES)
       {
         runner.next = (runner.next + 1) % 4;
         runner.passing = false;
@@ -404,6 +427,8 @@ class LapsDrill final : public TrainingDrill
       }
       else
       {
+        // The drill's own way past, for a side without the Binturong
+        // brain's overtakes (movement targets plan 4a).
         steerPast(engine, runner, at);
       }
       // Spent, or hurt (he stops there, short of his best).
@@ -499,11 +524,14 @@ class LapsDrill final : public TrainingDrill
 
  private:
   /** The cones' distance in from the touchline and the goal line. */
-  static constexpr float CONE_INSET_METRES = 4.0f;
+  static constexpr float CONE_INSET_METRES = 9.0f;
   /** The runners' line round a cone, this far outside it. */
   static constexpr float OUTSIDE_METRES = 1.0f;
   /** Close enough to a corner to head for the next. */
   static constexpr float CORNER_RADIUS_METRES = 3.0f;
+  /** How far out a routed runner's line may be pushed round a corner (a
+   * design choice: room on the track outside the cones). */
+  static constexpr float LAP_OUTWARD_ROOM_METRES = 2.0f;
   /** Someone this close ahead, this near his line, blocks a runner. */
   static constexpr float BLOCKED_AHEAD_METRES = 3.0f;
   static constexpr float BLOCKED_SIDE_METRES = 1.0f;
@@ -528,6 +556,24 @@ class LapsDrill final : public TrainingDrill
     std::optional<double> doneAt;
     std::size_t place = 0;
   };
+
+  /** Whether his side plans his laps as a route (and overtakes): the
+   * Binturong brain and body (movement targets plan 4a). */
+  static bool routes(const MatchEngine& engine, const MatchPlayer& player)
+  {
+    return engine.getBrain(player.isHomeTeam) == BrainId::BINTURONG &&
+           engine.getBody(player.isHomeTeam) == BodyId::BINTURONG;
+  }
+
+  /** His plan, as a brain would make it: round the next two corners as
+   * waypoints, on to the one after; his line through each corner point (a
+   * metre outside its cone), with room outside to widen the turn. */
+  void planLap(MatchEngine& engine, const Runner& runner) const
+  {
+    engine.setDrillTarget(runner.id, corners[(runner.next + 2) % 4], true,
+                          {corners[runner.next], corners[(runner.next + 1) % 4]},
+                          0.0f, LAP_OUTWARD_ROOM_METRES);
+  }
 
   /**
    * Players do not steer round each other, they bump: a runner who catches
