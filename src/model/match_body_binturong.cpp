@@ -1513,6 +1513,8 @@ ContactProfile touchContactProfile(const FirstTouchKnobs& knob)
   profile.turnAngle = knob[K::TURN_ANGLE];
   profile.turnOutward = knob[K::TURN_OUTWARD];
   profile.turnInward = knob[K::TURN_INWARD];
+  profile.verticalTurnAngle = knob[K::VERTICAL_TURN_ANGLE];
+  profile.carriesOutVertical = true;
   profile.incomingPace = {knob[K::INCOMING_SPEED_ANGLE],
                           knob[K::INCOMING_SPEED_WEIGHT]};
   profile.fromBehind = {knob[K::APPROACH_ANGLE], knob[K::APPROACH_WEIGHT]};
@@ -1524,7 +1526,6 @@ ContactProfile touchContactProfile(const FirstTouchKnobs& knob)
   profile.pressure = {knob[K::PRESSURE_ANGLE], knob[K::PRESSURE_WEIGHT]};
   profile.referenceSpeed = knob[K::REFERENCE_SPEED];
   profile.pressureRadius = knob[K::PRESSURE_RADIUS];
-  profile.looseBallSurprise = knob[K::LOOSE_BALL_SURPRISE];
   profile.comfortGap = knob[K::COMFORT_GAP];
   profile.skillReduction = knob[K::SKILL_REDUCTION];
   profile.fatigueErrorGain = knob[K::FATIGUE_ERROR_GAIN];
@@ -1565,6 +1566,7 @@ ContactProfile strikeContactProfile(const StrikeKnobs& strikeKnobs,
   profile.paceChangeWeight = knob(K::PACE_CHANGE_WEIGHT);
   profile.turnAngle = knob(K::TURN_ANGLE);
   profile.turnPaceReference = knob(K::TURN_PACE_REFERENCE);
+  profile.verticalTurnAngle = knob(K::VERTICAL_TURN_ANGLE);
   profile.incomingPace =
       weights(K::INCOMING_PACE_ANGLE, K::INCOMING_PACE_WEIGHT);
   profile.ownSpeed = weights(K::OWN_SPEED_ANGLE, K::OWN_SPEED_WEIGHT);
@@ -1603,7 +1605,7 @@ ContactProfile strikeContactProfile(const StrikeKnobs& strikeKnobs,
 
 ContactAssessment MatchEngine::assessStrikeBinturong(
     const MatchPlayer& striker, const ContactProfile& profile, Vector2F aim,
-    float intendedSpeed, float elevation) const
+    float speed, float lift) const
 {
   // The ball where it lies, how far from his centre against the 0.9 m in
   // which he may strike it, and its height; he chose to strike it.
@@ -1612,10 +1614,11 @@ ContactAssessment MatchEngine::assessStrikeBinturong(
   moment.gap = distance(striker.position, ball.position);
   moment.reach = MatchTuning::Dribble::KICK_REACH_METRES;
   moment.height = ball.z * MatchTuning::Units::BALL_Z_METRES;
-  ContactAssessment contact = assessContactBinturong(
-      striker, profile, aim, intendedSpeed, moment, true);
-  contact.intendedElevation = elevation;
-  return contact;
+  // Strikes have no intent from the brain yet: the body reads the
+  // pressure (vertical contact plan step 4).
+  return assessContactBinturong(
+      striker, profile, aim, speed, lift, moment, 0.0f,
+      contactPressure(nearestOpponentDistance(striker), profile.pressureRadius));
 }
 
 void MatchEngine::recordStrikeBinturong(const MatchPlayer& striker,
@@ -1659,14 +1662,13 @@ void MatchEngine::recordStrikeBinturong(const MatchPlayer& striker,
   duel.homeTeam = striker.isHomeTeam;
   duel.chance.total = contact.angleDifficulty;
   duel.foul.total = contact.weightDifficulty;
-  for (const ContactFactor& factor : contact.factors)
+  for (std::size_t index = 0; index < CONTACT_FACTOR_COUNT; ++index)
   {
+    const ContactFactor& factor = contact.factors[index];
     if (factor.angleWeight != 0.0f)
-      duel.chance.add(factor.name, factor.source,
-                      factor.value * factor.angleWeight);
+      duel.chance.add(factor.name, factor.source, contact.added(index, ContactJob::ANGLE));
     if (factor.weightWeight != 0.0f)
-      duel.foul.add(factor.name, factor.source,
-                    factor.value * factor.weightWeight);
+      duel.foul.add(factor.name, factor.source, contact.added(index, ContactJob::WEIGHT));
   }
   for (ScoreBreakdown* breakdown : {&duel.chance, &duel.foul})
     if (const float clamp = breakdown->residual(); std::abs(clamp) > 1e-6f)
@@ -1734,8 +1736,7 @@ MatchEngine::Kick MatchEngine::strikeContactBinturong(
     profile.angleMissAbsoluteRange *= precision;
   }
   const ContactAssessment contact =
-      assessStrikeBinturong(striker, profile, aim, std::hypot(speed, lift),
-                            std::atan2(lift, speed));
+      assessStrikeBinturong(striker, profile, aim, speed, lift);
   const float skill = strikeSkillBinturong(striker, kind);
   const ContactOutcome outcome =
       carryOutContactBinturong(striker, profile, contact, skill);
@@ -1758,7 +1759,8 @@ MatchEngine::Kick MatchEngine::strikeContactBinturong(
 
 ContactAssessment MatchEngine::assessContactBinturong(
     const MatchPlayer& player, const ContactProfile& profile, Vector2F aim,
-    float intendedSpeed, const TouchMoment& moment, bool ownBall) const
+    float intendedSpeed, float intendedLift, const TouchMoment& moment,
+    float surprise, float pressure) const
 {
   ContactSituation situation;
   situation.facing = normalized(
@@ -1766,7 +1768,9 @@ ContactAssessment MatchEngine::assessContactBinturong(
        std::sin(player.facingAngle) * MatchTuning::Pitch::WIDTH_METRES});
   situation.aim = aim;
   situation.intendedSpeed = intendedSpeed;
+  situation.intendedLift = intendedLift;
   situation.ballVelocity = ball.velocity;
+  situation.ballVerticalSpeed = ball.velocityZ;
   situation.playerVelocity = player.velocity;
   situation.playerMaxSpeed = player.maxSpeed;
   situation.toBall = metricDirection(player.position, moment.contactPoint);
@@ -1775,62 +1779,176 @@ ContactAssessment MatchEngine::assessContactBinturong(
   situation.height = moment.height;
   situation.rightFooted =
       !player.player || player.player->getFoot() == Foot::Right;
-  situation.surprise =
-      contactSurprise(profile, ownBall, ball.isPass,
-                      ball.intendedReceiver == player.player);
-  situation.nearestOpponentMetres = nearestOpponentDistance(player);
+  situation.surprise = surprise;
+  situation.pressure = pressure;
   return assessContact(profile, situation);
 }
 
-float contactSurprise(const ContactProfile& profile, bool ownBall, bool isPass,
-                      bool meantForHim)
+float StretchMap::at(float degrees, float share) const
 {
-  // A ball he expected never surprises him.
-  return ownBall    ? 0.0f
-         : !isPass  ? profile.looseBallSurprise
-                    : (meantForHim ? 0.0f : 1.0f);
+  // The pair of points either side along each axis, and how far between
+  // them (held at the ends).
+  const auto bracket = [](const auto& points, float value)
+  {
+    const std::size_t count = points.size();
+    if (value <= points[0]) return std::pair<std::size_t, float>{0, 0.0f};
+    for (std::size_t index = 1; index < count; ++index)
+      if (value <= points[index])
+      {
+        const float span = points[index] - points[index - 1];
+        return std::pair<std::size_t, float>{
+            index - 1,
+            span > 0.0f ? (value - points[index - 1]) / span : 1.0f};
+      }
+    return std::pair<std::size_t, float>{count - 2, 1.0f};
+  };
+  const auto [row, rowShare] = bracket(angles, std::abs(degrees));
+  const auto [column, columnShare] = bracket(distances, share);
+  const auto blend = [&](std::size_t angle)
+  {
+    return values[angle][column] +
+           (values[angle][column + 1] - values[angle][column]) * columnShare;
+  };
+  return blend(row) + (blend(row + 1) - blend(row)) * rowShare;
+}
+
+float fromBehindValue(Vector2F from, Vector2F facing)
+{
+  using F = MatchTuning::FirstTouch;
+  const float cosine =
+      std::clamp(from.x * facing.x + from.y * facing.y, -1.0f, 1.0f);
+  const float degrees = std::acos(cosine) * 180.0f / std::numbers::pi_v<float>;
+  if (degrees <= F::BEHIND_CLEAR_DEGREES) return 0.0f;
+  if (degrees <= F::BEHIND_SQUARE_DEGREES)
+    return F::BEHIND_SQUARE_VALUE * (degrees - F::BEHIND_CLEAR_DEGREES) /
+           (F::BEHIND_SQUARE_DEGREES - F::BEHIND_CLEAR_DEGREES);
+  if (degrees < F::BEHIND_FULL_DEGREES)
+    return F::BEHIND_SQUARE_VALUE +
+           (1.0f - F::BEHIND_SQUARE_VALUE) *
+               (degrees - F::BEHIND_SQUARE_DEGREES) /
+               (F::BEHIND_FULL_DEGREES - F::BEHIND_SQUARE_DEGREES);
+  return 1.0f;
+}
+
+bool turnsOutward(const ContactSituation& situation)
+{
+  // In his own frame (metres, his centre at the origin): the ball where he
+  // meets it, the way he sends it, and where that path leaves his reach.
+  const Vector2F facing = situation.facing;
+  const Vector2F aim = situation.aim;
+  const Vector2F contact{situation.toBall.x * situation.gap,
+                         situation.toBall.y * situation.gap};
+  const auto cross = [](Vector2F a, Vector2F b) { return a.x * b.y - a.y * b.x; };
+  const auto dot = [](Vector2F a, Vector2F b) { return a.x * b.x + a.y * b.y; };
+  const float along = dot(contact, aim);
+  const float exitDistance =
+      -along + std::sqrt(std::max(along * along - dot(contact, contact) +
+                                      situation.reach * situation.reach,
+                                  0.0f));
+  const Vector2F exit{contact.x + aim.x * exitDistance,
+                      contact.y + aim.y * exitDistance};
+
+  // Inward if the path crosses his facing line (from his centre straight
+  // out the way he faces) before it leaves his reach...
+  const float sideways = cross(aim, facing);
+  if (std::abs(sideways) > EPSILON)
+  {
+    const float at = -cross(contact, facing) / sideways;
+    const Vector2F crossing{contact.x + aim.x * at, contact.y + aim.y * at};
+    if (at > EPSILON && at <= exitDistance && dot(crossing, facing) >= 0.0f)
+      return false;
+  }
+  // ...or leaves it between his facing line and the line from his centre
+  // through the ball (the narrower way round).
+  const float ballSide = cross(facing, situation.toBall);
+  if (situation.gap > EPSILON && std::abs(ballSide) > EPSILON)
+  {
+    const float sign = ballSide > 0.0f ? 1.0f : -1.0f;
+    if (cross(facing, exit) * sign >= 0.0f &&
+        cross(exit, situation.toBall) * sign >= 0.0f)
+      return false;
+  }
+  return true;
 }
 
 ContactAssessment assessContact(const ContactProfile& profile,
                                 const ContactSituation& situation)
 {
   constexpr float RIGHT_ANGLE = std::numbers::pi_v<float> * 0.5f;
+  constexpr std::size_t TURN_FACTOR = 1;
   const Vector2F facing = situation.facing;
   const Vector2F aim = situation.aim;
-  const float intendedSpeed = situation.intendedSpeed;
   const Vector2F ballVelocity = situation.ballVelocity;
   const Vector2F playerVelocity = situation.playerVelocity;
+  // What he means, in three dimensions: his aim seen from above, tipped up
+  // (or down) by the lift he means against his pace over the ground.
+  const float intendedSpeed =
+      std::hypot(situation.intendedSpeed, situation.intendedLift);
+  const float elevation =
+      intendedSpeed > EPSILON
+          ? std::atan2(situation.intendedLift, situation.intendedSpeed)
+          : 0.0f;
+  const float level = std::cos(elevation);
+  const std::array<float, 3> aim3{aim.x * level, aim.y * level,
+                                  std::sin(elevation)};
   ContactAssessment contact;
   contact.aim = aim;
   contact.intendedSpeed = intendedSpeed;
+  contact.intendedElevation = elevation;
 
-  // The line it came on: sending it back along it (a cushion) or on along
-  // it (taking it on) is no turn; whichever is nearer what he means is the
-  // reference, so a turn is 0-90 degrees. A still ball has no line.
-  const float incomingSpeed = length(ballVelocity);
+  // The line it came on, in three dimensions: sending it back along it (a
+  // cushion) or on along it (taking it on) is no turn; whichever is nearer
+  // what he means is the reference. A still ball has no line.
+  const std::array<float, 3> incoming3{ballVelocity.x, ballVelocity.y,
+                                       situation.ballVerticalSpeed};
+  const float incomingSpeed =
+      std::hypot(incoming3[0], incoming3[1], incoming3[2]);
   const bool moving = incomingSpeed > MatchTuning::Ball::STOP_SPEED;
-  const Vector2F incoming = moving ? Vector2F{ballVelocity.x / incomingSpeed,
-                                              ballVelocity.y / incomingSpeed}
-                                   : Vector2F{0.0f, 0.0f};
-  const bool rebound = moving && incoming.x * aim.x + incoming.y * aim.y < 0.0f;
-  const Vector2F line = !moving   ? aim
-                        : rebound ? Vector2F{-incoming.x, -incoming.y}
-                                  : incoming;
+  const bool rebound =
+      moving && incoming3[0] * aim3[0] + incoming3[1] * aim3[1] +
+                        incoming3[2] * aim3[2] <
+                    0.0f;
+  const float sense = rebound ? -1.0f : 1.0f;
+  const std::array<float, 3> line3 =
+      moving ? std::array<float, 3>{sense * incoming3[0] / incomingSpeed,
+                                    sense * incoming3[1] / incomingSpeed,
+                                    sense * incoming3[2] / incomingSpeed}
+             : aim3;
+  // Seen from above (none when the line is straight up or down: his aim),
+  // and its steepness.
+  const float lineLevel = std::hypot(line3[0], line3[1]);
+  const Vector2F line =
+      lineLevel > 1e-4f ? Vector2F{line3[0] / lineLevel, line3[1] / lineLevel}
+                        : aim;
+  const float lineElevation = std::atan2(line3[2], lineLevel);
   contact.incomingSpeed = incomingSpeed;
   contact.moving = moving;
   contact.rebound = rebound;
   contact.line = line;
-  // The two jobs: the turn off that line (+ anticlockwise), inward when it
-  // brings the ball nearer the line straight out the way he faces; and the
-  // pace change (- taking pace off, + adding it).
+  contact.lineElevation = lineElevation;
+  // The three jobs: the turn off that line seen from above (+
+  // anticlockwise), the turn in steepness (+ up), and the pace change in
+  // three dimensions (- taking pace off, + adding it).
   const float turn = std::atan2(line.x * aim.y - line.y * aim.x,
                                 line.x * aim.x + line.y * aim.y);
-  const bool outward = aim.x * facing.x + aim.y * facing.y <
-                       line.x * facing.x + line.y * facing.y;
+  const float verticalTurn = moving ? elevation - lineElevation : 0.0f;
+  const bool outward = turnsOutward(situation);
   const float paceChange = intendedSpeed - (moving ? incomingSpeed : 0.0f);
   contact.turn = turn;
+  contact.verticalTurn = verticalTurn;
   contact.outward = outward;
   contact.paceChange = paceChange;
+  const auto clamp01 = [](float value)
+  { return std::clamp(value, 0.0f, 1.0f); };
+  // A turn's size: 1 at 90 degrees, in proportion to the incoming pace
+  // below the profile's reference (strikes; the touch counts it in full).
+  const auto turnSize = [&](float radians)
+  {
+    return profile.turnPaceReference > 0.0f
+               ? clamp01(std::abs(radians) / RIGHT_ANGLE) *
+                     clamp01(incomingSpeed / profile.turnPaceReference)
+               : clamp01(std::abs(radians) / RIGHT_ANGLE);
+  };
 
   // How hard each job is: its size, then the conditions (each 0-1). How
   // fast it meets him and where from are read relative to him: a ball
@@ -1838,29 +1956,26 @@ ContactAssessment assessContact(const ContactProfile& profile,
   const Vector2F toBall = situation.toBall;
   const Vector2F relative{ballVelocity.x - playerVelocity.x,
                           ballVelocity.y - playerVelocity.y};
-  const float meetingSpeed = length(relative);
-  // Where it comes from: back along its path (relative to him), or where it
-  // lies if it keeps pace with him.
+  const float relativeLevel = length(relative);
+  const float meetingSpeed =
+      std::hypot(relative.x, relative.y, situation.ballVerticalSpeed);
+  // Where it comes from seen from above: back along its path (relative to
+  // him), or where it lies if it keeps pace with him.
   const Vector2F from =
-      meetingSpeed > MatchTuning::Ball::STOP_SPEED
-          ? Vector2F{-relative.x / meetingSpeed, -relative.y / meetingSpeed}
+      relativeLevel > MatchTuning::Ball::STOP_SPEED
+          ? Vector2F{-relative.x / relativeLevel, -relative.y / relativeLevel}
           : toBall;
-  // Which side of him it is on (+ his right), for the weaker foot.
+  // Which foot: the side of his facing line it is on (+ his right). On
+  // the line he uses his stronger foot.
   const float side = facing.y * toBall.x - facing.x * toBall.y;
-  const float weakSide = situation.rightFooted ? std::max(-side, 0.0f)
-                                               : std::max(side, 0.0f);
-  const auto clamp01 = [](float value)
-  { return std::clamp(value, 0.0f, 1.0f); };
+  const float weakSide =
+      (situation.rightFooted ? side < 0.0f : side > 0.0f) ? 1.0f : 0.0f;
   contact.factors = {{
       {"pace to take off or add", TermSource::SITUATION,
        clamp01(std::abs(paceChange) / profile.referenceSpeed), 0.0f,
        profile.paceChangeWeight},
       {outward ? "turning it outward" : "turning it inward",
-       TermSource::SITUATION,
-       profile.turnPaceReference > 0.0f
-           ? clamp01(std::abs(turn) / RIGHT_ANGLE) *
-                 clamp01(incomingSpeed / profile.turnPaceReference)
-           : clamp01(std::abs(turn) / RIGHT_ANGLE),
+       TermSource::SITUATION, turnSize(turn),
        profile.turnAngle *
            (outward ? profile.turnOutward : profile.turnInward),
        0.0f},
@@ -1868,15 +1983,18 @@ ContactAssessment assessContact(const ContactProfile& profile,
        clamp01(meetingSpeed / profile.referenceSpeed),
        profile.incomingPace.angle, profile.incomingPace.weight},
       {"coming from behind him", TermSource::SITUATION,
-       clamp01((1.0f - (from.x * facing.x + from.y * facing.y)) * 0.5f),
-       profile.fromBehind.angle, profile.fromBehind.weight},
+       fromBehindValue(from, facing), profile.fromBehind.angle,
+       profile.fromBehind.weight},
       {"his own speed", TermSource::SITUATION,
        clamp01(length(playerVelocity) /
                std::max(situation.playerMaxSpeed, EPSILON)),
        profile.ownSpeed.angle, profile.ownSpeed.weight},
       {"stretching for it", TermSource::SITUATION,
-       clamp01((situation.gap - profile.comfortGap) /
-               std::max(situation.reach - profile.comfortGap, EPSILON)),
+       clamp01(profile.stretchMap.at(
+           std::acos(std::clamp(toBall.x * facing.x + toBall.y * facing.y,
+                                -1.0f, 1.0f)) *
+               180.0f / std::numbers::pi_v<float>,
+           situation.gap / std::max(situation.reach, EPSILON))),
        profile.stretch.angle, profile.stretch.weight},
       {"on his weaker foot", TermSource::ATTRIBUTE, clamp01(weakSide),
        profile.weakerFoot.angle, profile.weakerFoot.weight},
@@ -1885,25 +2003,40 @@ ContactAssessment assessContact(const ContactProfile& profile,
        profile.offGround.angle, profile.offGround.weight},
       {"not expecting it", TermSource::SITUATION, situation.surprise,
        profile.surprise.angle, profile.surprise.weight},
-      {"pressure", TermSource::SITUATION,
-       clamp01(1.0f -
-               situation.nearestOpponentMetres / profile.pressureRadius),
+      {"pressure", TermSource::SITUATION, clamp01(situation.pressure),
        profile.pressure.angle, profile.pressure.weight},
       // Where he sends it against where he faces: 0 straight ahead, a half
       // square across him, 1 straight behind.
       {"across or behind his body", TermSource::SITUATION,
        clamp01((1.0f - (aim.x * facing.x + aim.y * facing.y)) * 0.5f),
        profile.acrossBody.angle, profile.acrossBody.weight},
+      {verticalTurn > 0.0f ? "turning it up" : "turning it down",
+       TermSource::SITUATION, turnSize(verticalTurn), 0.0f, 0.0f,
+       profile.verticalTurnAngle},
   }};
-  float angleSum = 0.0f;
-  float weightSum = 0.0f;
-  for (const ContactFactor& factor : contact.factors)
-  {
-    angleSum += factor.value * factor.angleWeight;
-    weightSum += factor.value * factor.weightWeight;
-  }
-  contact.angleDifficulty = clamp01(angleSum);
-  contact.weightDifficulty = clamp01(weightSum);
+  // The conditions weigh on the turn in steepness as on the turn seen from
+  // above.
+  for (std::size_t index = 0; index < CONTACT_FACTOR_COUNT; ++index)
+    if (index != TURN_FACTOR && index != VERTICAL_TURN_FACTOR)
+      contact.factors[index].verticalWeight = contact.factors[index].angleWeight;
+  std::array<float, 3> sums{};
+  constexpr std::array<ContactJob, 3> JOBS{
+      ContactJob::ANGLE, ContactJob::WEIGHT, ContactJob::VERTICAL};
+  for (std::size_t job = 0; job < JOBS.size(); ++job)
+    for (std::size_t index = 0; index < CONTACT_FACTOR_COUNT; ++index)
+      if (index != WEAK_FOOT_FACTOR)
+        sums[job] += contact.factors[index].value *
+                     contact.factors[index].weightFor(JOBS[job]);
+  // His weaker foot makes every job harder by its share: little on an easy
+  // one, a lower ceiling on a hard one.
+  const ContactFactor& weakFoot = contact.factors[WEAK_FOOT_FACTOR];
+  contact.weakFootAngle = sums[0] * weakFoot.value * weakFoot.angleWeight;
+  contact.weakFootWeight = sums[1] * weakFoot.value * weakFoot.weightWeight;
+  contact.weakFootVertical =
+      sums[2] * weakFoot.value * weakFoot.verticalWeight;
+  contact.angleDifficulty = clamp01(sums[0] + contact.weakFootAngle);
+  contact.weightDifficulty = clamp01(sums[1] + contact.weakFootWeight);
+  contact.verticalDifficulty = clamp01(sums[2] + contact.weakFootVertical);
   return contact;
 }
 
@@ -2024,6 +2157,32 @@ ContactOutcome MatchEngine::carryOutContactBinturong(
     elevation = std::clamp(elevation, 0.0f, 1.4f);
   }
 
+  // The vertical angle job (profiles that carry it out): the turn in
+  // steepness off the line, done as the angle job is, with its technique
+  // values. A failure mostly under-turns: the ball stays nearer the
+  // steepness it came at. Its jitter is a share of the turn, so a ball
+  // kept along the ground stays on it. Only such a profile draws these.
+  if (profile.carriesOutVertical)
+  {
+    constexpr float RIGHT_ANGLE = std::numbers::pi_v<float> * 0.5f;
+    outcome.verticalFailChance =
+        clamp01((profile.angleFailBase +
+                 contact.verticalDifficulty * profile.angleFailRange) *
+                scale);
+    const Job verticalJob = carryOut(
+        outcome.verticalFailChance,
+        profile.angleMissBase +
+            contact.verticalDifficulty * profile.angleMissRange,
+        profile.underTurnShare,
+        profile.angleJitter * scale *
+            std::min(std::abs(contact.verticalTurn) / RIGHT_ANGLE, 1.0f));
+    outcome.verticalFailed = verticalJob.failed;
+    elevation = std::clamp(contact.lineElevation +
+                               contact.verticalTurn * (1.0f - verticalJob.miss) +
+                               verticalJob.jitter,
+                           -RIGHT_ANGLE, RIGHT_ANGLE);
+  }
+
   // What he actually did. The angle: the turn, short by the miss (or past
   // it), plus the jitter in radians. The weight: heavier than meant by the
   // miss's share of the pace change (or lighter), plus the jitter's share.
@@ -2098,7 +2257,8 @@ TouchResult MatchEngine::firstTouchBinturong(const MatchPlayer& player,
   // First Touch.
   const ContactProfile profile = touchProfileBinturong();
   const ContactAssessment contact = assessContactBinturong(
-      player, profile, aim, intendedSpeed, moment, ownBall);
+      player, profile, aim, intendedSpeed, intent.liftSpeed, moment,
+      ownBall ? 0.0f : intent.surprise, intent.pressure);
   const float skill = player.derivedStat(DerivedStat::FIRST_TOUCH);
   const ContactOutcome outcome =
       carryOutContactBinturong(player, profile, contact, skill);
@@ -2106,6 +2266,7 @@ TouchResult MatchEngine::firstTouchBinturong(const MatchPlayer& player,
 
   TouchResult result;
   result.velocity = outcome.velocity;
+  result.verticalSpeed = outcome.verticalSpeed;
   // Signed along the turn: - short of it, + past it.
   result.angleError =
       (outcome.achievedTurn - turn) * (turn < 0.0f ? -1.0f : 1.0f);
@@ -2126,14 +2287,14 @@ TouchResult MatchEngine::firstTouchBinturong(const MatchPlayer& player,
     duel.homeTeam = player.isHomeTeam;
     duel.chance.total = contact.angleDifficulty;
     duel.foul.total = contact.weightDifficulty;
-    for (const ContactFactor& factor : contact.factors)
+    for (std::size_t index = 0; index < CONTACT_FACTOR_COUNT; ++index)
     {
+      const ContactFactor& factor = contact.factors[index];
       if (factor.angleWeight != 0.0f)
         duel.chance.add(factor.name, factor.source,
-                        factor.value * factor.angleWeight);
+                        contact.added(index, ContactJob::ANGLE));
       if (factor.weightWeight != 0.0f)
-        duel.foul.add(factor.name, factor.source,
-                      factor.value * factor.weightWeight);
+        duel.foul.add(factor.name, factor.source, contact.added(index, ContactJob::WEIGHT));
     }
     for (ScoreBreakdown* breakdown : {&duel.chance, &duel.foul})
       if (const float clamp = breakdown->residual(); std::abs(clamp) > 1e-6f)

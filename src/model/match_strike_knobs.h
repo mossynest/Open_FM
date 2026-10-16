@@ -56,6 +56,7 @@ enum class StrikeKnob : std::uint8_t
   PACE_CHANGE_WEIGHT,
   TURN_ANGLE,
   TURN_PACE_REFERENCE,
+  VERTICAL_TURN_ANGLE,
   INCOMING_PACE_ANGLE,
   INCOMING_PACE_WEIGHT,
   OWN_SPEED_ANGLE,
@@ -112,6 +113,7 @@ inline constexpr std::array<StrikeKnobInfo, STRIKE_KNOB_COUNT> STRIKE_KNOBS{{
     {"Pace change: weight", "Factors", 0.0f, 1.5f, ""},
     {"Turn: angle", "Factors", 0.0f, 1.5f, ""},
     {"Turn: pace reference", "Factors", 0.0f, 25.0f, "m/s"},
+    {"Vertical turn: angle", "Factors", 0.0f, 1.5f, ""},
     {"Incoming pace: angle", "Factors", 0.0f, 1.0f, ""},
     {"Incoming pace: weight", "Factors", 0.0f, 1.0f, ""},
     {"Own speed: angle", "Factors", 0.0f, 1.0f, ""},
@@ -163,6 +165,8 @@ constexpr float strikeProfileDefault(StrikeKnob knob)
     case StrikeKnob::PACE_CHANGE_WEIGHT: return P::PACE_CHANGE;
     case StrikeKnob::TURN_ANGLE: return P::TURN_ANGLE;
     case StrikeKnob::TURN_PACE_REFERENCE: return P::TURN_PACE_REFERENCE;
+    // The turn in steepness weighs as the turn seen from above, to start.
+    case StrikeKnob::VERTICAL_TURN_ANGLE: return P::TURN_ANGLE;
     case StrikeKnob::INCOMING_PACE_ANGLE:
     case StrikeKnob::INCOMING_PACE_WEIGHT: return P::INCOMING_PACE;
     case StrikeKnob::OWN_SPEED_ANGLE:

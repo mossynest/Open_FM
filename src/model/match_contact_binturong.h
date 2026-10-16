@@ -13,6 +13,10 @@
 // engine's assessContactBinturong fills a ContactSituation from the match
 // and calls assessContact. Defined in match_body_binturong.cpp.
 
+#include <algorithm>
+#include <cmath>
+#include <numbers>
+
 #include "model/match_engine.h"
 #include "model/match_first_touch_knobs.h"
 #include "model/match_strike_knobs.h"
@@ -23,10 +27,14 @@ struct ContactSituation
 {
   /** The way his body faces. */
   Vector2F facing{1.0f, 0.0f};
-  /** Where he means to send it, and how fast (m/s). */
+  /** Where he means to send it seen from above, how fast over the ground
+   * (m/s), and how fast upward (m/s, + up). */
   Vector2F aim{1.0f, 0.0f};
   float intendedSpeed = 0.0f;
+  float intendedLift = 0.0f;
+  /** The ball's velocity over the ground and upward (m/s, + up). */
   Vector2F ballVelocity{0.0f, 0.0f};
+  float ballVerticalSpeed = 0.0f;
   Vector2F playerVelocity{0.0f, 0.0f};
   float playerMaxSpeed = 1.0f;
   /** From his centre to where he meets it, how far (m) against his reach
@@ -36,20 +44,47 @@ struct ContactSituation
   float reach = 1.0f;
   float height = 0.0f;
   bool rightFooted = true;
-  /** How little he expected it (0-1, contactSurprise). */
+  /** How little he expected it (0-1): the brain's read. */
   float surprise = 0.0f;
-  float nearestOpponentMetres = 100.0f;
+  /** How pressed he is (0-1, contactPressure). */
+  float pressure = 0.0f;
 };
+
+/** Whether a ball met `gap` metres from his centre, in direction `toBall`
+ * (metric unit), is in his dead zone: beyond the comfort gap and more than
+ * `angleDegrees` round from his `facing`, where he cannot touch it. */
+inline bool inTouchDeadZone(Vector2F facing, Vector2F toBall, float gap,
+                            float comfortGap, float angleDegrees)
+{
+  if (gap <= comfortGap) return false;
+  const float cosine = facing.x * toBall.x + facing.y * toBall.y;
+  return cosine < std::cos(angleDegrees * std::numbers::pi_v<float> / 180.0f);
+}
+
+/** How far the ball comes from behind him (0-1), by the angle between where
+ * it comes from and his `facing` (both metric unit): 0 within 45 degrees
+ * of his front, up to 0.15 at square, up to 1 at 165 degrees, 1 beyond
+ * (MatchTuning::FirstTouch::BEHIND_*). */
+float fromBehindValue(Vector2F from, Vector2F facing);
+
+/** Whether sending the ball on along `aim` from where he meets it turns it
+ * outward (likely the outside of his foot) rather than inward (the
+ * instep): inward if its path crosses his facing line (his centre straight
+ * out the way he faces) before leaving his reach, or leaves his reach
+ * between that line and the line from his centre through the ball. A
+ * proxy, being tried out in the contact view. */
+bool turnsOutward(const ContactSituation& situation);
+
+/** How pressed he is (0-1): 1 with the nearest opponent on top of him, 0
+ * at `radiusMetres` and beyond. */
+inline float contactPressure(float nearestOpponentMetres, float radiusMetres)
+{
+  return std::clamp(1.0f - nearestOpponentMetres / radiusMetres, 0.0f, 1.0f);
+}
 
 /** How hard a contact is. No random draws. */
 ContactAssessment assessContact(const ContactProfile& profile,
                                 const ContactSituation& situation);
-
-/** How little he expected the ball: none for his own or one he chose to
- * strike, the profile's share for a loose ball, all for a pass meant for
- * someone else. */
-float contactSurprise(const ContactProfile& profile, bool ownBall, bool isPass,
-                      bool meantForHim);
 
 /** The touch knobs as a contact profile (first and dribble touches). */
 ContactProfile touchContactProfile(const FirstTouchKnobs& knobs);

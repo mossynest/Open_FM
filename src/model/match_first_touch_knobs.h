@@ -54,6 +54,7 @@ enum class TouchKnob : std::uint8_t
   TURN_ANGLE,
   TURN_OUTWARD,
   TURN_INWARD,
+  VERTICAL_TURN_ANGLE,
   INCOMING_SPEED_ANGLE,
   INCOMING_SPEED_WEIGHT,
   APPROACH_ANGLE,
@@ -73,9 +74,9 @@ enum class TouchKnob : std::uint8_t
   // How the factors are measured (body).
   REFERENCE_SPEED,
   PRESSURE_RADIUS,
-  LOOSE_BALL_SURPRISE,
-  // Reach (Binturong bodies only, feet height).
+  // Reach (Binturong bodies only): feet height, and the dead zone behind.
   FEET_REACH,
+  DEAD_ZONE_ANGLE,
   // Timing (brain): when he plays it.
   COMFORT_GAP,
   WAIT_GAIN,
@@ -159,6 +160,8 @@ inline constexpr std::array<TouchKnobInfo, TOUCH_KNOB_COUNT> TOUCH_KNOBS{{
      3.0f, "x"},
     {"Turn inward", "Factors", TouchKnobDefaults::F::TURN_INWARD, 0.25f,
      1.5f, "x"},
+    {"Vertical turn: angle", "Factors",
+     TouchKnobDefaults::F::VERTICAL_TURN_ANGLE, 0.0f, 1.5f, ""},
     {"Incoming pace: angle", "Factors",
      TouchKnobDefaults::F::INCOMING_SPEED.angle, 0.0f, 1.0f, ""},
     {"Incoming pace: weight", "Factors",
@@ -196,11 +199,11 @@ inline constexpr std::array<TouchKnobInfo, TOUCH_KNOB_COUNT> TOUCH_KNOBS{{
      10.0f, 40.0f, "m/s"},
     {"Pressure radius", "Measures",
      TouchKnobDefaults::F::PRESSURE_RADIUS_METRES, 0.5f, 8.0f, "m"},
-    {"Loose ball surprise", "Measures",
-     TouchKnobDefaults::F::LOOSE_BALL_SURPRISE, 0.0f, 1.0f, ""},
     // Reach
     {"Feet reach", "Reach",
      TouchKnobDefaults::Ball::OUTFIELD_CONTROL_RADIUS_METRES, 0.5f, 1.5f, "m"},
+    {"Dead zone from", "Reach", TouchKnobDefaults::F::DEAD_ZONE_DEGREES, 90.0f,
+     180.0f, "deg"},
     // Timing
     {"Comfort gap", "Timing", TouchKnobDefaults::F::COMFORT_GAP_METRES, 0.0f,
      0.8f, "m"},

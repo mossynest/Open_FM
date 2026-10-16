@@ -233,6 +233,7 @@ void MatchSandboxScene::update(float /*deltaTime*/)
   if (drill_view == 3)
   {
     drill_view = 0;
+    mode = 3;
     guiView->overlayScene(std::make_unique<ContactViewScene>(guiView));
   }
   if (!drill_pending.empty())
@@ -310,8 +311,9 @@ void MatchSandboxScene::render()
                  "Pick two clubs and both sides' tactics, then play the "
                  "match as the home side, or run a drill that isolates one "
                  "behaviour. Nothing here is saved.");
-  constexpr std::array<const char*, 3> MODES{"Match", "Drills", "Training"};
-  UI::segmented("##mode", mode, MODES, 330.0f * scale);
+  constexpr std::array<const char*, 4> MODES{"Match", "Drills", "Training",
+                                           "Visualisers"};
+  UI::segmented("##mode", mode, MODES, 460.0f * scale);
   ImGui::Spacing();
   if (mode == 1)
   {
@@ -322,6 +324,12 @@ void MatchSandboxScene::render()
   if (mode == 2)
   {
     renderTraining();
+    ImGui::End();
+    return;
+  }
+  if (mode == 3)
+  {
+    renderVisualisers();
     ImGui::End();
     return;
   }
@@ -357,13 +365,6 @@ void MatchSandboxScene::renderDrills()
   ImGui::TextDisabled("Movement drills run by the AI, by a scripted bot on "
                       "the stick, or by you. Shooting drills are on the way.");
   ImGui::PopTextWrapPos();
-  ImGui::Spacing();
-  if (ImGui::Button("Contact difficulty"))
-    guiView->overlayScene(std::make_unique<ContactViewScene>(guiView));
-  if (ImGui::IsItemHovered())
-    ImGui::SetTooltip("How hard a touch or strike is across his reach: "
-                      "where he meets it, where it comes from, where he "
-                      "sends it (Binturong body).");
   UI::endCard();
   ImGui::SameLine();
   if (drills.empty()) return;
@@ -398,6 +399,26 @@ void MatchSandboxScene::renderDrills()
       ImGui::SetTooltip("A grid of spots, many shots each: conversion against "
                         "the engine's xG as a heatmap, and the calibration.");
   }
+  UI::endCard();
+}
+
+void MatchSandboxScene::renderVisualisers()
+{
+  const float scale = Theme::scale();
+  UI::beginCard("##visualiser_page", "Contact difficulty",
+                ImVec2(0.0f, 0.0f), true);
+  ImGui::PushTextWrapPos(0.0f);
+  ImGui::TextUnformatted(
+      "How hard a touch or strike is across his reach (Binturong body, "
+      "default knobs): his reach circle coloured by where he meets the ball, "
+      "a ring by where it comes from and a ring by where he sends it, with "
+      "every condition's share of the angle and weight jobs.");
+  ImGui::PopTextWrapPos();
+  ImGui::Spacing();
+  if (UI::primaryButton("Open"))
+    guiView->overlayScene(std::make_unique<ContactViewScene>(guiView));
+  ImGui::SameLine(0.0f, Theme::Space::L * scale);
+  ImGui::TextDisabled("Also: match_sandbox --contact-view");
   UI::endCard();
 }
 

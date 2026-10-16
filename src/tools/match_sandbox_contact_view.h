@@ -47,21 +47,28 @@ class ContactViewScene : public GUIScene
     /** Where the ball comes from, and how fast (m/s). */
     float incomingFrom = 0.0f;
     float incomingPace = 12.0f;
+    /** The ball's speed up (+) or down (-) as it reaches him (m/s). */
+    float verticalSpeed = 0.0f;
     float height = 0.0f;
     float aim = 0.0f;
     float intendedSpeed = 3.0f;
+    /** The speed up (+) or down he means it to leave with (m/s). */
+    float lift = 0.0f;
     /** 0 a pass to him, 1 a loose ball, 2 a pass meant for someone else
      * (a strike is always his own ball). */
     int expectation = 0;
     float opponentMetres = 6.0f;
     /** Where he meets it, metres from his centre (x right, y up). */
-    ImVec2 probe{0.15f, 0.35f};
+    ImVec2 probe{0.0f, 0.30f};
   };
 
   [[nodiscard]] bool isTouch() const { return inputs.contact == 0; }
   /** The chosen contact's profile with the default knobs. */
   [[nodiscard]] ContactProfile chosenProfile() const;
   [[nodiscard]] float reach() const;
+  /** Whether a first touch cannot meet the ball at `point` (metres): his
+   * dead zone behind him (strikes have none). */
+  [[nodiscard]] bool inDeadZone(ImVec2 point) const;
   /** How hard it is met at `point` (metres), coming from `from` and sent
    * to `aim` (compass degrees). */
   [[nodiscard]] ContactAssessment assess(ImVec2 point, float from,
@@ -75,10 +82,17 @@ class ContactViewScene : public GUIScene
   void renderPanel(float width);
   void renderCircle(ImVec2 size);
   void renderBreakdown(float width);
+  /** The ball seen from the side: the steepness it arrives at and the one
+   * he means. */
+  void renderSideView(const ContactAssessment& contact);
+  /** The stretch map, editable; it goes into every contact shown here. */
+  void renderStretchMap();
 
   Inputs inputs;
   /** The chosen contact's profile, for this frame. */
   ContactProfile profile;
+  /** The stretch map being tried (starts as the game.s). */
+  StretchMap stretchMap;
   /** 0 zones, 1 angle job, 2 weight job, 3 + factor index. */
   int view = 0;
   /** What a drag on the circle moves: 0 none, 1 where he meets it, 2 where

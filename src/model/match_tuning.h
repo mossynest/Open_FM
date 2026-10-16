@@ -312,6 +312,10 @@ struct MatchTuning final
     // ball will pass, not the moment it comes into reach.
     /** About a foot from his centre: any closer is as good as it gets. */
     static constexpr float COMFORT_GAP_METRES = 0.3f;
+    /** Beyond the comfort gap he cannot touch a ball more than this far round
+     * from his facing (degrees, either side): behind him is a dead zone
+     * (Binturong bodies, outfielders). */
+    static constexpr float DEAD_ZONE_DEGREES = 120.0f;
     /** He waits only for a point at least this much closer... */
     static constexpr float WAIT_GAIN_METRES = 0.05f;
     /** ...that is inside his reach by this margin. */
@@ -343,32 +347,64 @@ struct MatchTuning final
     };
     /** The jobs' sizes: the pace change (1 at the reference speed) counts
      * for the weight, the turn (1 at 90°) for the angle, times the inward
-     * or outward multiplier (towards or away from the line straight out the
-     * way he faces). */
+     * or outward multiplier (turnsOutward: the instep or the outside of his
+     * foot). */
     static constexpr float PACE_CHANGE_WEIGHT = 0.6f;
     static constexpr float TURN_ANGLE = 0.6f;
     static constexpr float TURN_OUTWARD = 1.5f;
     static constexpr float TURN_INWARD = 0.75f;
+    /** The turn in steepness (1 at 90 degrees), up or down alike: as the
+     * turn seen from above, to start (vertical contact plan). */
+    static constexpr float VERTICAL_TURN_ANGLE = TURN_ANGLE;
     // Conditions, each 0-1, adding to both difficulties with their weights.
     /** Incoming ball speed (1 at the reference speed). */
     static constexpr FactorWeights INCOMING_SPEED{0.15f, 0.10f};
     /** Where it comes from against where he faces (1 from behind). */
     static constexpr FactorWeights APPROACH{0.20f, 0.10f};
+    /** How "from behind" grows with the angle off his facing (degrees, the
+     * touch and every strike): nothing in front of him, a little towards
+     * square, then steeply round to a full block behind him. */
+    static constexpr float BEHIND_CLEAR_DEGREES = 45.0f;
+    static constexpr float BEHIND_SQUARE_DEGREES = 90.0f;
+    static constexpr float BEHIND_SQUARE_VALUE = 0.15f;
+    static constexpr float BEHIND_FULL_DEGREES = 165.0f;
     /** His own speed against his top speed. */
     static constexpr FactorWeights OWN_MOVEMENT{0.10f, 0.10f};
-    /** How far he reaches for it (0 within the comfort gap). */
+    /** How far he reaches for it (the stretch map below). */
     static constexpr FactorWeights STRETCH{0.15f, 0.15f};
-    /** On the side of his weaker foot (by how far to that side). */
+    /** The stretch map (StretchMap, the touch and every strike): stretch
+     * (0-1) at each angle off his facing (degrees, rows) and distance from
+     * his centre as a share of his reach (columns), blended in between.
+     * Edited live in the contact view. As set: easiest in front of him,
+     * rising faster out to his sides, and a ball behind him awkward even
+     * close in (beyond 120 degrees and 0.3 of his reach is the dead zone
+     * for a touch). */
+    static constexpr std::array<float, 6> STRETCH_ANGLES{0.0f,   45.0f,
+                                                         90.0f,  120.0f,
+                                                         150.0f, 180.0f};
+    static constexpr std::array<float, 6> STRETCH_DISTANCES{
+        0.000f, 0.150f, 0.300f, 0.500f, 0.700f, 1.000f};
+    static constexpr std::array<std::array<float, 6>, 6> STRETCH_VALUES{{
+        {0.000f, 0.000f, 0.000f, 0.000f, 0.250f, 0.500f},
+        {0.000f, 0.000f, 0.000f, 0.150f, 0.350f, 0.750f},
+        {0.000f, 0.200f, 0.050f, 0.150f, 0.400f, 1.000f},
+        {0.000f, 0.200f, 0.150f, 0.286f, 0.750f, 1.000f},
+        {0.300f, 0.300f, 0.300f, 0.286f, 1.000f, 1.000f},
+        {0.300f, 0.300f, 0.300f, 0.286f, 1.000f, 1.000f},
+    }};
+    /** Played with his weaker foot (the ball on that side of his facing
+     * line): multiplies each job's difficulty by 1 + its weight. */
     static constexpr FactorWeights WEAK_FOOT{0.10f, 0.10f};
     /** Off the ground (1 at the top of the feet band). */
     static constexpr FactorWeights OFF_GROUND{0.15f, 0.15f};
-    /** Not expecting it (0 his pass, LOOSE_BALL a loose ball, 1 someone
-     * else's pass). */
+    /** Not expecting it: the brain's read, on the touch intent (1 for a
+     * pass meant for someone else). */
     static constexpr FactorWeights SURPRISE{0.15f, 0.15f};
-    static constexpr float LOOSE_BALL_SURPRISE = 0.4f;
-    /** An opponent close by (1 on top of him, 0 at the radius). */
+    /** An opponent close by (1 on top of him, 0 at the radius): the
+     * brain's read, on the touch intent. Within 1.5 m their 1 m reaches
+     * overlap well: a body in the way, not just a man nearby. */
     static constexpr FactorWeights PRESSURE{0.10f, 0.10f};
-    static constexpr float PRESSURE_RADIUS_METRES = 3.0f;
+    static constexpr float PRESSURE_RADIUS_METRES = 1.5f;
     static constexpr float REFERENCE_SPEED = 25.0f;
 
     /** Chance a job goes wrong: (base + difficulty x range), cut by his
@@ -864,8 +900,8 @@ struct MatchTuning final
       static constexpr float WEAKER_FOOT = HIGH;
       static constexpr float OFF_GROUND = HIGH;
       static constexpr float PRESSURE = MEDIUM;
-      static constexpr float PRESSURE_RADIUS_METRES =
-          Passing::PASS_PRESSURE_RADIUS_METRES;
+      /** As the touch's: a body in the way (1.5 m). */
+      static constexpr float PRESSURE_RADIUS_METRES = 1.5f;
       // Technique: how often each job goes wrong, and how badly.
       static constexpr float SKILL_REDUCTION = 0.8f;
       static constexpr float ANGLE_FAIL_BASE = 0.05f;
@@ -940,8 +976,7 @@ struct MatchTuning final
       static constexpr float INCOMING_PACE = HIGH;
       static constexpr float OFF_GROUND = VERY_HIGH;
       static constexpr float PRESSURE = HIGH;
-      static constexpr float PRESSURE_RADIUS_METRES =
-          Shooting::PRESSURE_RADIUS_METRES;
+      static constexpr float PRESSURE_RADIUS_METRES = 1.5f;
       static constexpr float SKILL_REDUCTION = 0.41f;
       static constexpr float ANGLE_FAIL_BASE = 0.0f;
       static constexpr float ANGLE_FAIL_RANGE = 0.4f;

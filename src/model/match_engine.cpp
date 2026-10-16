@@ -34,6 +34,7 @@
 #include <sstream>
 
 #include "model/match_commentary.h"
+#include "model/match_contact_binturong.h"
 #include "model/match_engine_internal.h"
 #include "model/match_recorder.h"
 #include "model/medical_centre.h"
@@ -4305,6 +4306,21 @@ void MatchEngine::resolveLooseBall()
     {
       reach = height <= B::LOW_BALL_METRES ? feetReach(player)
                                            : B::CHEST_CONTROL_RADIUS_METRES;
+      // A Binturong body's outfielder cannot touch a ball behind him beyond
+      // the comfort gap (the dead zone).
+      if (bodyOf(player.isHomeTeam) == BodyId::BINTURONG &&
+          !player.isGoalkeeper)
+      {
+        const Vector2F facing = normalized(
+            {std::cos(player.facingAngle) * MatchTuning::Pitch::LENGTH_METRES,
+             std::sin(player.facingAngle) * MatchTuning::Pitch::WIDTH_METRES});
+        const Vector2F toBall =
+            gap > EPSILON ? Vector2F{-gapX / gap, -gapY / gap} : facing;
+        if (inTouchDeadZone(facing, toBall, gap,
+                            touchKnobs[TouchKnob::COMFORT_GAP],
+                            touchKnobs[TouchKnob::DEAD_ZONE_ANGLE]))
+          continue;
+      }
     }
     if (reach <= 0.0f || gap > reach) continue;
     contacts[contactCount++] = {slot, along, gap, height, reach};
@@ -4944,8 +4960,9 @@ void MatchEngine::playFirstTouch(MatchPlayer& player, const TouchMoment& moment)
   ball.position = {std::clamp(contactPoint.x, 0.001f, 0.999f),
                    std::clamp(contactPoint.y, 0.001f, 0.999f)};
   ball.velocity = touch.velocity;
-  ball.z = 0.0f;
-  ball.velocityZ = 0.0f;
+  // It keeps the height he met it at: the touch changes only its velocity.
+  ball.z = moment.height / MatchTuning::Units::BALL_Z_METRES;
+  ball.velocityZ = touch.verticalSpeed;
   ball.curve = 0.0f;
   ball.kicker = player.player;
   ball.kickerLockout = 0.0f;
@@ -5104,6 +5121,9 @@ TouchIntent MatchEngine::dribbleTouchIntent(const MatchPlayer& player,
   intent.targetSpot = {
       std::clamp(moment.contactPoint.x + ahead.x, 0.001f, 0.999f),
       std::clamp(moment.contactPoint.y + ahead.y, 0.001f, 0.999f)};
+  // Pressed, as a first touch reads it.
+  intent.pressure = contactPressure(nearestOpponentDistance(player),
+                                    touchKnobs[TouchKnob::PRESSURE_RADIUS]);
   return intent;
 }
 
@@ -5119,8 +5139,9 @@ void MatchEngine::playDribbleTouch(MatchPlayer& player, const TouchMoment& momen
   ball.position = {std::clamp(moment.contactPoint.x, 0.001f, 0.999f),
                    std::clamp(moment.contactPoint.y, 0.001f, 0.999f)};
   ball.velocity = touch.velocity;
-  ball.z = 0.0f;
-  ball.velocityZ = 0.0f;
+  // It keeps the height he met it at: the touch changes only its velocity.
+  ball.z = moment.height / MatchTuning::Units::BALL_Z_METRES;
+  ball.velocityZ = touch.verticalSpeed;
   ball.curve = 0.0f;
   ball.kicker = player.player;
   ball.kickerLockout = 0.0f;

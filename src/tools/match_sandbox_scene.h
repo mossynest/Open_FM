@@ -95,13 +95,15 @@ class MatchSandboxScene : public GUIScene
 
   // Drills.
   void renderDrills();
-  /** 0: match setup, 1: drills, 2: training. */
+  /** 0: match setup, 1: drills, 2: training, 3: visualisers. */
   int mode = 0;
   std::vector<std::unique_ptr<Drill>> drills = makeDrills();
   int drill_index = 0;
 
   // Training: a session for the home club's squad.
   void renderTraining();
+  /** Tools that show one rule of the engine on its own. */
+  void renderVisualisers();
   int session_index = 0;
   /** Whose squad the picks below belong to (new picks when it changes). */
   TeamID training_club = 0;

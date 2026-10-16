@@ -28,6 +28,7 @@
 #include <string>
 #include <vector>
 
+#include "model/match_contact_binturong.h"
 #include "model/match_engine.h"
 #include "model/match_engine_internal.h"
 #include "model/match_recorder.h"
@@ -2340,6 +2341,14 @@ TouchIntent MatchEngine::chooseFirstTouchBinturong(
   const float attackDirection = player.isHomeTeam ? 1.0f : -1.0f;
   const float speed = length(player.velocity);
   TouchIntent intent;
+  // Not expecting it: a pass meant for someone else. A stand-in until the
+  // brain has the mental attributes to read it (known issues).
+  intent.surprise =
+      ball.isPass && ball.intendedReceiver != player.player ? 1.0f : 0.0f;
+  // Pressed: an opponent close enough to be in the way. Also a stand-in
+  // (known issues).
+  intent.pressure = contactPressure(nearestOpponentDistance(player),
+                                    knob[K::PRESSURE_RADIUS]);
 
   // Running into open space: push it on along his run.
   if (speed >= MatchTuning::Dribble::CLOSE_CONTROL_SPEED)
@@ -3647,8 +3656,7 @@ MatchEngine::HeaderPlay MatchEngine::chooseHeaderOutBinturong(
   const auto difficulty = [&](Vector2F aim, float speed, float lift)
   {
     const ContactAssessment contact = assessStrikeBinturong(
-        header, profile, metricDirection(from, aim), std::hypot(speed, lift),
-        std::atan2(lift, speed));
+        header, profile, metricDirection(from, aim), speed, lift);
     return contact.angleDifficulty + contact.weightDifficulty;
   };
   const Vector2F over{behindX, from.y};

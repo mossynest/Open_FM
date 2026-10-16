@@ -24,7 +24,7 @@
 namespace
 {
 constexpr float PANEL_WIDTH = 340.0f;
-constexpr float BREAKDOWN_WIDTH = 470.0f;
+constexpr float BREAKDOWN_WIDTH = 520.0f;
 /** Cells across the reach circle, and segments round each ring. */
 constexpr int DISC_CELLS = 64;
 constexpr int RING_SEGMENTS = 96;
@@ -50,14 +50,17 @@ constexpr std::array<const char*, CONTACT_FACTOR_COUNT> DEPENDS_ON = {
     "where it comes from (inner ring)",
     "his speed against his top speed",
     "where he meets it (disc)",
-    "where he meets it (disc)",
+    "which side of his facing line (scales the jobs)",
     "ball height",
-    "whether he expected it",
+    "the brain: a pass meant for someone else",
     "nearest opponent",
-    "aim against his facing (outer ring)"};
+    "aim against his facing (outer ring)",
+    "his lift against the ball's steepness (side view)"};
 
 /** Which conditions colour each part of the circle in the zones view. */
-constexpr std::array<int, 2> DISC_ZONES{STRETCH, WEAK_FOOT};
+// Weaker foot is left off the disc so stretch reads clearly (it can still
+// be shown alone with Colour by).
+constexpr std::array<int, 1> DISC_ZONES{STRETCH};
 constexpr std::array<int, 1> FROM_ZONES{FROM_BEHIND};
 constexpr std::array<int, 2> AIM_ZONES{TURN, ACROSS_BODY};
 
@@ -76,6 +79,8 @@ ImVec4 zoneHue(int factor)
 }
 
 constexpr ImVec4 BASE{0.13f, 0.15f, 0.18f, 1.0f};
+/** Where a first touch cannot meet the ball. */
+constexpr ImU32 DEAD_ZONE_COLOUR = IM_COL32(62, 62, 66, 255);
 
 /** 0-1 on a dark-to-hot scale. */
 ImU32 heat(float value)
@@ -158,10 +163,13 @@ ContactProfile ContactViewScene::chosenProfile() const
 {
   static const FirstTouchKnobs touchKnobs;
   static const StrikeKnobs strikeKnobs;
-  if (isTouch()) return touchContactProfile(touchKnobs);
-  return strikeContactProfile(strikeKnobs,
-                              static_cast<StrikeKind>(inputs.contact - 1),
-                              touchKnobs);
+  ContactProfile chosen =
+      isTouch() ? touchContactProfile(touchKnobs)
+                : strikeContactProfile(
+                      strikeKnobs, static_cast<StrikeKind>(inputs.contact - 1),
+                      touchKnobs);
+  chosen.stretchMap = stretchMap;
+  return chosen;
 }
 
 float ContactViewScene::reach() const
@@ -172,6 +180,17 @@ float ContactViewScene::reach() const
                    : MatchTuning::Dribble::KICK_REACH_METRES;
 }
 
+bool ContactViewScene::inDeadZone(ImVec2 point) const
+{
+  if (!isTouch()) return false;
+  const float gap = std::hypot(point.x, point.y);
+  const Vector2F toBall = gap > 1e-4f ? Vector2F{point.x / gap, point.y / gap}
+                                      : compass(inputs.facing);
+  return inTouchDeadZone(compass(inputs.facing), toBall, gap,
+                         profile.comfortGap,
+                         FirstTouchKnobs{}[TouchKnob::DEAD_ZONE_ANGLE]);
+}
+
 ContactAssessment ContactViewScene::assess(ImVec2 point, float from,
                                            float aim) const
 {
@@ -179,6 +198,8 @@ ContactAssessment ContactViewScene::assess(ImVec2 point, float from,
   situation.facing = compass(inputs.facing);
   situation.aim = compass(aim);
   situation.intendedSpeed = inputs.intendedSpeed;
+  situation.intendedLift = inputs.lift;
+  situation.ballVerticalSpeed = inputs.verticalSpeed;
   const Vector2F incoming = compass(from);
   situation.ballVelocity = {-incoming.x * inputs.incomingPace,
                             -incoming.y * inputs.incomingPace};
@@ -194,11 +215,10 @@ ContactAssessment ContactViewScene::assess(ImVec2 point, float from,
   situation.height = inputs.height;
   situation.rightFooted = inputs.rightFooted;
   // A strike is always his own ball (he chose to strike it).
-  const bool ownBall = !isTouch() || inputs.expectation == 3;
-  situation.surprise = contactSurprise(profile, ownBall,
-                                       inputs.expectation != 1,
-                                       inputs.expectation == 0);
-  situation.nearestOpponentMetres = inputs.opponentMetres;
+  // The brain's read: only a pass meant for someone else surprises him.
+  situation.surprise = isTouch() && inputs.expectation == 2 ? 1.0f : 0.0f;
+  situation.pressure =
+      contactPressure(inputs.opponentMetres, profile.pressureRadius);
   return assessContact(profile, situation);
 }
 
@@ -212,8 +232,9 @@ ImU32 ContactViewScene::colourOf(const ContactAssessment& contact,
 {
   if (view == 1) return heat(contact.angleDifficulty);
   if (view == 2) return heat(contact.weightDifficulty);
-  if (view >= 3)
-    return heat(contact.factors[static_cast<std::size_t>(view - 3)].value);
+  if (view == 3) return heat(contact.verticalDifficulty);
+  if (view >= 4)
+    return heat(contact.factors[static_cast<std::size_t>(view - 4)].value);
   // Zones: each condition in its own colour, as strong as its value; one
   // this contact gives no weight is faint.
   ImVec4 colour = BASE;
@@ -289,10 +310,11 @@ void ContactViewScene::renderPanel(float width)
         TYPICAL_PACE[static_cast<std::size_t>(inputs.contact)];
     profile = chosenProfile();
   }
-  std::array<std::string, 3 + CONTACT_FACTOR_COUNT> viewNames{
-      "Zones", "Angle job difficulty", "Weight job difficulty"};
+  std::array<std::string, 4 + CONTACT_FACTOR_COUNT> viewNames{
+      "Zones", "Angle job difficulty", "Weight job difficulty",
+      "Vertical job difficulty"};
   for (std::size_t index = 0; index < CONTACT_FACTOR_COUNT; ++index)
-    viewNames[index + 3] = "Condition: " + std::string(CONTACT_FACTOR_LABELS[index]);
+    viewNames[index + 4] = "Condition: " + std::string(CONTACT_FACTOR_LABELS[index]);
   if (ImGui::BeginCombo("Colour by",
                         viewNames[static_cast<std::size_t>(view)].c_str()))
   {
@@ -319,12 +341,25 @@ void ContactViewScene::renderPanel(float width)
                      "%.0f");
   ImGui::SliderFloat("Incoming pace", &inputs.incomingPace, 0.0f, 35.0f,
                      "%.1f m/s");
+  ImGui::SliderFloat("Vertical speed", &inputs.verticalSpeed, -15.0f, 10.0f,
+                     "%+.1f m/s");
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("The ball's speed up (+) or down (-) as it reaches "
+                      "him.");
   ImGui::SliderFloat("Height", &inputs.height, 0.0f, 2.5f, "%.2f m");
   const float reachMetres = reach();
+  // Where he meets it, as distance and direction from his centre.
   float gap = std::hypot(inputs.probe.x, inputs.probe.y);
-  ImGui::BeginDisabled();
-  ImGui::SliderFloat("Met at", &gap, 0.0f, reachMetres, "%.2f m");
-  ImGui::EndDisabled();
+  float bearing = gap > 1e-4f ? compassOf(inputs.probe) : 0.0f;
+  const bool gapChanged =
+      ImGui::SliderFloat("Met at", &gap, 0.0f, reachMetres, "%.2f m");
+  const bool bearingChanged =
+      ImGui::SliderFloat("Met at (°)", &bearing, 0.0f, 360.0f, "%.0f");
+  if (gapChanged || bearingChanged)
+  {
+    const Vector2F unit = compass(bearing);
+    inputs.probe = ImVec2(unit.x * gap, unit.y * gap);
+  }
   if (ImGui::BeginCombo("Expected?", isTouch()
                                          ? EXPECTATIONS[static_cast<std::size_t>(
                                                inputs.expectation)]
@@ -337,6 +372,9 @@ void ContactViewScene::renderPanel(float width)
           inputs.expectation = static_cast<int>(index);
     ImGui::EndCombo();
   }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("The brain's read: only a pass meant for someone else "
+                      "surprises him, for now.");
   ImGui::SliderFloat("Nearest opponent", &inputs.opponentMetres, 0.0f, 12.0f,
                      "%.1f m");
 
@@ -344,6 +382,12 @@ void ContactViewScene::renderPanel(float width)
   ImGui::SliderFloat("Sends it to (°)", &inputs.aim, 0.0f, 360.0f, "%.0f");
   ImGui::SliderFloat("Intended pace", &inputs.intendedSpeed, 0.0f, 35.0f,
                      "%.1f m/s");
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Over the ground.");
+  ImGui::SliderFloat("Lift", &inputs.lift, -10.0f, 15.0f, "%+.1f m/s");
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("The speed up (+) or down (-) he means it to leave "
+                      "with; 0 sends it off level, cushioning any drop.");
   ImGui::PopItemWidth();
 
   ImGui::Dummy(ImVec2(0.0f, Theme::Space::L * Theme::scale()));
@@ -455,6 +499,13 @@ void ContactViewScene::renderCircle(ImVec2 size)
       const float x = -reachMetres + (static_cast<float>(column) + 0.5f) * cell;
       const float y = -reachMetres + (static_cast<float>(row) + 0.5f) * cell;
       if (std::hypot(x, y) > reachMetres) continue;
+      if (inDeadZone(ImVec2(x, y)))
+      {
+        draw.AddRectFilled(at(x - cell * 0.5f, y + cell * 0.5f),
+                           at(x + cell * 0.5f, y - cell * 0.5f),
+                           DEAD_ZONE_COLOUR);
+        continue;
+      }
       const ContactAssessment contact =
           assess(ImVec2(x, y), inputs.incomingFrom, inputs.aim);
       draw.AddRectFilled(at(x - cell * 0.5f, y + cell * 0.5f),
@@ -480,6 +531,73 @@ void ContactViewScene::renderCircle(ImVec2 size)
                     std::numbers::pi_v<float>;
     draw.PathArcTo(centre, comfort, a, b, 4);
     draw.PathStroke(line, 0, 1.5f * scale);
+  }
+  // The outer ring's turns: chevrons pointing the way sending it there
+  // turns the ball off its line, clockwise or anticlockwise; one for an
+  // inward turn, two for outward, none where it is no turn. A ball with
+  // no line across the ground (still, or straight up or down) has no
+  // turn to point along: bars, one for inward, two for outward.
+  constexpr int CHEVRONS = 24;
+  const float chevron = radius * (AIM_OUTER - AIM_INNER) * 0.26f;
+  for (int mark = 0; mark < CHEVRONS; ++mark)
+  {
+    const float degrees = (static_cast<float>(mark) + 0.5f) * 360.0f / CHEVRONS;
+    const ContactAssessment contact =
+        assess(inputs.probe, inputs.incomingFrom, degrees);
+    const bool noLine =
+        !contact.moving || std::cos(contact.lineElevation) <= 1e-4f;
+    // None in a slot holding a direction that is no turn (straight back
+    // or straight on), so the gap shows where the ball keeps its line.
+    if (!noLine && std::abs(contact.turn) < radians(180.0f / CHEVRONS))
+      continue;
+    // Along the ring on screen: a positive turn is anticlockwise.
+    const float angle = radians(degrees);
+    const float way = contact.turn > 0.0f ? -1.0f : 1.0f;
+    const ImVec2 along(std::cos(angle) * way, std::sin(angle) * way);
+    const ImVec2 out(std::sin(angle), -std::cos(angle));
+    const ImVec2 middle = onRing(degrees, (AIM_INNER + AIM_OUTER) * 0.5f);
+    const int count = contact.outward ? 2 : 1;
+    const float depth = chevron * 0.8f;
+    const float spacing = chevron * 0.75f;
+    for (int index = 0; index < count; ++index)
+    {
+      const float shift = (static_cast<float>(index) -
+                           static_cast<float>(count - 1) * 0.5f) *
+                          spacing;
+      if (noLine)
+      {
+        const ImVec2 centre(middle.x + along.x * shift,
+                            middle.y + along.y * shift);
+        const ImVec2 a(centre.x + out.x * chevron, centre.y + out.y * chevron);
+        const ImVec2 b(centre.x - out.x * chevron, centre.y - out.y * chevron);
+        draw.AddLine(a, b, IM_COL32(0, 0, 0, 170), 3.5f * scale);
+        draw.AddLine(a, b, IM_COL32(255, 255, 255, 235), 1.6f * scale);
+        continue;
+      }
+      const ImVec2 tip(middle.x + along.x * (shift + depth * 0.5f),
+                       middle.y + along.y * (shift + depth * 0.5f));
+      const ImVec2 back(middle.x + along.x * (shift - depth * 0.5f),
+                        middle.y + along.y * (shift - depth * 0.5f));
+      const std::array<ImVec2, 3> points{
+          ImVec2(back.x + out.x * chevron, back.y + out.y * chevron), tip,
+          ImVec2(back.x - out.x * chevron, back.y - out.y * chevron)};
+      draw.AddPolyline(points.data(), 3, IM_COL32(0, 0, 0, 170), 0,
+                       3.5f * scale);
+      draw.AddPolyline(points.data(), 3, IM_COL32(255, 255, 255, 235), 0,
+                       1.6f * scale);
+    }
+  }
+  // The dead zone's edges, from the comfort gap out to his reach.
+  if (isTouch())
+  {
+    const float deadAngle = FirstTouchKnobs{}[TouchKnob::DEAD_ZONE_ANGLE];
+    for (const float sideOf : {-1.0f, 1.0f})
+    {
+      const Vector2F edge = compass(inputs.facing + sideOf * deadAngle);
+      draw.AddLine(at(edge.x * profile.comfortGap, edge.y * profile.comfortGap),
+                   at(edge.x * reachMetres, edge.y * reachMetres), line,
+                   1.5f * scale);
+    }
   }
   for (const float multiple : {FROM_INNER, FROM_OUTER, AIM_INNER, AIM_OUTER})
     draw.AddCircle(centre, radius * multiple, faint, 96, 1.0f * scale);
@@ -522,8 +640,28 @@ void ContactViewScene::renderCircle(ImVec2 size)
   if (inputs.incomingPace > 0.05f)
     arrow(draw, onRing(inputs.incomingFrom, (FROM_INNER + FROM_OUTER) * 0.5f),
           ball, IM_COL32(255, 255, 255, 150), 1.5f * scale);
-  arrow(draw, ball, onRing(inputs.aim, (AIM_INNER + AIM_OUTER) * 0.5f),
-        IM_COL32(255, 255, 255, 230), 2.0f * scale);
+  // The ball-contact line (his centre through the ball to his reach), and
+  // the ball's path along his aim to where it leaves his reach: in or out
+  // is read from these and his facing line.
+  const float probeGap = std::hypot(inputs.probe.x, inputs.probe.y);
+  if (probeGap > 1e-4f)
+    draw.AddLine(at(0.0f, 0.0f),
+                 at(inputs.probe.x / probeGap * reachMetres,
+                    inputs.probe.y / probeGap * reachMetres),
+                 IM_COL32(255, 255, 255, 110), 1.5f * scale);
+  const Vector2F aimUnit = compass(inputs.aim);
+  const float along = inputs.probe.x * aimUnit.x + inputs.probe.y * aimUnit.y;
+  const float exitDistance =
+      -along + std::sqrt(std::max(along * along - probeGap * probeGap +
+                                      reachMetres * reachMetres,
+                                  0.0f));
+  const ImVec2 exit = at(inputs.probe.x + aimUnit.x * exitDistance,
+                         inputs.probe.y + aimUnit.y * exitDistance);
+  arrow(draw, ball, exit, IM_COL32(255, 255, 255, 230), 2.0f * scale);
+  draw.AddCircleFilled(exit, 4.0f * scale, IM_COL32(255, 255, 255, 255));
+  // On to the handle on the outer ring, faintly.
+  draw.AddLine(exit, onRing(inputs.aim, (AIM_INNER + AIM_OUTER) * 0.5f),
+               IM_COL32(255, 255, 255, 70), 1.0f * scale);
   draw.AddCircleFilled(ball, std::max(BALL_RADIUS_METRES * ppm, 4.0f * scale),
                        IM_COL32(255, 255, 255, 255));
   draw.AddCircle(ball, std::max(BALL_RADIUS_METRES * ppm, 4.0f * scale),
@@ -548,6 +686,7 @@ void ContactViewScene::renderCircle(ImVec2 size)
       contact = assess(offset, inputs.incomingFrom, inputs.aim);
       where = std::format("Met {:.2f} m from his centre, at {:.0f}°",
                           std::hypot(offset.x, offset.y), compassOf(offset));
+      if (inDeadZone(offset)) where += "\nDead zone: he cannot touch it here";
     }
     else if (mouseRadius >= FROM_INNER && mouseRadius <= FROM_OUTER)
     {
@@ -562,9 +701,10 @@ void ContactViewScene::renderCircle(ImVec2 size)
     if (contact)
     {
       std::string tip = std::format(
-          "{}\nAngle job {:.2f} · weight job {:.2f}\nTurn {:.0f}° {} · pace "
-          "change {:+.1f} m/s",
+          "{}\nAngle job {:.2f} · weight job {:.2f} · vertical job {:.2f}\nTurn "
+          "{:.0f}° {} · pace change {:+.1f} m/s",
           where, contact->angleDifficulty, contact->weightDifficulty,
+          contact->verticalDifficulty,
           std::abs(contact->turn) * 180.0f / std::numbers::pi_v<float>,
           contact->outward ? "outward" : "inward", contact->paceChange);
       for (const ContactFactor& factor : contact->factors)
@@ -599,7 +739,8 @@ void ContactViewScene::renderCircle(ImVec2 size)
     ImGui::TextDisabled("Disc:");
     ImGui::SameLine();
     swatch(STRETCH, "stretching");
-    swatch(WEAK_FOOT, "weaker foot");
+    ImGui::TextDisabled("(weaker foot: Colour by)");
+    ImGui::SameLine();
     ImGui::NewLine();
     ImGui::TextDisabled("Inner ring (comes from):");
     ImGui::SameLine();
@@ -627,9 +768,15 @@ void ContactViewScene::renderCircle(ImVec2 size)
     ImGui::SameLine();
     ImGui::TextDisabled("1   every part of the circle in the same measure");
   }
+  ImGui::PushTextWrapPos(0.0f);
   ImGui::TextDisabled("Reach %.2f m, comfort gap %.2f m (dashed). Directions: "
                       "0° up, clockwise.",
                       reachMetres, profile.comfortGap);
+  ImGui::TextDisabled("Outer ring chevrons: the way sending it there turns "
+                      "the ball off its line (clockwise or anticlockwise); "
+                      "> inward, >> outward, none: no turn; bars (| inward, || "
+                      "outward) when the ball has no line across the ground.");
+  ImGui::PopTextWrapPos();
   ImGui::EndChild();
 }
 
@@ -643,14 +790,28 @@ void ContactViewScene::renderBreakdown(float width)
   const float scale = Theme::scale();
   const ContactAssessment contact = assessProbe();
   ImGui::SeparatorText("At the ball");
+  if (inDeadZone(inputs.probe))
+    ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.45f, 1.0f),
+                       "In his dead zone: he cannot touch it here.");
   ImGui::Text("Turn %.0f° %s%s · pace change %+.1f m/s",
               std::abs(contact.turn) * 180.0f / std::numbers::pi_v<float>,
               contact.outward ? "outward" : "inward",
               contact.rebound ? " (back the way it came)" : "",
               contact.paceChange);
+  ImGui::Text("Steepness: line %+.0f°, he means %+.0f°: turn %.0f° %s",
+              contact.lineElevation * 180.0f / std::numbers::pi_v<float> + 0.0f,
+              contact.intendedElevation * 180.0f / std::numbers::pi_v<float> +
+                  0.0f,
+              std::abs(contact.verticalTurn) * 180.0f /
+                  std::numbers::pi_v<float>,
+              std::abs(contact.verticalTurn) < 0.01f ? ""
+              : contact.verticalTurn > 0.0f        ? "up"
+                                                   : "down");
+  renderSideView(contact);
   for (const auto& [label, value] :
        {std::pair{"Angle job", contact.angleDifficulty},
-        std::pair{"Weight job", contact.weightDifficulty}})
+        std::pair{"Weight job", contact.weightDifficulty},
+        std::pair{"Vertical job", contact.verticalDifficulty}})
   {
     const ImU32 packed = heat(value);
     UI::meter(label, value, 110.0f * scale,
@@ -662,21 +823,24 @@ void ContactViewScene::renderBreakdown(float width)
   const ImGuiTableFlags flags = ImGuiTableFlags_RowBg |
                                 ImGuiTableFlags_BordersInnerH |
                                 ImGuiTableFlags_SizingFixedFit;
-  if (ImGui::BeginTable("##factors", 4, flags))
+  if (ImGui::BeginTable("##factors", 5, flags))
   {
     ImGui::TableSetupColumn("Condition", ImGuiTableColumnFlags_WidthStretch);
     ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed,
                             90.0f * scale);
     ImGui::TableSetupColumn("+ Angle", ImGuiTableColumnFlags_WidthFixed,
-                            70.0f * scale);
+                            62.0f * scale);
     ImGui::TableSetupColumn("+ Weight", ImGuiTableColumnFlags_WidthFixed,
-                            70.0f * scale);
+                            62.0f * scale);
+    ImGui::TableSetupColumn("+ Vertical", ImGuiTableColumnFlags_WidthFixed,
+                            66.0f * scale);
     ImGui::TableHeadersRow();
     for (std::size_t index = 0; index < CONTACT_FACTOR_COUNT; ++index)
     {
       const ContactFactor& factor = contact.factors[index];
-      const bool weighted =
-          factor.angleWeight != 0.0f || factor.weightWeight != 0.0f;
+      const bool weighted = factor.angleWeight != 0.0f ||
+                            factor.weightWeight != 0.0f ||
+                            factor.verticalWeight != 0.0f;
       ImGui::TableNextRow();
       ImGui::TableNextColumn();
       if (weighted)
@@ -684,9 +848,10 @@ void ContactViewScene::renderBreakdown(float width)
       else
         ImGui::TextDisabled("%s", factor.name);
       if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Reads: %s\nWeights: angle %.2f, weight %.2f",
+        ImGui::SetTooltip("Reads: %s\nWeights: angle %.2f, weight %.2f, "
+                          "vertical %.2f",
                           DEPENDS_ON[index], factor.angleWeight,
-                          factor.weightWeight);
+                          factor.weightWeight, factor.verticalWeight);
       ImGui::TableNextColumn();
       // The value as a small bar.
       const ImVec2 start = ImGui::GetCursorScreenPos();
@@ -704,18 +869,27 @@ void ContactViewScene::renderBreakdown(float width)
                                   : IM_COL32(150, 150, 150, 120));
       ImGui::Dummy(ImVec2(barWidth, ImGui::GetTextLineHeight()));
       ImGui::SameLine();
-      ImGui::Text("%.2f", factor.value);
-      const auto contribution = [](float value, float weight)
+      ImGui::Text("%.2f", factor.value + 0.0f);
+      // What it actually added; the weaker foot scales the rest (x1.10).
+      const auto contribution = [&](float weight, ContactJob job)
       {
         if (weight == 0.0f)
           ImGui::TextDisabled("-");
+        else if (index == WEAK_FOOT_FACTOR)
+          ImGui::Text("x%.2f", 1.0f + factor.value * weight);
         else
-          ImGui::Text("%.3f", value * weight);
+          ImGui::Text("%.3f", contact.added(index, job) + 0.0f);
+        if (index == WEAK_FOOT_FACTOR && weight != 0.0f &&
+            ImGui::IsItemHovered())
+          ImGui::SetTooltip("Adds %.3f here",
+                            contact.added(index, job) + 0.0f);
       };
       ImGui::TableNextColumn();
-      contribution(factor.value, factor.angleWeight);
+      contribution(factor.angleWeight, ContactJob::ANGLE);
       ImGui::TableNextColumn();
-      contribution(factor.value, factor.weightWeight);
+      contribution(factor.weightWeight, ContactJob::WEIGHT);
+      ImGui::TableNextColumn();
+      contribution(factor.verticalWeight, ContactJob::VERTICAL);
     }
     ImGui::TableNextRow();
     ImGui::TableNextColumn();
@@ -725,6 +899,8 @@ void ContactViewScene::renderBreakdown(float width)
     ImGui::Text("%.3f", contact.angleDifficulty);
     ImGui::TableNextColumn();
     ImGui::Text("%.3f", contact.weightDifficulty);
+    ImGui::TableNextColumn();
+    ImGui::Text("%.3f", contact.verticalDifficulty);
     ImGui::EndTable();
   }
   ImGui::PushTextWrapPos(0.0f);
@@ -734,5 +910,152 @@ void ContactViewScene::renderBreakdown(float width)
       "reads. Difficulty then sets how often a job fails and how badly "
       "(the technique knobs, cut by his skill).");
   ImGui::PopTextWrapPos();
+  renderStretchMap();
   ImGui::EndChild();
+}
+
+void ContactViewScene::renderStretchMap()
+{
+  const float scale = Theme::scale();
+  ImGui::SeparatorText("Stretch map");
+  ImGui::PushTextWrapPos(0.0f);
+  ImGui::TextDisabled(
+      "Stretch (0-1) by angle off his facing (rows, either side) and "
+      "distance from his centre as a share of his reach (columns; metres "
+      "for a first touch at feet height). Blended between points. Drag, or "
+      "Ctrl+click to type. Used for every contact here; the game keeps its "
+      "own until the values are copied in.");
+  ImGui::PopTextWrapPos();
+  const ImGuiTableFlags flags = ImGuiTableFlags_Borders |
+                                ImGuiTableFlags_SizingStretchSame;
+  if (ImGui::BeginTable("##stretch_map",
+                        static_cast<int>(StretchMap::DISTANCES) + 1, flags))
+  {
+    // Header: the distances, editable, kept in order.
+    ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+    ImGui::TableNextColumn();
+    ImGui::TextDisabled("Angle");
+    for (std::size_t column = 0; column < StretchMap::DISTANCES; ++column)
+    {
+      ImGui::TableNextColumn();
+      ImGui::PushID(static_cast<int>(column));
+      ImGui::SetNextItemWidth(-1.0f);
+      const float low = column == 0 ? 0.0f : stretchMap.distances[column - 1];
+      const float high = column + 1 == StretchMap::DISTANCES
+                             ? 1.0f
+                             : stretchMap.distances[column + 1];
+      if (ImGui::DragFloat("##distance", &stretchMap.distances[column], 0.005f,
+                           low, high, "%.2f", ImGuiSliderFlags_AlwaysClamp))
+        profile = chosenProfile();
+      ImGui::PopID();
+    }
+    // Rows: the angle, then the stretch at each distance.
+    for (std::size_t row = 0; row < StretchMap::ANGLES; ++row)
+    {
+      ImGui::TableNextRow();
+      ImGui::PushID(static_cast<int>(100 + row));
+      ImGui::TableNextColumn();
+      ImGui::SetNextItemWidth(-1.0f);
+      const float low = row == 0 ? 0.0f : stretchMap.angles[row - 1];
+      const float high =
+          row + 1 == StretchMap::ANGLES ? 180.0f : stretchMap.angles[row + 1];
+      if (ImGui::DragFloat("##angle", &stretchMap.angles[row], 0.5f, low, high,
+                           "%.0f°", ImGuiSliderFlags_AlwaysClamp))
+        profile = chosenProfile();
+      for (std::size_t column = 0; column < StretchMap::DISTANCES; ++column)
+      {
+        ImGui::TableNextColumn();
+        float& value = stretchMap.values[row][column];
+        ImVec4 shade = ImGui::ColorConvertU32ToFloat4(heat(value));
+        shade.w = 0.55f;
+        ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg,
+                               ImGui::GetColorU32(shade));
+        ImGui::PushID(static_cast<int>(column));
+        ImGui::SetNextItemWidth(-1.0f);
+        if (ImGui::DragFloat("##value", &value, 0.005f, 0.0f, 1.0f, "%.2f",
+                             ImGuiSliderFlags_AlwaysClamp))
+          profile = chosenProfile();
+        ImGui::PopID();
+      }
+      ImGui::PopID();
+    }
+    ImGui::EndTable();
+  }
+  if (ImGui::Button("Reset to the game's"))
+  {
+    stretchMap = StretchMap{};
+    profile = chosenProfile();
+  }
+  ImGui::SameLine(0.0f, Theme::Space::S * scale);
+  if (ImGui::Button("Copy values"))
+  {
+    // As the MatchTuning::FirstTouch constants, ready to paste in.
+    std::string text = "    static constexpr std::array<float, 6> STRETCH_ANGLES{";
+    for (std::size_t row = 0; row < StretchMap::ANGLES; ++row)
+      text += std::format("{}{:.1f}f", row == 0 ? "" : ", ",
+                          stretchMap.angles[row]);
+    text += "};\n    static constexpr std::array<float, 6> STRETCH_DISTANCES{";
+    for (std::size_t column = 0; column < StretchMap::DISTANCES; ++column)
+      text += std::format("{}{:.3f}f", column == 0 ? "" : ", ",
+                          stretchMap.distances[column]);
+    text += "};\n    static constexpr std::array<std::array<float, 6>, 6> "
+            "STRETCH_VALUES{{\n";
+    for (std::size_t row = 0; row < StretchMap::ANGLES; ++row)
+    {
+      text += "        {";
+      for (std::size_t column = 0; column < StretchMap::DISTANCES; ++column)
+        text += std::format("{}{:.3f}f", column == 0 ? "" : ", ",
+                            stretchMap.values[row][column]);
+      text += "},\n";
+    }
+    text += "    }};\n";
+    ImGui::SetClipboardText(text.c_str());
+  }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Copies the map as the MatchTuning constants, to paste "
+                      "in (or to me) to make it the game's.");
+}
+
+void ContactViewScene::renderSideView(const ContactAssessment& contact)
+{
+  // Seen from the side, along the ball's line: it arrives from the left at
+  // its steepness and leaves at the steepness he means (to the left when he
+  // sends it back the way it came). The ground and the height he meets it
+  // at are to scale; the arrows show direction only.
+  const float scale = Theme::scale();
+  const float width = ImGui::GetContentRegionAvail().x;
+  const float height = 96.0f * scale;
+  const ImVec2 origin = ImGui::GetCursorScreenPos();
+  ImGui::Dummy(ImVec2(width, height));
+  ImDrawList& draw = *ImGui::GetWindowDrawList();
+  draw.AddRectFilled(origin, ImVec2(origin.x + width, origin.y + height),
+                     IM_COL32(255, 255, 255, 10));
+  const float ground = origin.y + height - 12.0f * scale;
+  const float metre = 26.0f * scale;
+  draw.AddLine(ImVec2(origin.x, ground), ImVec2(origin.x + width, ground),
+               IM_COL32(120, 200, 120, 200), 2.0f * scale);
+  const ImVec2 ball(origin.x + width * 0.5f,
+                    ground - std::min(inputs.height, 2.5f) * metre);
+  const float arm = 44.0f * scale;
+  const auto towards = [&](float elevation, float side)
+  {
+    return ImVec2(ball.x + std::cos(elevation) * arm * side,
+                  ball.y - std::sin(elevation) * arm);
+  };
+  // Arriving: its travel's steepness.
+  const float level = inputs.incomingPace;
+  if (contact.moving)
+  {
+    const float arrival = std::atan2(inputs.verticalSpeed, level);
+    const ImVec2 from = towards(arrival + std::numbers::pi_v<float>, 1.0f);
+    arrow(draw, ImVec2(from.x, from.y), ball, IM_COL32(255, 255, 255, 150),
+          1.5f * scale);
+  }
+  // Leaving: the steepness he means, back the way it came or on.
+  const ImVec2 to = towards(contact.intendedElevation,
+                            contact.rebound ? -1.0f : 1.0f);
+  arrow(draw, ball, to, IM_COL32(255, 255, 255, 235), 2.0f * scale);
+  draw.AddCircleFilled(ball, 4.5f * scale, IM_COL32(255, 255, 255, 255));
+  draw.AddText(ImVec2(origin.x + 4.0f * scale, origin.y + 2.0f * scale),
+               IM_COL32(170, 170, 170, 255), "Side view");
 }

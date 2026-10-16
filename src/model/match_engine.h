@@ -383,6 +383,17 @@ struct TouchIntent
   Kind kind = Kind::SET;
   Vector2F targetSpot{0.0f, 0.0f};
   float arrivalSpeed = 0.0f;
+  /** How little he expected the ball (0-1), the brain's read: for now 1
+   * for a pass meant for someone else, else 0 (to be revisited with the
+   * brain's mental attributes). */
+  float surprise = 0.0f;
+  /** How pressed he is (0-1), the brain's read: for now an opponent's
+   * nearness, 1 on top of him, 0 at the pressure radius (to be revisited
+   * with decision time and composure). */
+  float pressure = 0.0f;
+  /** The vertical speed he means it to leave with (m/s, + up): 0 sends it
+   * off level, cushioning any drop. */
+  float liftSpeed = 0.0f;
 };
 
 /** A loose ball in a player's reach during one ball sub-step: where it is
@@ -406,7 +417,9 @@ struct TouchMoment
  * how each of its two jobs went (first-touch jobs plan). */
 struct TouchResult
 {
+  /** Along the ground (m/s), and upward (m/s). */
   Vector2F velocity{0.0f, 0.0f};
+  float verticalSpeed = 0.0f;
   /** The angle error along the turn (radians, - short of it) and the
    * weight error (m/s, + heavier than meant). */
   float angleError = 0.0f;
@@ -417,10 +430,31 @@ struct TouchResult
   bool angleFailed = false;
   bool weightFailed = false;
   /** The jobs: the turn off the line it came on (radians, 0-pi/2), whether
-   * away from the line out in front of him, and the pace change (m/s). */
+   * outward (turnsOutward), and the pace change (m/s). */
   float turn = 0.0f;
   bool outward = false;
   float paceChange = 0.0f;
+};
+
+/**
+ * Stretch over his reach: a value (0-1) at each angle off his facing
+ * (degrees, ascending, 0-180, the same either side) and each distance from
+ * his centre as a share of his reach (ascending), blended linearly between
+ * neighbours in both, held at the ends. Defaults:
+ * MatchTuning::FirstTouch::STRETCH_*.
+ */
+struct StretchMap
+{
+  static constexpr std::size_t ANGLES = 6;
+  static constexpr std::size_t DISTANCES = 6;
+  std::array<float, ANGLES> angles = MatchTuning::FirstTouch::STRETCH_ANGLES;
+  std::array<float, DISTANCES> distances =
+      MatchTuning::FirstTouch::STRETCH_DISTANCES;
+  std::array<std::array<float, DISTANCES>, ANGLES> values =
+      MatchTuning::FirstTouch::STRETCH_VALUES;
+
+  /** The stretch `degrees` off his facing, `share` of his reach out. */
+  [[nodiscard]] float at(float degrees, float share) const;
 };
 
 /**
@@ -445,6 +479,14 @@ struct ContactProfile
   /** The turn counts in full when the ball comes at this pace (m/s), in
    * proportion below it; 0 (the touch): always in full. */
   float turnPaceReference = 0.0f;
+  /** The vertical angle job's size: the turn in steepness (1 at 90 degrees)
+   * times this; neither inward nor outward. */
+  float verticalTurnAngle = 0.0f;
+  /** Whether the vertical angle job is carried out (its own fail, miss and
+   * jitter, from the angle job's technique values). Strikes still put a
+   * share of the angle error into the elevation (verticalShare) until
+   * vertical contact plan step 3. */
+  bool carriesOutVertical = false;
   Weights incomingPace;
   Weights fromBehind;
   Weights ownSpeed;
@@ -459,8 +501,8 @@ struct ContactProfile
   // How the conditions are measured.
   float referenceSpeed = 25.0f;
   float pressureRadius = 3.0f;
-  float looseBallSurprise = 0.0f;
   float comfortGap = 0.0f;
+  StretchMap stretchMap;
   // Technique: how often each job goes wrong, and how badly.
   float skillReduction = 0.0f;
   /** Technique error added at an empty tank (the fatigue tiers' shape
@@ -499,16 +541,32 @@ enum class TermSource : std::uint8_t;
 
 /** A contact's conditions, in ContactAssessment::factors order, with short
  * labels for tables. */
-inline constexpr std::size_t CONTACT_FACTOR_COUNT = 11;
+inline constexpr std::size_t CONTACT_FACTOR_COUNT = 12;
+/** The weaker-foot condition's place in the list: it scales the other
+ * conditions' sum rather than adding to it. */
+inline constexpr std::size_t WEAK_FOOT_FACTOR = 6;
+/** The turn off the line's steepness: the vertical angle job's size. */
+inline constexpr std::size_t VERTICAL_TURN_FACTOR = 11;
 inline constexpr std::array<std::string_view, CONTACT_FACTOR_COUNT>
     CONTACT_FACTOR_LABELS = {
         "Pace change",     "Turn off its line",  "Incoming pace",
         "From behind him", "His own speed",      "Stretching",
         "Weaker foot",     "Off the ground",     "Surprise",
-        "Pressure",        "Across or behind his body"};
+        "Pressure",        "Across or behind his body",
+        "Turn up or down"};
+
+/** A contact's three jobs (vertical contact plan): the turn seen from
+ * above, the pace (in 3D), and the turn in steepness. */
+enum class ContactJob : std::uint8_t
+{
+  ANGLE,
+  WEIGHT,
+  VERTICAL,
+};
 
 /** One condition of a contact: its value (0-1) and what it adds to each
- * job's difficulty (value x weight). */
+ * job's difficulty (value x weight). The conditions add to the vertical
+ * angle job as to the angle job (the same weight). */
 struct ContactFactor
 {
   const char* name = "";
@@ -516,6 +574,14 @@ struct ContactFactor
   float value = 0.0f;
   float angleWeight = 0.0f;
   float weightWeight = 0.0f;
+  float verticalWeight = 0.0f;
+
+  [[nodiscard]] float weightFor(ContactJob job) const
+  {
+    return job == ContactJob::ANGLE    ? angleWeight
+           : job == ContactJob::WEIGHT ? weightWeight
+                                       : verticalWeight;
+  }
 };
 
 /** How hard a contact is, before it is carried out (contact plan §2): the
@@ -523,26 +589,54 @@ struct ContactFactor
  * difficulty. Reading it draws nothing at random. */
 struct ContactAssessment
 {
-  /** What he means to do: the direction (metric, unit), pace (m/s, in
-   * three dimensions) and elevation (radians above the ground). */
+  /** What he means to do: the direction seen from above (metric, unit),
+   * pace (m/s, in three dimensions) and elevation (radians, + up). */
   Vector2F aim{0.0f, 0.0f};
   float intendedSpeed = 0.0f;
   float intendedElevation = 0.0f;
-  /** The ball's pace as it reaches him, whether it is moving, and whether
-   * he sends it back the way it came. */
+  /** The ball's pace as it reaches him (m/s, in three dimensions),
+   * whether it is moving, and whether he sends it back the way it came. */
   float incomingSpeed = 0.0f;
   bool moving = false;
   bool rebound = false;
-  /** The reference line (metric, unit). */
+  /** The reference line seen from above (metric, unit; his aim when the
+   * line is straight up or down), and its elevation (radians, + up). */
   Vector2F line{0.0f, 0.0f};
+  float lineElevation = 0.0f;
   /** The jobs: the turn off the line (radians, + anticlockwise), whether
    * outward, and the pace change (m/s). */
   float turn = 0.0f;
   bool outward = false;
   float paceChange = 0.0f;
+  /** The turn in steepness from the line to his aim (radians, + up). */
+  float verticalTurn = 0.0f;
   std::array<ContactFactor, CONTACT_FACTOR_COUNT> factors{};
   float angleDifficulty = 0.0f;
   float weightDifficulty = 0.0f;
+  float verticalDifficulty = 0.0f;
+  /** What his weaker foot added to each job: the rest's sum times its
+   * weight, when he plays it with that foot. */
+  float weakFootAngle = 0.0f;
+  float weakFootWeight = 0.0f;
+  float weakFootVertical = 0.0f;
+
+  /** What condition `index` added to `job`. */
+  [[nodiscard]] float added(std::size_t index, ContactJob job) const
+  {
+    if (index == WEAK_FOOT_FACTOR)
+      return job == ContactJob::ANGLE    ? weakFootAngle
+             : job == ContactJob::WEIGHT ? weakFootWeight
+                                         : weakFootVertical;
+    const ContactFactor& factor = factors[index];
+    return factor.value * factor.weightFor(job);
+  }
+  /** A job's difficulty (0-1). */
+  [[nodiscard]] float difficulty(ContactJob job) const
+  {
+    return job == ContactJob::ANGLE    ? angleDifficulty
+           : job == ContactJob::WEIGHT ? weightDifficulty
+                                       : verticalDifficulty;
+  }
 };
 
 /** Open-play strikes read by the contact model (contact plan steps 2 and
@@ -586,6 +680,9 @@ struct ContactOutcome
   float weightFailChance = 0.0f;
   bool angleFailed = false;
   bool weightFailed = false;
+  /** The vertical angle job (profiles that carry it out). */
+  float verticalFailChance = 0.0f;
+  bool verticalFailed = false;
   /** The turn he achieved (radians) and the pace (m/s). */
   float achievedTurn = 0.0f;
   float actualSpeed = 0.0f;

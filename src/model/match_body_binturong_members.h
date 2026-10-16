@@ -42,23 +42,27 @@
   /** The touch knobs as a contact profile (first and dribble touches). */
   ContactProfile touchProfileBinturong() const;
   /** How hard a contact is (contact plan §2): meeting the ball at `moment`
-   * to send it along `aim` (metric, unit) at `intendedSpeed`. `ownBall`: a
-   * ball he expected (his own, or one he chose to strike). No random draws,
-   * so the brain can read it too. */
+   * to send it along `aim` (metric, unit, seen from above) at
+   * `intendedSpeed` over the ground and `intendedLift` upward (m/s).
+   * `surprise`: how little he expected it (0-1, the brain's read; 0 for
+   * his own ball or one he chose to strike). No random draws, so the brain
+   * can read it too. `pressure`: how pressed he is (0-1, the brain's read
+   * for a touch). */
   ContactAssessment assessContactBinturong(const MatchPlayer& player,
                                            const ContactProfile& profile,
                                            Vector2F aim, float intendedSpeed,
+                                           float intendedLift,
                                            const TouchMoment& moment,
-                                           bool ownBall) const;
+                                           float surprise,
+                                           float pressure) const;
   /** A strike's contact profile (provisional, contact plan §3). */
   ContactProfile strikeProfileBinturong(StrikeKind kind) const;
-  /** A strike as a contact where the ball lies: `aim` metric unit,
-   * `intendedSpeed` m/s (in three dimensions), `elevation` radians above
-   * the ground. No random draws. */
+  /** A strike as a contact where the ball lies: `aim` metric unit, `speed`
+   * over the ground and `lift` upward (m/s). No random draws. */
   ContactAssessment assessStrikeBinturong(const MatchPlayer& striker,
                                           const ContactProfile& profile,
-                                          Vector2F aim, float intendedSpeed,
-                                          float elevation = 0.0f) const;
+                                          Vector2F aim, float speed,
+                                          float lift = 0.0f) const;
   /** Tallies an open-play strike and sends its debugger detail; `outcome`
    * when it was carried out (with `skill`), null when only measured. */
   void recordStrikeBinturong(const MatchPlayer& striker, StrikeKind kind,
