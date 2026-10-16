@@ -132,6 +132,11 @@ std::unique_ptr<MatchEngine> makeEngine(const Team& home, const Team& away,
   engine->setBrain(false, sandboxBrains()[1]);
   engine->setBody(true, sandboxBodies()[0]);
   engine->setBody(false, sandboxBodies()[1]);
+  engine->setReferee(sandboxReferee());
+  engine->setManager(true, sandboxManagers()[0]);
+  engine->setManager(false, sandboxManagers()[1]);
+  engine->setBallPhysics(sandboxBallPhysics());
+  engine->setOutOfPlay(sandboxOutOfPlay());
   return engine;
 }
 
@@ -1270,7 +1275,16 @@ int runSandboxChecks(GameController& controller, int matches)
                       "match.\n"
                     : "FAIL: a rewind or recording replay differed from the "
                       "match.\n");
+  // The drills play with the sandbox's brains and bodies. Routes, turns and
+  // the new touch and strike are the Binturong body's, so the drills are
+  // checked with the Binturong brain and body; the matches above keep theirs.
+  const std::array<BrainId, 2> matchBrains = sandboxBrains();
+  const std::array<BodyId, 2> matchBodies = sandboxBodies();
+  sandboxBrains() = {BrainId::BINTURONG, BrainId::BINTURONG};
+  sandboxBodies() = {BodyId::BINTURONG, BodyId::BINTURONG};
   const bool drillsWork = runDrillChecks(*clubs[0], *clubs[1], config);
+  sandboxBrains() = matchBrains;
+  sandboxBodies() = matchBodies;
   std::cout << (drillsWork ? "PASS: drills run, repeat and rewind.\n"
                            : "FAIL: a drill check failed.\n");
   const bool derivedWork = runDerivedStatChecks(clubs, config);

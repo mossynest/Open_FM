@@ -58,21 +58,27 @@ Usage:
   fm_lab matches [--n N] [--seed S] [--home-rating X --away-rating Y | --spread
                  [--rating-min A --rating-max B]] [--fidelity full|background]
                  [--brains HOME,AWAY] [--bodies HOME,AWAY] [--threads T]
-                 [--handshake H] [--home-advantage X] [--uniform]
+                 [--handshake H] [--referee R] [--managers HOME,AWAY]
+                 [--ball B] [--out-of-play O] [--home-advantage X] [--uniform]
                  [--knobs "Name=value;Name=value"] [--out-dir DIR]
   fm_lab season  [--leagues all|top|ID,ID...] [--seasons N] [--seed S]
                  [--threads T] [--max-days D] [--reload] [--out-dir DIR]
   fm_lab tactics [--n SEEDS_PER_PAIR] [--seed S] [--rating X] [--threads T]
                  [--fidelity full|background] [--brains HOME,AWAY]
-                 [--bodies HOME,AWAY] [--handshake H] [--home-advantage X]
+                 [--bodies HOME,AWAY] [--handshake H] [--referee R]
+                 [--managers HOME,AWAY] [--ball B] [--out-of-play O]
+                 [--home-advantage X]
                  [--out-dir DIR]
   fm_lab drill   [--brains HOME,AWAY] [--bodies HOME,AWAY] [--handshake H]
+                 [--referee R] [--managers HOME,AWAY] [--ball B]
+                 [--out-of-play O]
                  "DRILL" --sweep "Setting=FROM:TO:COUNT" [--by ...]
                  [--preset NAME] [--set "Setting=value"]... [--repeats N]
                  [--seed S] [--csv [FILE]]
   fm_lab touch-sensitivity [--repeats N] [--ratings A,B,...]
                  [--situations all|NAME;NAME] [--only NAME;NAME] [--step S]
                  [--range "Name=LOW:HIGH"]... [--seed S] [--out-dir DIR]
+                 [--brains HOME,AWAY] [--bodies HOME,AWAY]
 
 matches  isolated matches between synthetic 4-4-2 squads (default 2000 at
          rating 65 v 65; --spread draws both ratings uniformly per match;
@@ -89,9 +95,10 @@ drill    a match sandbox drill measured headless: the same options as
          match_sandbox --measure (a sweep of one setting, optionally by a
          second, over repeated seeds; a preset fills settings in, --set
          overrides any, beyond its slider range too); the table goes to the
-         console, the runs to CSV with --csv. Drills choose their own brains
-         and bodies where they need to (First touch: Binturong bodies); the
-         match options before the drill's name set them for the others
+         console, the runs to CSV with --csv. The drill plays with the match
+         options given before its name (brains, bodies, handshake, referee,
+         managers, ball, out of play), as the sandbox's drills play with
+         its settings
 touch-sensitivity
          which variables move the first touch most: every First touch
          situation at several First Touch ratings, as tuned, then with each
@@ -101,7 +108,8 @@ touch-sensitivity
          with the angle and weight errors beside them. Knob steps are x(1
          -/+ step) within each knob's range; --range sets any variable's two
          values as given, beyond its range too. report.md, ranking.csv and
-         cells.csv in --out-dir (default a fresh fm-lab-touch-* temp folder)
+         cells.csv in --out-dir (default a fresh fm-lab-touch-* temp folder);
+         Binturong brains and bodies unless --brains/--bodies say otherwise
 
 Fidelity: full (default, the live engine's 10 Hz step) or background (the
 cheaper step unwatched fixtures use); compare both to check equivalence.
@@ -115,6 +123,18 @@ touch, goalkeeping), aardvark (default) or binturong, set the same way.
 
 Handshake: how the inputs become match state (attribute scale, physical
 limits, roles), one for the match: binturong (default) or aardvark.
+
+Referee: the officials' judgement (fouls, cards, advantage, offside calls,
+added time), one for the match: aardvark (default) or binturong.
+
+Managers: each side's AI manager (substitutions, who comes on, late shouts),
+aardvark (default) or binturong, set the same way as the brains.
+
+Ball: the ball physics (flight, drag, bounces, rolling, swerve, and the
+launch solvers), one for the match: aardvark (default) or binturong.
+
+Out of play: goals, the woodwork, corners, goal kicks, throw-ins and every
+restart set up and taken, one for the match: aardvark (default) or binturong.
 
 Home advantage: the home side's edge on attributes, execution and
 refereeing (MatchContext::homeAdvantageScale), 0 a neutral venue (default)
@@ -163,11 +183,12 @@ Arguments parseArguments(int argc, char** argv)
 {
   static constexpr std::array<std::string_view, 5> FLAGS = {
       "--spread", "--uniform", "--reload", "--help", "-h"};
-  static constexpr std::array<std::string_view, 18> OPTIONS = {
+  static constexpr std::array<std::string_view, 22> OPTIONS = {
       "--n",       "--seed",       "--home-rating", "--away-rating",
       "--rating",  "--rating-min", "--rating-max",  "--threads",
       "--out-dir", "--leagues",    "--seasons",     "--max-days",
       "--fidelity", "--brains",    "--bodies",      "--handshake",
+      "--referee", "--managers",   "--ball",        "--out-of-play",
       "--home-advantage", "--knobs"};
   Arguments arguments;
   if (argc < 2) throw UsageError("missing mode");
@@ -395,6 +416,66 @@ HandshakeId handshakeOption(const Arguments& arguments)
   return *handshake;
 }
 
+/** --referee, --managers HOME,AWAY, --ball and --out-of-play; each aardvark
+ * by default. */
+struct SeamChoices
+{
+  RefereeId referee = RefereeId::AARDVARK;
+  std::array<ManagerId, 2> managers{ManagerId::AARDVARK, ManagerId::AARDVARK};
+  BallPhysicsId ball = BallPhysicsId::AARDVARK;
+  OutOfPlayId outOfPlay = OutOfPlayId::AARDVARK;
+};
+
+SeamChoices seamChoices(const Arguments& arguments)
+{
+  SeamChoices choice;
+  const auto referee =
+      refereeFromKey(arguments.value("--referee").value_or("aardvark"));
+  if (!referee) throw UsageError("--referee must be aardvark or binturong");
+  choice.referee = *referee;
+  const auto managers =
+      parseManagerPair(arguments.value("--managers").value_or("aardvark"));
+  if (!managers)
+    throw UsageError(
+        "--managers must be HOME,AWAY or one manager, each aardvark or "
+        "binturong");
+  choice.managers = *managers;
+  const auto ball =
+      ballPhysicsFromKey(arguments.value("--ball").value_or("aardvark"));
+  if (!ball) throw UsageError("--ball must be aardvark or binturong");
+  choice.ball = *ball;
+  const auto outOfPlay =
+      outOfPlayFromKey(arguments.value("--out-of-play").value_or("aardvark"));
+  if (!outOfPlay)
+    throw UsageError("--out-of-play must be aardvark or binturong");
+  choice.outOfPlay = *outOfPlay;
+  return choice;
+}
+
+void setSeamChoices(std::vector<Lab::MatchJob>& jobs,
+                    const SeamChoices& choice)
+{
+  for (Lab::MatchJob& job : jobs)
+  {
+    job.referee = choice.referee;
+    job.home.manager = choice.managers[0];
+    job.away.manager = choice.managers[1];
+    job.ballPhysics = choice.ball;
+    job.outOfPlay = choice.outOfPlay;
+  }
+}
+
+void reportSeamChoices(Lab::LabReport& report, const SeamChoices& choice)
+{
+  report.parameters["referee"] = std::string(refereeName(choice.referee));
+  report.parameters["managers"] =
+      std::format("home {}, away {}", managerName(choice.managers[0]),
+                  managerName(choice.managers[1]));
+  report.parameters["ball_physics"] = std::string(ballPhysicsName(choice.ball));
+  report.parameters["out_of_play"] =
+      std::string(outOfPlayName(choice.outOfPlay));
+}
+
 /** --home-advantage X, 0 (a neutral venue, the default) to 2. */
 float homeAdvantageOption(const Arguments& arguments)
 {
@@ -426,6 +507,7 @@ Lab::LabReport runMatchesMode(const Arguments& arguments, unsigned threads)
   const std::array<BodyId, 2> bodies = bodyPair(arguments);
   const HandshakeId handshake = handshakeOption(arguments);
   const float homeAdvantage = homeAdvantageOption(arguments);
+  const SeamChoices seams = seamChoices(arguments);
 
   std::vector<Lab::MatchJob> jobs(static_cast<std::size_t>(count));
   for (std::size_t i = 0; i < jobs.size(); ++i)
@@ -450,6 +532,7 @@ Lab::LabReport runMatchesMode(const Arguments& arguments, unsigned threads)
     }
   }
   setBrainsAndBodies(jobs, brains, bodies);
+  setSeamChoices(jobs, seams);
   const bool uniform = arguments.has("--uniform");
   const KnobSettings knobs = knobsOption(arguments);
   for (Lab::MatchJob& job : jobs)
@@ -493,6 +576,7 @@ Lab::LabReport runMatchesMode(const Arguments& arguments, unsigned threads)
   report.parameters["brains"] = brainsParameter(brains);
   report.parameters["bodies"] = bodiesParameter(bodies);
   report.parameters["handshake"] = std::string(handshakeName(handshake));
+  reportSeamChoices(report, seams);
   report.parameters["home_advantage"] = std::format("{:.2f}", homeAdvantage);
   report.parameters["squads"] =
       uniform ? "uniform (every stat at the rating)" : "role-shaped";
@@ -526,7 +610,9 @@ Lab::LabReport runTacticsMode(const Arguments& arguments, unsigned threads)
   const std::array<BodyId, 2> bodies = bodyPair(arguments);
   const HandshakeId handshake = handshakeOption(arguments);
   const float homeAdvantage = homeAdvantageOption(arguments);
+  const SeamChoices seams = seamChoices(arguments);
   setBrainsAndBodies(jobs, brains, bodies);
+  setSeamChoices(jobs, seams);
   for (Lab::MatchJob& job : jobs)
   {
     job.handshake = handshake;
@@ -561,6 +647,7 @@ Lab::LabReport runTacticsMode(const Arguments& arguments, unsigned threads)
   report.parameters["brains"] = brainsParameter(brains);
   report.parameters["bodies"] = bodiesParameter(bodies);
   report.parameters["handshake"] = std::string(handshakeName(handshake));
+  reportSeamChoices(report, seams);
   report.parameters["home_advantage"] = std::format("{:.2f}", homeAdvantage);
   static constexpr std::array SCOPES = {Lab::Scope::Tactics};
   report.rows = Lab::evaluateTargets(metrics, SCOPES);
@@ -632,11 +719,38 @@ int runDrillMode(int argc, char** argv)
         throw UsageError("--handshake must be aardvark or binturong");
       sandboxHandshake() = *handshake;
     }
+    else if (option == "--referee")
+    {
+      const auto referee = refereeFromKey(value);
+      if (!referee) throw UsageError("--referee must be aardvark or binturong");
+      sandboxReferee() = *referee;
+    }
+    else if (option == "--managers")
+    {
+      const auto managers = parseManagerPair(value);
+      if (!managers)
+        throw UsageError("--managers must be HOME,AWAY or one manager");
+      sandboxManagers() = *managers;
+    }
+    else if (option == "--ball")
+    {
+      const auto ball = ballPhysicsFromKey(value);
+      if (!ball) throw UsageError("--ball must be aardvark or binturong");
+      sandboxBallPhysics() = *ball;
+    }
+    else if (option == "--out-of-play")
+    {
+      const auto version = outOfPlayFromKey(value);
+      if (!version)
+        throw UsageError("--out-of-play must be aardvark or binturong");
+      sandboxOutOfPlay() = *version;
+    }
     else
     {
       throw UsageError(std::format(
-          "drill: '{}' before the drill's name (only --brains, --bodies and "
-          "--handshake go there)",
+          "drill: '{}' before the drill's name (only --brains, --bodies, "
+          "--handshake, --referee, --managers, --ball and --out-of-play go "
+          "there)",
           option));
     }
   }

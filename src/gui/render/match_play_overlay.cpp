@@ -15,6 +15,7 @@
 #include <numbers>
 
 #include "gui/widgets/theme.h"
+#include "model/player.h"
 
 namespace
 {

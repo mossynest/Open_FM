@@ -89,6 +89,11 @@ DrillRun::DrillRun(Drill& drill_ref, const StatsConfig& config, bool record)
   match->setBrain(false, sandboxBrains()[1]);
   match->setBody(true, sandboxBodies()[0]);
   match->setBody(false, sandboxBodies()[1]);
+  match->setReferee(sandboxReferee());
+  match->setManager(true, sandboxManagers()[0]);
+  match->setManager(false, sandboxManagers()[1]);
+  match->setBallPhysics(sandboxBallPhysics());
+  match->setOutOfPlay(sandboxOutOfPlay());
   match->setDrillRules({false, false});
   // Only the drill's players take part.
   for (const auto& player : pool)

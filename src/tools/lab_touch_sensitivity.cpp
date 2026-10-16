@@ -26,8 +26,11 @@
 #include <vector>
 
 #include "global/stats_config.h"
+#include "model/match_body.h"
+#include "model/match_brain.h"
 #include "model/match_first_touch_knobs.h"
 #include "tools/match_sandbox_drill.h"
+#include "tools/match_sandbox_setup.h"
 
 namespace
 {
@@ -125,6 +128,10 @@ struct Options
   std::map<std::string, std::pair<float, float>> ranges;
   std::uint32_t seed = 1;
   std::optional<std::filesystem::path> outDir;
+  /** The brains and bodies both sides play with (the new first touch is
+   * the Binturong body's, so Binturong unless told otherwise). */
+  std::array<BrainId, 2> brains{BrainId::BINTURONG, BrainId::BINTURONG};
+  std::array<BodyId, 2> bodies{BodyId::BINTURONG, BodyId::BINTURONG};
 };
 
 std::optional<Options> parseOptions(const std::vector<std::string>& arguments)
@@ -148,6 +155,10 @@ std::optional<Options> parseOptions(const std::vector<std::string>& arguments)
       options.seed = static_cast<std::uint32_t>(*number);
     else if (option == "--out-dir")
       options.outDir = value;
+    else if (option == "--brains" && parseBrainPair(value))
+      options.brains = *parseBrainPair(value);
+    else if (option == "--bodies" && parseBodyPair(value))
+      options.bodies = *parseBodyPair(value);
     else if (option == "--situations")
       options.situations = value == "all" ? std::vector<std::string>{}
                                           : splitList(value, ';');
@@ -249,6 +260,10 @@ int runTouchSensitivity(const StatsConfig& config,
   const auto parsed = parseOptions(arguments);
   if (!parsed) return INVALID_OPTIONS;
   const Options& options = *parsed;
+
+  // The drill plays with the sandbox's brains and bodies.
+  sandboxBrains() = options.brains;
+  sandboxBodies() = options.bodies;
 
   auto drills = makeDrills();
   Drill* drill = nullptr;

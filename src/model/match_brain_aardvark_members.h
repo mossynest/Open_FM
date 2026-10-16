@@ -16,6 +16,8 @@
   void assignMarksAardvark(bool home);
   Vector2F goalkeeperTargetAardvark(MatchPlayer& keeper, const MatchPlayer* carrier);
   BallAction chooseBallActionAardvark(MatchPlayer& carrier);
+  MatchPlayer* chooseTakeOnAardvark(MatchPlayer& carrier);
+  void planOvertakeAardvark(std::size_t slot);
   void afterPassReleasedAardvark(const MatchPlayer& passer, const MatchPlayer& receiver);
   /** @param details Debugger detail: every team-mate looked at (or null). */
   std::optional<PassOption> choosePassTargetAardvark(

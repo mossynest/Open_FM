@@ -3260,3 +3260,23 @@ MatchEngine::RestartPlay MatchEngine::chooseCornerPlayAardvark(
   delivery.intent = PassIntent::CROSS;
   return {RestartPlay::Kind::PASS, delivery, true};
 }
+
+MatchPlayer* MatchEngine::chooseTakeOnAardvark(MatchPlayer& carrier)
+{
+  // A defender standing in his path, close and ready to challenge, is taken
+  // on rather than run through.
+  MatchPlayer* blocker =
+      findClosestPlayer(carrier.position, !carrier.isHomeTeam, false);
+  const float forward = carrier.isHomeTeam ? 1.0f : -1.0f;
+  if (blocker && blocker->tackleCooldown <= 0.0f &&
+      distance(blocker->position, carrier.position) <
+          MatchTuning::Dribble::TAKE_ON_RANGE_METRES &&
+      (blocker->position.x - carrier.position.x) * forward > 0.0f)
+    return blocker;
+  return nullptr;
+}
+
+void MatchEngine::planOvertakeAardvark(std::size_t /*slot*/)
+{
+  // The Aardvark brain never plans a way round: he carries on (and bumps).
+}

@@ -18,10 +18,14 @@
 #include <vector>
 
 #include "global/stats_config.h"
+#include "model/match_ball_physics.h"
 #include "model/match_body.h"
 #include "model/match_brain.h"
 #include "model/match_engine.h"
 #include "model/match_handshake.h"
+#include "model/match_manager.h"
+#include "model/match_out_of_play.h"
+#include "model/match_referee.h"
 #include "model/strategy.h"
 #include "tools/lab_report.h"
 #include "tools/lab_stats.h"
@@ -184,6 +188,8 @@ struct TeamSetup
   StrategySliders sliders{};
   BrainId brain = BrainId::AARDVARK;
   BodyId body = BodyId::AARDVARK;
+  /** The AI manager running the side's touchline (when auto-managed). */
+  ManagerId manager = ManagerId::AARDVARK;
   /** Every stat of every player is `rating` (buildUniformLineup) instead
    * of the role-shaped squad. */
   bool uniform = false;
@@ -198,6 +204,11 @@ struct MatchJob
   bool background = false;
   /** How the inputs become match state (one per match). */
   HandshakeId handshake = HandshakeId::BINTURONG;
+  /** The referee and the ball physics (one each per match). */
+  RefereeId referee = RefereeId::AARDVARK;
+  BallPhysicsId ballPhysics = BallPhysicsId::AARDVARK;
+  /** What happens when the ball leaves play (one per match). */
+  OutOfPlayId outOfPlay = OutOfPlayId::AARDVARK;
   /** MatchContext::homeAdvantageScale: 0 a neutral venue, 1 the engine's
    * default (the game's full home edge), up to 2. */
   float homeAdvantage = 1.0f;

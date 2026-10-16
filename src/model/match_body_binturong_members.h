@@ -151,4 +151,16 @@
   float aerialStrengthBinturong(const MatchPlayer& player, float ballHeightMetres) const;
   float claimChanceBinturong(const MatchPlayer& keeper, int crowding) const;
   void recoverFromTakeOnBinturong(MatchPlayer& defender);
+  // Striking (see strikeAs and the others in match_engine.h).
+  bool playsFirstTouchBinturong(const MatchPlayer& player, bool hands, float heightMetres) const;
+  float feetReachBinturong(const MatchPlayer& player) const;
+  bool ballBehindReachBinturong(const MatchPlayer& player, float gapX, float gapY, float gap) const;
+  Vector2F strikePointBinturong(const MatchPlayer& striker) const;
+  Kick strikeAsBinturong(const MatchPlayer& striker, StrikeKind kind, Vector2F target, float speed, float lift);
+  float clearanceDistanceBinturong(const MatchPlayer& defender, Vector2F origin, const ClearanceAim& aim) const;
+  /** A direct free kick: blocked by the wall, or a shot over it. */
+  void takeDirectFreeKickBinturong(MatchPlayer& taker);
+  BallRelease releaseFromBinturong(const MatchPlayer& kicker, ReleaseKind kind) const;
+  void meetWithHeadBinturong(const MatchPlayer& header);
+  bool followsRoutesBinturong(const MatchPlayer& player) const;
 // clang-format on

@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <numbers>
 #include <tuple>
 #include <utility>
@@ -1455,7 +1456,7 @@ bool MatchEngine::updateDribbleBinturong(MatchPlayer& carrier, float dt)
         const float push = speed + randomFloat(R::MIN_HEAVY_PUSH_SPEED,
                                                R::MAX_HEAVY_PUSH_SPEED);
         const Vector2F origin = ball.position;
-        launchBall(carrier, origin,
+        launchBall(carrier, BallRelease{origin, 0.0f, 0.0f},
                    {origin.x + ball.dribbleDirection.x,
                     origin.y + ball.dribbleDirection.y},
                    push, 0.0f, 0.0f);
@@ -2402,14 +2403,15 @@ namespace
 /** Where a ball launched from `origin` (normalised) along `heading`
  * (metric, unit), `along` m/s over the ground and `up` m/s upward, from
  * `startHeight` metres, crosses the goal line at `goalX`: sideways from the
- * goal's centre (m) and height (m), with the live flight physics. A ball
+ * goal's centre (m) and height (m), with the match's flight physics. A ball
  * that stops short is on the ground there. */
 struct GoalLineCrossing
 {
   float sideways = 0.0f;
   float height = 0.0f;
 };
-GoalLineCrossing predictGoalLineCrossing(Vector2F origin, Vector2F heading,
+GoalLineCrossing predictGoalLineCrossing(const MatchEngine& engine,
+                                         Vector2F origin, Vector2F heading,
                                          float along, float up,
                                          float startHeight, float goalX)
 {
@@ -2434,7 +2436,7 @@ GoalLineCrossing predictGoalLineCrossing(Vector2F origin, Vector2F heading,
        time += DT)
   {
     const float previousHeight = flight.height;
-    const float step = stepFlight(flight, DT);
+    const float step = engine.stepFlight(flight, DT);
     if (travelled + step >= metres)
     {
       const float share = (metres - travelled) / std::max(step, EPSILON);
@@ -2476,8 +2478,9 @@ MatchEngine::ShotStrike MatchEngine::strikeShotBodyBinturong(
   const Kick kick =
       strikeContactBinturong(shooter, kind, aimPoint, speed, up, spread);
   const Vector2F heading = metricDirection(origin, kick.target);
-  const GoalLineCrossing crossing = predictGoalLineCrossing(
-      origin, heading, kick.speed, kick.verticalSpeed, startHeight, goalX);
+  const GoalLineCrossing crossing =
+      predictGoalLineCrossing(*this, origin, heading, kick.speed,
+                              kick.verticalSpeed, startHeight, goalX);
   ShotStrike strike;
   strike.crossingY = crossing.sideways;
   strike.crossingZ = crossing.height;
@@ -2748,10 +2751,13 @@ bool MatchEngine::tryOwnGoalTouchBinturong(MatchPlayer& defender)
                             aimMetres / MatchTuning::Pitch::WIDTH_METRES};
   const float height = ball.z;
   clearFlightState();
-  launchBall(defender, ball.position, target,
+  // It skews off him at the height it met him.
+  launchBall(defender,
+             BallRelease{ball.position, height,
+                         height * MatchTuning::Units::BALL_Z_METRES},
+             target,
              randomFloat(S::OWN_GOAL_MIN_SPEED, S::OWN_GOAL_MAX_SPEED),
              randomFloat(0.0f, S::OWN_GOAL_MAX_LIFT), 0.0f);
-  ball.z = height;
   lastShooter = nullptr;
   return true;
 }
@@ -2914,4 +2920,169 @@ void MatchEngine::recoverFromTakeOnBinturong(MatchPlayer& defender)
       std::max(defender.tackleCooldown, R::BEATEN_SECONDS);
   defender.velocity.x *= R::BEATEN_VELOCITY_RETAINED;
   defender.velocity.y *= R::BEATEN_VELOCITY_RETAINED;
+}
+
+// --- Striking and the wall ---------------------------------------------------
+
+void MatchEngine::takeDirectFreeKickBinturong(MatchPlayer& taker)
+{
+  // The wall blocks a share of attempts; the rest are struck over it with
+  // a little less precision, and the keeper's view is partly screened.
+  const float wallChance =
+      std::clamp(MatchTuning::SetPiece::WALL_BLOCK_BASE -
+                     taker.shooting * MatchTuning::SetPiece::WALL_BLOCK_SKILL,
+                 0.05f, 0.6f);
+  if (randomFloat(0.0f, 1.0f) < wallChance)
+  {
+    takeShot(taker);
+    const float outward = taker.isHomeTeam ? -1.0f : 1.0f;
+    const float speed =
+        length(ball.velocity) * MatchTuning::SetPiece::WALL_REBOUND_SPEED_SHARE;
+    ball.touchAttempts = 0;
+    MatchPlayer* wallPlayer = nullptr;
+    float best = std::numeric_limits<float>::max();
+    for (auto& player : players)
+    {
+      if (!active(player) || player.isHomeTeam == taker.isHomeTeam ||
+          player.isGoalkeeper)
+        continue;
+      const float d = distance(player.position, ball.position);
+      if (d < best)
+      {
+        best = d;
+        wallPlayer = &player;
+      }
+    }
+    ball.isShot = false;
+    ball.shotOnTarget = false;
+    ball.shotSaveResolved = true;
+    ball.velocity = {outward * speed * randomFloat(0.3f, 1.0f),
+                     speed * randomFloat(-0.8f, 0.8f)};
+    ball.velocityZ = randomFloat(0.0f, MatchTuning::Aerial::HEADER_LIFT);
+    if (wallPlayer)
+    {
+      ball.position = wallPlayer->position;
+      ball.lastPossessor = wallPlayer->player;
+      ball.kicker = wallPlayer->player;
+      ball.kickerLockout = MatchTuning::Passing::KICKER_LOCKOUT_SECONDS;
+      ++statsOf(*wallPlayer).clearances;
+      logEvent(MatchEventType::SHOT_BLOCKED, *wallPlayer).detail =
+          MatchEventDetail::WALL;
+    }
+    return;
+  }
+  takeShot(taker, MatchTuning::SetPiece::DIRECT_FREE_KICK_XG, false, true);
+  if (MatchPlayer* keeper = findGoalkeeper(!taker.isHomeTeam))
+  {
+    keepers[keeper->isHomeTeam ? 0 : 1].reactionRemaining +=
+        MatchTuning::SetPiece::WALL_SCREEN_SECONDS;
+  }
+}
+
+bool MatchEngine::playsFirstTouchBinturong(const MatchPlayer& player,
+                                           bool hands,
+                                           float heightMetres) const
+{
+  // Feet only, outfielders only: chest control and goalkeepers keep the old
+  // trap for now (first-touch plan, §1).
+  return !player.isGoalkeeper && !hands &&
+         heightMetres <= MatchTuning::Ball::LOW_BALL_METRES;
+}
+
+float MatchEngine::feetReachBinturong(const MatchPlayer& player) const
+{
+  // The knob reaches only outfielders with the new first touch.
+  return !player.isGoalkeeper
+             ? touchKnobs[TouchKnob::FEET_REACH]
+             : MatchTuning::Ball::OUTFIELD_CONTROL_RADIUS_METRES;
+}
+
+bool MatchEngine::ballBehindReachBinturong(const MatchPlayer& player,
+                                           float gapX, float gapY,
+                                           float gap) const
+{
+  // An outfielder cannot touch a ball behind him beyond the comfort gap
+  // (the dead zone).
+  if (player.isGoalkeeper) return false;
+  const Vector2F facing = normalized(
+      {std::cos(player.facingAngle) * MatchTuning::Pitch::LENGTH_METRES,
+       std::sin(player.facingAngle) * MatchTuning::Pitch::WIDTH_METRES});
+  const Vector2F toBall =
+      gap > EPSILON ? Vector2F{-gapX / gap, -gapY / gap} : facing;
+  return inTouchDeadZone(facing, toBall, gap,
+                         touchKnobs[TouchKnob::COMFORT_GAP],
+                         touchKnobs[TouchKnob::DEAD_ZONE_ANGLE]);
+}
+
+Vector2F MatchEngine::strikePointBinturong(const MatchPlayer& /*striker*/) const
+{
+  // He meets the ball anywhere in his reach and strikes it there.
+  return ball.position;
+}
+
+MatchEngine::Kick MatchEngine::strikeAsBinturong(const MatchPlayer& striker,
+                                                 StrikeKind kind,
+                                                 Vector2F target, float speed,
+                                                 float lift)
+{
+  return strikeContactBinturong(striker, kind, target, speed, lift);
+}
+
+float MatchEngine::clearanceDistanceBinturong(const MatchPlayer& /*defender*/,
+                                              Vector2F origin,
+                                              const ClearanceAim& aim) const
+{
+  // Lofted over the distance it really travels from where he strikes it.
+  return distance(origin, aim.target);
+}
+
+MatchEngine::BallRelease MatchEngine::releaseFromBinturong(const MatchPlayer& kicker,
+                                                 ReleaseKind kind) const
+{
+  // Not all of these leave the ball as it was: a pass, shot or clearance
+  // starts at a set height rather than the height it is at.
+  constexpr float Z_METRES = MatchTuning::Units::BALL_Z_METRES;
+  BallRelease from;
+  switch (kind)
+  {
+    case ReleaseKind::PASS:
+      // From where the ball is, off the ground.
+      from.position = ball.position;
+      break;
+    case ReleaseKind::SHOT:
+      // From where the ball is, at the shot's release height.
+      from.position = ball.position;
+      from.heightMetres = MatchTuning::Shooting::RELEASE_HEIGHT_METRES;
+      from.z = from.heightMetres / Z_METRES;
+      break;
+    case ReleaseKind::HEADED_SHOT:
+      // From where the ball is, at its height.
+      from.position = ball.position;
+      from.heightMetres = ball.z * Z_METRES;
+      from.z = from.heightMetres / Z_METRES;
+      break;
+    case ReleaseKind::CLEARANCE:
+      // A loose ball where it lies, else where he meets it; off the ground.
+      from.position = ball.inTouch ? ball.position : strikePointBinturong(kicker);
+      break;
+    case ReleaseKind::CLEAR_BEHIND:
+    case ReleaseKind::HEADER:
+      // Where he meets it, at its height.
+      from.position = strikePointBinturong(kicker);
+      from.z = ball.z;
+      from.heightMetres = ball.z * Z_METRES;
+      break;
+  }
+  return from;
+}
+
+void MatchEngine::meetWithHeadBinturong(const MatchPlayer& header)
+{
+  ball.position = strikePointBinturong(header);
+}
+
+bool MatchEngine::followsRoutesBinturong(const MatchPlayer& /*player*/) const
+{
+  // Routes (waypoints on the way) are this body's.
+  return true;
 }

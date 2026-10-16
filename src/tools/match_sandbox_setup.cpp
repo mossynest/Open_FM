@@ -40,6 +40,31 @@ HandshakeId& sandboxHandshake()
   return handshake;
 }
 
+RefereeId& sandboxReferee()
+{
+  static RefereeId referee = RefereeId::AARDVARK;
+  return referee;
+}
+
+std::array<ManagerId, 2>& sandboxManagers()
+{
+  static std::array<ManagerId, 2> managers{ManagerId::AARDVARK,
+                                           ManagerId::AARDVARK};
+  return managers;
+}
+
+BallPhysicsId& sandboxBallPhysics()
+{
+  static BallPhysicsId physics = BallPhysicsId::AARDVARK;
+  return physics;
+}
+
+OutOfPlayId& sandboxOutOfPlay()
+{
+  static OutOfPlayId version = OutOfPlayId::AARDVARK;
+  return version;
+}
+
 float& sandboxHomeAdvantage()
 {
   static float homeAdvantage = 0.0f;
@@ -108,6 +133,10 @@ MatchSetup MatchSetup::capture(const GameController& controller, TeamID home,
   setup.brains = sandboxBrains();
   setup.bodies = sandboxBodies();
   setup.handshake = sandboxHandshake();
+  setup.referee = sandboxReferee();
+  setup.managers = sandboxManagers();
+  setup.ballPhysics = sandboxBallPhysics();
+  setup.outOfPlay = sandboxOutOfPlay();
   setup.homeAdvantage = sandboxHomeAdvantage();
   return setup;
 }
@@ -169,6 +198,11 @@ std::unique_ptr<MatchEngine> MatchSetup::build(const GameController& controller,
   engine->setBrain(false, brains[1]);
   engine->setBody(true, bodies[0]);
   engine->setBody(false, bodies[1]);
+  engine->setReferee(referee);
+  engine->setManager(true, managers[0]);
+  engine->setManager(false, managers[1]);
+  engine->setBallPhysics(ballPhysics);
+  engine->setOutOfPlay(outOfPlay);
   return engine;
 }
 
@@ -261,6 +295,11 @@ json SandboxJson::toJson(const MatchSetup& setup)
            {brainKey(setup.brains[0]), brainKey(setup.brains[1])}},
           {"bodies", {bodyKey(setup.bodies[0]), bodyKey(setup.bodies[1])}},
           {"handshake", handshakeKey(setup.handshake)},
+          {"referee", refereeKey(setup.referee)},
+          {"managers",
+           {managerKey(setup.managers[0]), managerKey(setup.managers[1])}},
+          {"ball_physics", ballPhysicsKey(setup.ballPhysics)},
+          {"out_of_play", outOfPlayKey(setup.outOfPlay)},
           {"home_advantage", setup.homeAdvantage}};
 }
 
@@ -334,6 +373,53 @@ bool SandboxJson::fromJson(const json& value, MatchSetup& setup,
         return false;
       }
       setup.handshake = *converted;
+    }
+    // Nor a referee, AI managers, ball physics or out of play: all were the
+    // Aardvark.
+    if (const auto referee = value.find("referee"); referee != value.end())
+    {
+      const auto key = referee->get<std::string>();
+      const auto converted = refereeFromKey(key);
+      if (!converted)
+      {
+        error = std::format("setup: unknown referee '{}'", key);
+        return false;
+      }
+      setup.referee = *converted;
+    }
+    if (const auto managers = value.find("managers"); managers != value.end())
+      for (std::size_t index = 0; index < setup.managers.size(); ++index)
+      {
+        const auto key = managers->at(index).get<std::string>();
+        const auto manager = managerFromKey(key);
+        if (!manager)
+        {
+          error = std::format("setup: unknown manager '{}'", key);
+          return false;
+        }
+        setup.managers[index] = *manager;
+      }
+    if (const auto physics = value.find("ball_physics"); physics != value.end())
+    {
+      const auto key = physics->get<std::string>();
+      const auto converted = ballPhysicsFromKey(key);
+      if (!converted)
+      {
+        error = std::format("setup: unknown ball physics '{}'", key);
+        return false;
+      }
+      setup.ballPhysics = *converted;
+    }
+    if (const auto version = value.find("out_of_play"); version != value.end())
+    {
+      const auto key = version->get<std::string>();
+      const auto converted = outOfPlayFromKey(key);
+      if (!converted)
+      {
+        error = std::format("setup: unknown out of play '{}'", key);
+        return false;
+      }
+      setup.outOfPlay = *converted;
     }
     // Nor a home advantage: they were played with the full edge.
     if (const auto home = value.find("home_advantage"); home != value.end())

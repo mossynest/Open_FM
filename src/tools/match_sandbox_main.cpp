@@ -133,6 +133,38 @@ int main(int argc, char* argv[])
         continue;
       }
     }
+    else if (argument == "--referee" && index + 1 < argc)
+    {
+      if (const auto referee = refereeFromKey(argv[++index]))
+      {
+        sandboxReferee() = *referee;
+        continue;
+      }
+    }
+    else if (argument == "--managers" && index + 1 < argc)
+    {
+      if (const auto managers = parseManagerPair(argv[++index]))
+      {
+        sandboxManagers() = *managers;
+        continue;
+      }
+    }
+    else if (argument == "--ball" && index + 1 < argc)
+    {
+      if (const auto physics = ballPhysicsFromKey(argv[++index]))
+      {
+        sandboxBallPhysics() = *physics;
+        continue;
+      }
+    }
+    else if (argument == "--out-of-play" && index + 1 < argc)
+    {
+      if (const auto version = outOfPlayFromKey(argv[++index]))
+      {
+        sandboxOutOfPlay() = *version;
+        continue;
+      }
+    }
     else if (argument == "--home-advantage" && index + 1 < argc)
     {
       const std::string_view value(argv[++index]);
@@ -207,10 +239,13 @@ int main(int argc, char* argv[])
     std::cerr
         << "Usage: " << argv[0]
         << " [--world-seed N] [--brains HOME,AWAY] [--bodies HOME,AWAY]"
-           " [--handshake H] [--home-advantage X] [--kick-off] [--drill NAME]"
+           " [--handshake H] [--referee R] [--managers HOME,AWAY] [--ball B]"
+           " [--out-of-play O]"
+           " [--home-advantage X] [--kick-off] [--drill NAME]"
            " [--check [MATCHES]]\n"
-           "  (--brains, --bodies: aardvark or binturong per side, one name "
-           "for both; before --measure or --shot-map)\n"
+           "  (--brains, --bodies, --managers: aardvark or binturong per side, "
+           "one name for both; before --measure or --shot-map)\n"
+           "  (--referee, --ball: aardvark (default) or binturong)\n"
            "  (--home-advantage: 0 neutral venue (default) to 2, 1 the "
            "game's full home edge; --check defaults to 1)\n"
            "  (--handshake: binturong (default) or aardvark; --check "

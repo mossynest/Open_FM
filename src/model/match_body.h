@@ -16,9 +16,11 @@
 
 /**
  * A side's "body": how one player's body carries out what his brain chose
- * and what it costs him (movement, fitness, kicking, dribbling, first touch,
- * goalkeeping, non-contact injuries). Contests between players, the ball's
- * flight, the rules and attribute mapping are shared by every body.
+ * and what it costs him (movement, fitness, kicking - where he meets the
+ * ball, how his strike comes off, a free kick against the wall - dribbling,
+ * first touch, goalkeeping, non-contact injuries). Contests between players,
+ * the ball's flight, the rules and attribute mapping are shared by every
+ * body.
  *
  * AARDVARK is the inherited body, kept frozen for comparison; the BINTURONG
  * and later bodies are the ones being developed. Each side picks one before

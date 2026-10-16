@@ -1544,10 +1544,11 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
   }
 }
 
-void MatchEngine::planOvertakesBinturong()
+void MatchEngine::planOvertakeBinturong(std::size_t slot)
 {
-  // Racing someone to the same target (movement targets plan 4a): two
-  // players running the same way to about the same point, the one behind
+  // One runner (slot), planned in slot order. Racing someone to the same
+  // target (movement targets plan 4a): two players running the same way to
+  // about the same point, the one behind
   // closing and about to run into the other (predicted closest approach
   // under the clearance) before he gets there. He goes round, on the
   // shorter side that still wins the race and that nobody else is about to
@@ -1605,194 +1606,190 @@ void MatchEngine::planOvertakesBinturong()
                    seconds);
   };
 
-  for (std::size_t slot = 0; slot < players.size(); ++slot)
+  MatchPlayer& runner = players[slot];
+  // Only a body that follows routes can go round.
+  if (!active(runner) || runner.isGoalkeeper || !followsRoutes(runner) ||
+      ball.possessedBy == runner.player)
   {
-    MatchPlayer& runner = players[slot];
-    if (!active(runner) || runner.isGoalkeeper ||
-        brainOf(runner.isHomeTeam) != BrainId::BINTURONG ||
-        bodyOf(runner.isHomeTeam) != BodyId::BINTURONG ||
-        ball.possessedBy == runner.player)
-    {
-      runner.overtaking = -1;
-      continue;
-    }
-    const Vector2F position = metresAt(runner.position);
-    const float speed = lengthOf(runner.velocity);
-    const Vector2F target = metresAt(runner.tacticalTarget);
-    // Where he is running now: his route's next waypoint, else his target.
-    const bool routed = runner.routeWaypoints > 0;
-    const Vector2F aimed =
-        routed ? metresAt(runner.movementTarget) : target;
-    const float toTarget = lengthOf({aimed.x - position.x, aimed.y - position.y});
-    if (speed < OVERTAKE_MINIMUM_SPEED || toTarget < 1e-3f)
-    {
-      runner.overtaking = -1;
-      continue;
-    }
-    // His run as he means it (straight at where he is running), not as his
-    // feet point mid-swerve: judged on that, a way round once found is kept
-    // until he is past (judged on his velocity, it switched itself off).
-    const Vector2F heading{(aimed.x - position.x) / toTarget,
-                           (aimed.y - position.y) / toTarget};
-    const Vector2F velocity{heading.x * speed, heading.y * speed};
-    // The one he would run into first, if any.
-    int ahead = -1;
-    float meetAt = 0.0f;
-    for (std::size_t other = 0; other < players.size(); ++other)
-    {
-      const MatchPlayer& leader = players[other];
-      if (other == slot || !active(leader)) continue;
-      const float leaderSpeed = lengthOf(leader.velocity);
-      if (leaderSpeed < OVERTAKE_MINIMUM_SPEED) continue;
-      const Vector2F leaderTarget = metresAt(leader.tacticalTarget);
-      if (lengthOf({leaderTarget.x - target.x, leaderTarget.y - target.y}) >
-          OVERTAKE_SAME_TARGET_METRES)
-        continue;
-      if ((leader.velocity.x * heading.x + leader.velocity.y * heading.y) /
-              leaderSpeed <
-          OVERTAKE_SAME_DIRECTION_COSINE)
-        continue;
-      const Vector2F leaderAt = metresAt(leader.position);
-      if ((leaderAt.x - position.x) * heading.x +
-              (leaderAt.y - position.y) * heading.y <=
-          0.0f)
-        continue;
-      const auto [closest, when] = closestApproach(
-          position, velocity, leaderAt, leader.velocity,
-          std::min(OVERTAKE_HORIZON_SECONDS, toTarget / speed));
-      if (closest >= clearanceFor(runner, leader)) continue;
-      if (ahead < 0 || when < meetAt)
-      {
-        ahead = static_cast<int>(other);
-        meetAt = when;
-      }
-    }
-    if (ahead < 0)
-    {
-      runner.overtaking = -1;
-      continue;
-    }
-    const MatchPlayer& leader = players[static_cast<std::size_t>(ahead)];
-    const float clearance = clearanceFor(runner, leader);
-    const Vector2F leaderAt = metresAt(leader.position);
+    runner.overtaking = -1;
+    return;
+  }
+  const Vector2F position = metresAt(runner.position);
+  const float speed = lengthOf(runner.velocity);
+  const Vector2F target = metresAt(runner.tacticalTarget);
+  // Where he is running now: his route's next waypoint, else his target.
+  const bool routed = runner.routeWaypoints > 0;
+  const Vector2F aimed =
+      routed ? metresAt(runner.movementTarget) : target;
+  const float toTarget = lengthOf({aimed.x - position.x, aimed.y - position.y});
+  if (speed < OVERTAKE_MINIMUM_SPEED || toTarget < 1e-3f)
+  {
+    runner.overtaking = -1;
+    return;
+  }
+  // His run as he means it (straight at where he is running), not as his
+  // feet point mid-swerve: judged on that, a way round once found is kept
+  // until he is past (judged on his velocity, it switched itself off).
+  const Vector2F heading{(aimed.x - position.x) / toTarget,
+                         (aimed.y - position.y) / toTarget};
+  const Vector2F velocity{heading.x * speed, heading.y * speed};
+  // The one he would run into first, if any.
+  int ahead = -1;
+  float meetAt = 0.0f;
+  for (std::size_t other = 0; other < players.size(); ++other)
+  {
+    const MatchPlayer& leader = players[other];
+    if (other == slot || !active(leader)) continue;
     const float leaderSpeed = lengthOf(leader.velocity);
-    // The race is to where he is running now: on a route, its next
-    // waypoint (a turn there is no place to be alongside someone), else his
-    // target. The overtake must be over before he gets there: level with
-    // the leader and clear of him by the clearance.
-    if (meetAt * speed + clearance > toTarget)
-    {
-      runner.overtaking = -1;
+    if (leaderSpeed < OVERTAKE_MINIMUM_SPEED) continue;
+    const Vector2F leaderTarget = metresAt(leader.tacticalTarget);
+    if (lengthOf({leaderTarget.x - target.x, leaderTarget.y - target.y}) >
+        OVERTAKE_SAME_TARGET_METRES)
       continue;
+    if ((leader.velocity.x * heading.x + leader.velocity.y * heading.y) /
+            leaderSpeed <
+        OVERTAKE_SAME_DIRECTION_COSINE)
+      continue;
+    const Vector2F leaderAt = metresAt(leader.position);
+    if ((leaderAt.x - position.x) * heading.x +
+            (leaderAt.y - position.y) * heading.y <=
+        0.0f)
+      continue;
+    const auto [closest, when] = closestApproach(
+        position, velocity, leaderAt, leader.velocity,
+        std::min(OVERTAKE_HORIZON_SECONDS, toTarget / speed));
+    if (closest >= clearanceFor(runner, leader)) continue;
+    if (ahead < 0 || when < meetAt)
+    {
+      ahead = static_cast<int>(other);
+      meetAt = when;
     }
-    const float leaderTime =
-        routed ? lengthOf({aimed.x - leaderAt.x, aimed.y - leaderAt.y}) / leaderSpeed
-               : finishTime(leader, leaderAt, 0.0f, leaderSpeed).first;
-    // Where the leader will be when they draw level, and a waypoint beside
-    // him there, either side.
-    const Vector2F level{leaderAt.x + leader.velocity.x * meetAt,
-                         leaderAt.y + leader.velocity.y * meetAt};
-    const Vector2F across{-heading.y, heading.x};
-    struct Option
+  }
+  if (ahead < 0)
+  {
+    runner.overtaking = -1;
+    return;
+  }
+  const MatchPlayer& leader = players[static_cast<std::size_t>(ahead)];
+  const float clearance = clearanceFor(runner, leader);
+  const Vector2F leaderAt = metresAt(leader.position);
+  const float leaderSpeed = lengthOf(leader.velocity);
+  // The race is to where he is running now: on a route, its next
+  // waypoint (a turn there is no place to be alongside someone), else his
+  // target. The overtake must be over before he gets there: level with
+  // the leader and clear of him by the clearance.
+  if (meetAt * speed + clearance > toTarget)
+  {
+    runner.overtaking = -1;
+    return;
+  }
+  const float leaderTime =
+      routed ? lengthOf({aimed.x - leaderAt.x, aimed.y - leaderAt.y}) / leaderSpeed
+             : finishTime(leader, leaderAt, 0.0f, leaderSpeed).first;
+  // Where the leader will be when they draw level, and a waypoint beside
+  // him there, either side.
+  const Vector2F level{leaderAt.x + leader.velocity.x * meetAt,
+                       leaderAt.y + leader.velocity.y * meetAt};
+  const Vector2F across{-heading.y, heading.x};
+  struct Option
+  {
+    bool ok = false;
+    Vector2F waypoint{};
+    float metres = 0.0f;
+  };
+  std::array<Option, 2> options;
+  for (std::size_t index = 0; index < 2; ++index)
+  {
+    const float side = index == 0 ? 1.0f : -1.0f;
+    Option& option = options[index];
+    option.waypoint = {level.x + across.x * side * clearance,
+                       level.y + across.y * side * clearance};
+    const Vector2F toWaypoint{option.waypoint.x - position.x,
+                              option.waypoint.y - position.y};
+    const float firstLeg = lengthOf(toWaypoint);
+    const float firstTime = firstLeg / speed;
+    // Then on to where he is running (his route's next waypoint, or his
+    // target, moving or not).
+    const Vector2F onTo = routed ? aimed : finishTime(runner, option.waypoint,
+                                                      firstTime, speed).second;
+    const Vector2F toEnd{onTo.x - option.waypoint.x, onTo.y - option.waypoint.y};
+    const float time = firstTime + lengthOf(toEnd) / speed;
+    option.metres = time * speed;
+    // He must still win.
+    if (time >= leaderTime) continue;
+    // And nobody else may be about to run into his way round.
+    const Vector2F firstVelocity{toWaypoint.x / std::max(firstTime, 1e-3f),
+                                 toWaypoint.y / std::max(firstTime, 1e-3f)};
+    const float secondTime = std::max(lengthOf(toEnd) / speed, 1e-3f);
+    const Vector2F secondVelocity{toEnd.x / secondTime, toEnd.y / secondTime};
+    bool clear = true;
+    for (std::size_t other = 0; other < players.size() && clear; ++other)
     {
-      bool ok = false;
-      Vector2F waypoint{};
-      float metres = 0.0f;
-    };
-    std::array<Option, 2> options;
-    for (std::size_t index = 0; index < 2; ++index)
-    {
-      const float side = index == 0 ? 1.0f : -1.0f;
-      Option& option = options[index];
-      option.waypoint = {level.x + across.x * side * clearance,
-                         level.y + across.y * side * clearance};
-      const Vector2F toWaypoint{option.waypoint.x - position.x,
-                                option.waypoint.y - position.y};
-      const float firstLeg = lengthOf(toWaypoint);
-      const float firstTime = firstLeg / speed;
-      // Then on to where he is running (his route's next waypoint, or his
-      // target, moving or not).
-      const Vector2F onTo = routed ? aimed : finishTime(runner, option.waypoint,
-                                                        firstTime, speed).second;
-      const Vector2F toEnd{onTo.x - option.waypoint.x, onTo.y - option.waypoint.y};
-      const float time = firstTime + lengthOf(toEnd) / speed;
-      option.metres = time * speed;
-      // He must still win.
-      if (time >= leaderTime) continue;
-      // And nobody else may be about to run into his way round.
-      const Vector2F firstVelocity{toWaypoint.x / std::max(firstTime, 1e-3f),
-                                   toWaypoint.y / std::max(firstTime, 1e-3f)};
-      const float secondTime = std::max(lengthOf(toEnd) / speed, 1e-3f);
-      const Vector2F secondVelocity{toEnd.x / secondTime, toEnd.y / secondTime};
-      bool clear = true;
-      for (std::size_t other = 0; other < players.size() && clear; ++other)
+      const MatchPlayer& third = players[other];
+      if (other == slot || other == static_cast<std::size_t>(ahead) ||
+          !active(third))
+        continue;
+      const Vector2F at = metresAt(third.position);
+      const float room = clearanceFor(runner, third);
+      const float window = std::min(firstTime, OVERTAKE_HORIZON_SECONDS);
+      if (closestApproach(position, firstVelocity, at, third.velocity, window)
+              .first < room)
+        clear = false;
+      else if (firstTime < OVERTAKE_HORIZON_SECONDS)
       {
-        const MatchPlayer& third = players[other];
-        if (other == slot || other == static_cast<std::size_t>(ahead) ||
-            !active(third))
-          continue;
-        const Vector2F at = metresAt(third.position);
-        const float room = clearanceFor(runner, third);
-        const float window = std::min(firstTime, OVERTAKE_HORIZON_SECONDS);
-        if (closestApproach(position, firstVelocity, at, third.velocity, window)
+        const Vector2F later{at.x + third.velocity.x * firstTime,
+                             at.y + third.velocity.y * firstTime};
+        if (closestApproach(option.waypoint, secondVelocity, later,
+                            third.velocity,
+                            std::min(secondTime,
+                                     OVERTAKE_HORIZON_SECONDS - firstTime))
                 .first < room)
           clear = false;
-        else if (firstTime < OVERTAKE_HORIZON_SECONDS)
-        {
-          const Vector2F later{at.x + third.velocity.x * firstTime,
-                               at.y + third.velocity.y * firstTime};
-          if (closestApproach(option.waypoint, secondVelocity, later,
-                              third.velocity,
-                              std::min(secondTime,
-                                       OVERTAKE_HORIZON_SECONDS - firstTime))
-                  .first < room)
-            clear = false;
-        }
       }
-      option.ok = clear;
     }
-    // The shorter side that works; the one he chose before unless the other
-    // is clearly shorter.
-    int chosen = -1;
-    for (int index = 0; index < 2; ++index)
-      if (options[static_cast<std::size_t>(index)].ok &&
-          (chosen < 0 || options[static_cast<std::size_t>(index)].metres <
-                             options[static_cast<std::size_t>(chosen)].metres))
-        chosen = index;
-    if (chosen >= 0 && runner.overtaking == ahead && runner.overtakeSide != 0)
-    {
-      const int previous = runner.overtakeSide > 0 ? 0 : 1;
-      if (previous != chosen && options[static_cast<std::size_t>(previous)].ok &&
-          options[static_cast<std::size_t>(previous)].metres <=
-              options[static_cast<std::size_t>(chosen)].metres +
-                  OVERTAKE_STICKY_METRES)
-        chosen = previous;
-    }
-    if (chosen < 0)
-    {
-      runner.overtaking = -1;
-      continue;
-    }
-    const Option& option = options[static_cast<std::size_t>(chosen)];
-    runner.overtaking = static_cast<std::int8_t>(ahead);
-    runner.overtakeSide = chosen == 0 ? 1 : -1;
-    const Vector2F waypoint = toPitch(option.waypoint);
-    if (routed)
-    {
-      // Ahead of his route: the way round first, then its next waypoint
-      // (its line through them as it was).
-      runner.nextTarget = runner.movementTarget;
-      runner.movementTarget = waypoint;
-      runner.routeWaypoints = 2;
-    }
-    else
-    {
-      runner.movementTarget = waypoint;
-      runner.nextTarget = runner.tacticalTarget;
-      runner.routeWaypoints = 1;
-      runner.routeApexOffset = 0.0f;
-      runner.routeOutwardRoom = clearance;
-    }
+    option.ok = clear;
+  }
+  // The shorter side that works; the one he chose before unless the other
+  // is clearly shorter.
+  int chosen = -1;
+  for (int index = 0; index < 2; ++index)
+    if (options[static_cast<std::size_t>(index)].ok &&
+        (chosen < 0 || options[static_cast<std::size_t>(index)].metres <
+                           options[static_cast<std::size_t>(chosen)].metres))
+      chosen = index;
+  if (chosen >= 0 && runner.overtaking == ahead && runner.overtakeSide != 0)
+  {
+    const int previous = runner.overtakeSide > 0 ? 0 : 1;
+    if (previous != chosen && options[static_cast<std::size_t>(previous)].ok &&
+        options[static_cast<std::size_t>(previous)].metres <=
+            options[static_cast<std::size_t>(chosen)].metres +
+                OVERTAKE_STICKY_METRES)
+      chosen = previous;
+  }
+  if (chosen < 0)
+  {
+    runner.overtaking = -1;
+    return;
+  }
+  const Option& option = options[static_cast<std::size_t>(chosen)];
+  runner.overtaking = static_cast<std::int8_t>(ahead);
+  runner.overtakeSide = chosen == 0 ? 1 : -1;
+  const Vector2F waypoint = toPitch(option.waypoint);
+  if (routed)
+  {
+    // Ahead of his route: the way round first, then its next waypoint
+    // (its line through them as it was).
+    runner.nextTarget = runner.movementTarget;
+    runner.movementTarget = waypoint;
+    runner.routeWaypoints = 2;
+  }
+  else
+  {
+    runner.movementTarget = waypoint;
+    runner.nextTarget = runner.tacticalTarget;
+    runner.routeWaypoints = 1;
+    runner.routeApexOffset = 0.0f;
+    runner.routeOutwardRoom = clearance;
   }
 }
 
@@ -4114,4 +4111,19 @@ MatchEngine::RestartPlay MatchEngine::chooseCornerPlayBinturong(
   delivery.lofted = true;
   delivery.intent = PassIntent::CROSS;
   return {RestartPlay::Kind::PASS, delivery, true};
+}
+
+MatchPlayer* MatchEngine::chooseTakeOnBinturong(MatchPlayer& carrier)
+{
+  // A defender standing in his path, close and ready to challenge, is taken
+  // on rather than run through.
+  MatchPlayer* blocker =
+      findClosestPlayer(carrier.position, !carrier.isHomeTeam, false);
+  const float forward = carrier.isHomeTeam ? 1.0f : -1.0f;
+  if (blocker && blocker->tackleCooldown <= 0.0f &&
+      distance(blocker->position, carrier.position) <
+          MatchTuning::Dribble::TAKE_ON_RANGE_METRES &&
+      (blocker->position.x - carrier.position.x) * forward > 0.0f)
+    return blocker;
+  return nullptr;
 }

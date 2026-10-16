@@ -419,6 +419,11 @@ MatchSample simulateMatch(const MatchJob& job, const StatsConfig& config)
   engine.setBrain(false, job.away.brain);
   engine.setBody(true, job.home.body);
   engine.setBody(false, job.away.body);
+  engine.setManager(true, job.home.manager);
+  engine.setManager(false, job.away.manager);
+  engine.setReferee(job.referee);
+  engine.setBallPhysics(job.ballPhysics);
+  engine.setOutOfPlay(job.outOfPlay);
   engine.setFirstTouchKnobs(job.touchKnobs);
   engine.setStrikeKnobs(job.strikeKnobs);
   MatchdaySquad::carryCondition(engine, home);

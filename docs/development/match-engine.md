@@ -179,6 +179,7 @@ cross-thread publishing. The 2D and 3D views interpolate the same state.
 | Change | Start here | Focused coverage |
 |--------|------------|------------------|
 | Targets, actions, contact integration | `match_engine.cpp` | [Engine](../../test/test_match_engine.cpp), [scenarios](../../test/test_match_scenarios.cpp) |
+| Swappable parts (brain, body, handshake, referee, AI manager, ball physics, out of play) | `match_<part>.h`, `match_<part>_<version>.cpp`, `match_<part>_dispatch.cpp` | `match_sandbox --check`, `fm_lab` with the part's option |
 | Roles, duties, shape and opposition orders | `tactics.*`, `strategy.*` | [Tactics](../../test/test_tactics.cpp) |
 | Pure football rules | `match_rules.*` | [Rules](../../test/test_match_rules.cpp) |
 | Batch inputs and league context | `match_scheduler.*`, `match_context.h` | [Scheduler/context](../../test/test_match_scheduler.cpp) |

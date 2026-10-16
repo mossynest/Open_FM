@@ -71,6 +71,8 @@ class MatchSandboxScene : public GUIScene
   void renderBrainPicker(bool home);
   /** Which body the side's players play with (edits sandboxBodies()). */
   void renderBodyPicker(bool home);
+  /** Which AI manager runs the side (edits sandboxManagers()). */
+  void renderManagerPicker(bool home);
   void renderFormation(Team& team);
   void renderInstructions(Strategy& strategy);
   void renderSelection(Team& team);

@@ -22,70 +22,25 @@
 #include "global/stats_config.h"
 #include "global/types.h"
 #include "model/lineup.h"
+#include "model/match_ball_physics.h"
 #include "model/match_body.h"
 #include "model/match_brain.h"
 #include "model/match_handshake.h"
+#include "model/match_manager.h"
+#include "model/match_out_of_play.h"
 #include "model/match_context.h"
 #include "model/match_derived_stats.h"
 #include "model/match_first_touch_knobs.h"
 #include "model/match_strike_knobs.h"
 #include "model/match_events.h"
+#include "model/match_referee.h"
 #include "model/match_rules.h"
 #include "model/match_scenario.h"
+#include "model/match_state.h"
 #include "model/match_tracking.h"
 #include "model/match_tuning.h"
 #include "model/strategy.h"
 #include "model/tactics.h"
-
-enum class MatchState
-{
-  KICK_OFF,
-  PLAYING,
-  THROW_IN,
-  GOAL_KICK,
-  CORNER_KICK,
-  FREE_KICK,
-  PENALTY,
-  GOAL,
-  /** A level knockout match decided from the spot (clock stopped). */
-  PENALTY_SHOOTOUT,
-  /** Half-time, and the breaks before and during extra time. */
-  HALF_TIME,
-  FULL_TIME
-};
-
-/** Team-level context shared by individual player decisions. */
-enum class TeamPhase
-{
-  STOPPAGE,
-  SET_PIECE,
-  DEFENSIVE_BLOCK,
-  DEFENSIVE_TRANSITION,
-  ATTACKING_TRANSITION,
-  POSSESSION,
-  FINAL_THIRD
-};
-
-/** High-level decision currently driving a player's renderer-independent AI. */
-enum class PlayerIntent
-{
-  HOLD_SHAPE,
-  CARRY_BALL,
-  OFFER_SUPPORT,
-  RECEIVE_PASS,
-  RUN_IN_BEHIND,
-  ATTACK_BOX,
-  OVERLAP,
-  PRESS_BALL,
-  COVER_PRESS,
-  BLOCK_PASSING_LANE,
-  MARK_OPPONENT,
-  CLAIM_LOOSE_BALL,
-  RECOVER_SHAPE,
-  GOALKEEP
-};
-inline constexpr std::size_t PLAYER_INTENT_COUNT =
-    static_cast<std::size_t>(PlayerIntent::GOALKEEP) + 1;
 
 /** How a player moves (fatigue plan 4.2): the brain's vocabulary, which the
  * body turns into a speed band for him (MatchEngine::speedBand). */
@@ -206,21 +161,6 @@ enum class ScenarioAction
   SHIELD,
   CLEAR
 };
-
-/** Semantic goalkeeper state. Animation stays out of the engine. */
-enum class GoalkeeperState
-{
-  SET_POSITION,
-  SWEEP,
-  RUSH,
-  CLAIM,
-  DIVE,
-  HOLD,
-  DISTRIBUTE,
-  RECOVER
-};
-
-std::string_view goalkeeperStateName(GoalkeeperState state);
 
 struct ScenarioDecision
 {
@@ -1261,6 +1201,34 @@ class MatchEngine
     bodies[homeTeam ? 0 : 1] = body;
   }
   BodyId getBody(bool homeTeam) const { return bodies[homeTeam ? 0 : 1]; }
+  /** The match's referee (see match_referee.h). Set before kickoff;
+   * Aardvark unless told otherwise. */
+  void setReferee(RefereeId referee) { refereeId = referee; }
+  RefereeId getReferee() const { return refereeId; }
+  /** What happens when the ball leaves play and how play restarts (see
+   * match_out_of_play.h). Set before kickoff; Aardvark unless told
+   * otherwise. */
+  void setOutOfPlay(OutOfPlayId version) { outOfPlayId = version; }
+  OutOfPlayId getOutOfPlay() const { return outOfPlayId; }
+  /** The AI manager a side is run by when the engine manages it (see
+   * match_manager.h, setAutoSubstitutions). Set before kickoff; Aardvark
+   * unless told otherwise. */
+  void setManager(bool homeTeam, ManagerId manager)
+  {
+    managers[homeTeam ? 0 : 1] = manager;
+  }
+  ManagerId getManager(bool homeTeam) const
+  {
+    return managers[homeTeam ? 0 : 1];
+  }
+  /** The match's ball physics (see match_ball_physics.h). Set before
+   * kickoff; Aardvark unless told otherwise. */
+  void setBallPhysics(BallPhysicsId physics) { ballPhysicsId = physics; }
+  BallPhysicsId getBallPhysics() const { return ballPhysicsId; }
+  /** Advances a flight by `dt` with the match's ball physics; returns the
+   * horizontal distance travelled (metres). For predictions too, so they
+   * match the real flight. */
+  float stepFlight(FlightState& flight, float dt) const;
   /**
    * Replaces a side's tactics at any time; the sliders apply from the next
    * step and the players re-form over a few seconds (their target response).
@@ -1806,6 +1774,14 @@ class MatchEngine
   std::array<BodyId, 2> bodies{BodyId::AARDVARK, BodyId::AARDVARK};
   /** The match's handshake (constructor). */
   HandshakeId handshakeId = HandshakeId::AARDVARK;
+  /** The match's referee; see setReferee. */
+  RefereeId refereeId = RefereeId::AARDVARK;
+  /** The match's out-of-play version; see setOutOfPlay. */
+  OutOfPlayId outOfPlayId = OutOfPlayId::AARDVARK;
+  /** Each side's AI manager (home, away); see setManager. */
+  std::array<ManagerId, 2> managers{ManagerId::AARDVARK, ManagerId::AARDVARK};
+  /** The match's ball physics; see setBallPhysics. */
+  BallPhysicsId ballPhysicsId = BallPhysicsId::AARDVARK;
   std::mt19937 rng;
   // Referee decisions and injuries draw from their own stream so tuning them
   // does not reshuffle player decisions and ball physics.
@@ -2166,6 +2142,11 @@ class MatchEngine
   };
   /** Scores the carrier's options and picks one (decision record included). */
   BallAction chooseBallAction(MatchPlayer& carrier);
+  /** Carrying the ball: the defender he tries to beat now, if any. */
+  MatchPlayer* chooseTakeOn(MatchPlayer& carrier);
+  /** Whether the runner in `slot` goes round someone he is about to run
+   * into (MatchPlayer::overtaking). */
+  void planOvertake(std::size_t slot);
   /** The team's off-ball intents the moment a pass is released. */
   void afterPassReleased(const MatchPlayer& passer, const MatchPlayer& receiver);
   /** Where a shot is aimed, in metres across and up the goal mouth. */
@@ -2304,6 +2285,9 @@ class MatchEngine
   // How well one player's body carries out his brain's choice and what it
   // costs him. Each runs with the body of the player's side; contests between
   // players, the ball's flight and the rules are shared.
+
+  /** Whether his body can follow a route (waypoints on the way). */
+  bool followsRoutes(const MatchPlayer& player) const;
 
   /** The controlled player's body following the stick (Play mode): physics
    * sub-steps, and his facing kept on `faceToward` while jockeying. */
@@ -2472,20 +2456,12 @@ class MatchEngine
   void beginStoppage();
   /** Extends the current restart delay (card, treatment, substitution). */
   void extendRestart(float seconds);
+  /** At a new stoppage, each side's AI manager reviews its side once. */
   void runAiSubstitutions();
-  void runAiSubstitutionsFor(bool homeTeam);
-  /** Takes off the side's players the medical staff limited to an hour. */
-  void runMedicalSubstitutions(bool homeTeam);
   bool performSubstitution(MatchPlayer& outgoing, const Player* inPlayer,
                            SubstitutionReason reason);
-  const Player* chooseReplacement(bool homeTeam, PlayerRole role,
-                                  bool wantGoalkeeper) const;
-  void commitFoul(MatchPlayer& offender, MatchPlayer& victim, bool ballWon,
-                  bool reckless);
+  /** What a card does: logged, counted, and a sending-off leaves. */
   void applySanction(MatchPlayer& offender, MatchRules::FoulSanction sanction);
-  bool deniesGoalChance(const MatchPlayer& victim,
-                        const MatchPlayer& offender) const;
-  void updatePendingAdvantage(float dt);
   /** Current top speed (m/s) after fatigue, sprint reserve and injury. */
   float currentTopSpeed(const MatchPlayer& player) const;
   /** His fatigue, 0 fresh to 1 spent, as his side's body reads his fuel. */
@@ -2518,22 +2494,8 @@ class MatchEngine
   void clearBehind(MatchPlayer& defender, bool headed = false);
   void clearBall(MatchPlayer& defender);
   void parryShot(MatchPlayer& goalkeeper, bool overTheBar);
-  /**
-   * Sends the ball from `origin` toward `target` (normalised) with a
-   * horizontal speed and vertical speed in m/s; the kicker is locked out of
-   * touching it again for a moment.
-   */
-  void launchBall(const MatchPlayer& kicker, Vector2F origin, Vector2F target,
-                  float horizontalSpeed, float verticalSpeed, float curve);
-  /** Launch speed for a ground ball to arrive at `arrivalSpeed`. */
-  static float groundLaunchSpeed(float distanceMetres, float arrivalSpeed);
-  /** Vertical launch speed so the ball is at `arrivalHeight` metres after
-   * `distanceMetres` of horizontal travel. */
-  static float loftVerticalSpeed(float distanceMetres, float horizontalSpeed,
-                                 float startHeight, float arrivalHeight);
   /** Releases a restart the way the taker's brain chooses. */
   void takeSetPiece(MatchPlayer& taker, MatchState restartState);
-  void takeDirectFreeKick(MatchPlayer& taker);
   void arrangeSetPiece(bool attackingHome, Vector2F ballPosition);
   /**
    * Taker of a dead-ball duty right now: the side's designated player while
@@ -2541,7 +2503,6 @@ class MatchEngine
    * bestSetPieceTaker(). Long throws have no automatic specialist (nullptr).
    */
   MatchPlayer* dutyTaker(bool homeTeam, SetPieceDuty duty);
-  void placeTaker(MatchPlayer& taker, Vector2F spot);
   MatchPlayer* restartTaker();
   void setRestartTaker(MatchPlayer* taker);
   std::size_t slotOf(const MatchPlayer& player) const;
@@ -2572,8 +2533,6 @@ class MatchEngine
   float drawRefereeStrictness() const;
   /** Work-rate bonus from an encouraging shout. */
   float shoutWorkRate(bool homeTeam) const;
-  /** AI managers adjust with shouts to the score late in the game. */
-  void runAiTouchline(bool homeTeam);
   void refreshTargetBlends();
   /** A side's man-marking assignments (markAssignments). */
   void assignMarks(bool home);
@@ -2606,9 +2565,6 @@ class MatchEngine
   void refreshTacticalTargets(float dt, bool planHome);
   /** Integrates the free ball in sub-steps, resolving contacts in each. */
   void updateBall(float dt);
-  /** Pure ball physics for one sub-step (no contacts or rules). */
-  void integrateBall(float dt);
-  void updateBallInNet(float dt);
   void resolvePossessionAndActions(float dt);
   /** Moves the dribbled ball with its carrier; false if a heavy touch lost it.
    */
@@ -2710,22 +2666,6 @@ class MatchEngine
   /** Gives the ball to a player outside open play (restarts, substitutes,
    * scenarios): ownership only, none of setPossession's touch bookkeeping. */
   void handBallTo(const Player* holder);
-  // First touch (first-touch plan): a Binturong body plays a feet-height ball
-  // on under physics and runs onto it, instead of trapping it dead.
-  /** Whether this contact is played with the new first touch. */
-  bool playsFirstTouch(const MatchPlayer& player, bool hands,
-                       float heightMetres) const;
-  /** How far from his centre he can play a ball at his feet (the feet-reach
-   * knob for Binturong outfielders). */
-  float feetReach(const MatchPlayer& player) const;
-  /** Where his strike starts: the ball where it lies for a Binturong body,
-   * his centre for the Aardvark body. */
-  Vector2F strikePoint(const MatchPlayer& striker) const;
-  /** A strike towards `target` at `speed` over the ground and `lift`
-   * upward: carried out by the contact model as `kind` for a Binturong
-   * body (where it really goes), as asked for the Aardvark body. */
-  Kick strikeAs(const MatchPlayer& striker, StrikeKind kind, Vector2F target,
-                float speed, float lift);
   /** The touch when no brain chooses one: set it just ahead of him, toward
    * the goal he attacks. */
   TouchIntent defaultTouchIntent(const MatchPlayer& player) const;
@@ -2789,16 +2729,8 @@ class MatchEngine
                  float defenderLine, float lineTolerance = 0.0f) const;
   float offsideLine(bool attackingHome) const;
 
-  void checkOutOfBounds();
-  void scoreGoal(bool homeTeam);
   void makeSave(MatchPlayer& goalkeeper);
-  void completeRestart();
   void setupKickOff(bool homeKickingOff);
-  void setupThrowIn(bool homeTeam);
-  void setupGoalKick(bool homeTeam);
-  void setupCorner(bool homeTeam, bool topCorner);
-  void setupFreeKick(bool homeTeam, Vector2F foulPos);
-  void setupPenalty(bool homeTeam);
   void resetPositions();
   /** Kick-off formation spot of a player (his own half). */
   Vector2F kickOffPosition(const MatchPlayer& player) const;
@@ -2823,11 +2755,142 @@ class MatchEngine
   /** One fixed step of the simulation (simulateStep adds the commentary). */
   void simulateStepBody(float dt);
 
+  // --- Referee: the officials' judgement (match_referee.h) ------------------
+  // One per match; each dispatches to it (match_referee_dispatch.cpp).
+
+  /** A foul by `offender` on `victim`: counted, then dealt with - sanction,
+   * advantage or the restart (`ballWon`: the challenge reached the ball
+   * first; `reckless`: a sliding tackle from behind). */
+  void commitFoul(MatchPlayer& offender, MatchPlayer& victim, bool ballWon,
+                  bool reckless);
+  /** An advantage being played: ends it, or calls back the free kick. */
+  void updatePendingAdvantage(float dt);
+  /** Whether `passer`'s pass to `option`'s receiver is given offside, the
+   * defenders' line at `defenderLine` (normalised x). */
+  bool judgeOffside(const MatchPlayer& passer, const PassOption& option,
+                    float defenderLine) const;
+  /** Whole added minutes due for the current period from its stoppages. */
+  int addedMinutesDue() const;
+
+  // --- Player body: meeting and striking the ball ---------------------------
+  // Each runs with the body of the player's side (match_body_dispatch.cpp).
+
+  /** What kind of strike the ball is leaving from (see releaseFrom). */
+  enum class ReleaseKind : std::uint8_t
+  {
+    PASS,
+    SHOT,
+    HEADED_SHOT,
+    CLEARANCE,
+    CLEAR_BEHIND,
+    HEADER,
+  };
+  /** Where and how high the ball leaves a strike: `position` and `z` (length
+   * units, as MatchBall::z); `heightMetres` the same height in metres, which
+   * a shot's flight is worked out from. */
+  struct BallRelease
+  {
+    Vector2F position{};
+    float z = 0.0f;
+    float heightMetres = 0.0f;
+  };
+  /** Where his body releases the ball for a strike of this kind. */
+  BallRelease releaseFrom(const MatchPlayer& kicker, ReleaseKind kind) const;
+  /** His head meets the ball: it is where his body plays it from. */
+  void meetWithHead(const MatchPlayer& header);
+  /**
+   * Sends the ball from `from` (where his body released it) toward `target`
+   * (normalised) with a horizontal speed and vertical speed in m/s; the
+   * kicker is locked out of touching it again for a moment. Shared: it only
+   * sets the ball off as the body released it.
+   */
+  void launchBall(const MatchPlayer& kicker, const BallRelease& from,
+                  Vector2F target, float horizontalSpeed, float verticalSpeed,
+                  float curve);
+  /** Whether this contact is played with the new first touch (a feet-height
+   * ball played on under physics, not trapped dead). */
+  bool playsFirstTouch(const MatchPlayer& player, bool hands,
+                       float heightMetres) const;
+  /** How far from his centre he can play a ball at his feet. */
+  float feetReach(const MatchPlayer& player) const;
+  /** Whether a ball `gap` metres away (`gapX`, `gapY` from the ball to him)
+   * is behind him beyond his reach (a dead zone). */
+  bool ballBehindReach(const MatchPlayer& player, float gapX, float gapY,
+                       float gap) const;
+  /** Where his strike starts. */
+  Vector2F strikePoint(const MatchPlayer& striker) const;
+  /** A strike towards `target` at `speed` over the ground and `lift`
+   * upward, as `kind`: where it really goes and how. */
+  Kick strikeAs(const MatchPlayer& striker, StrikeKind kind, Vector2F target,
+                float speed, float lift);
+  /** How far a clearance struck from `origin` toward `aim` is lofted for. */
+  float clearanceDistance(const MatchPlayer& defender, Vector2F origin,
+                          const ClearanceAim& aim) const;
+  /** A direct free kick: blocked by the wall, or a shot over it. */
+  void takeDirectFreeKick(MatchPlayer& taker);
+
+  // --- Out of play: the ball out and restarts (match_out_of_play.h) --------
+  // One per match; each dispatches to it (match_out_of_play_dispatch.cpp).
+
+  /** The ball over a line this sub-step: a goal, the woodwork, a corner,
+   * goal kick or throw-in. */
+  void checkOutOfBounds();
+  /** A goal for the home side (`homeTeam`) or the away side. */
+  void scoreGoal(bool homeTeam);
+  /** The ball settling in the net during the celebration. */
+  void updateBallInNet(float dt);
+  void setupThrowIn(bool homeTeam);
+  void setupGoalKick(bool homeTeam);
+  void setupCorner(bool homeTeam, bool topCorner);
+  void setupFreeKick(bool homeTeam, Vector2F foulPos);
+  void setupPenalty(bool homeTeam);
+  /** Puts the taker on the spot; anyone standing there steps aside. */
+  void placeTaker(MatchPlayer& taker, Vector2F spot);
+  /** The restart's wait is over: the taker plays it. */
+  void completeRestart();
+
+  // --- AI manager: a managed side's touchline (match_manager.h) -------------
+  // Per side; each dispatches to that side's manager
+  // (match_manager_dispatch.cpp).
+
+  /** A side's substitutions at a stoppage (injuries, medical limits,
+   * fatigue, cards, the score). */
+  void runAiSubstitutionsFor(bool homeTeam);
+  /** The bench player a side brings on for `role` (a keeper or not). */
+  const Player* chooseReplacement(bool homeTeam, PlayerRole role,
+                                  bool wantGoalkeeper) const;
+  /** Shouts to the score late in the game. */
+  void runAiTouchline(bool homeTeam);
+  /** The AI manager of a side. */
+  ManagerId managerOf(bool homeTeam) const { return managers[homeTeam ? 0 : 1]; }
+
+  // --- Ball physics: the ball on its own (match_ball_physics.h) -------------
+  // One per match; each dispatches to it (match_ball_physics_dispatch.cpp),
+  // as does stepFlight.
+
+  /** Pure ball physics for one sub-step (no contacts or rules). */
+  void integrateBall(float dt);
+  /** Launch speed for a ground ball to arrive at `arrivalSpeed`. */
+  float groundLaunchSpeed(float distanceMetres, float arrivalSpeed) const;
+  /** Vertical launch speed so the ball is at `arrivalHeight` metres after
+   * `distanceMetres` of horizontal travel. */
+  float loftVerticalSpeed(float distanceMetres, float horizontalSpeed,
+                          float startHeight, float arrivalHeight) const;
+
   // The bodies' own members, one file per body (after every type they use;
   // the functions in "Player body" above dispatch to them,
-  // match_body_dispatch.cpp).
+  // match_body_dispatch.cpp). Likewise the handshakes', referees', managers'
+  // ball physics' and out of play's.
 #include "model/match_body_aardvark_members.h"
 #include "model/match_body_binturong_members.h"
 #include "model/match_handshake_aardvark_members.h"
 #include "model/match_handshake_binturong_members.h"
+#include "model/match_referee_aardvark_members.h"
+#include "model/match_referee_binturong_members.h"
+#include "model/match_manager_aardvark_members.h"
+#include "model/match_manager_binturong_members.h"
+#include "model/match_out_of_play_aardvark_members.h"
+#include "model/match_out_of_play_binturong_members.h"
+#include "model/match_ball_physics_aardvark_members.h"
+#include "model/match_ball_physics_binturong_members.h"
 };

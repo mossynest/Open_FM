@@ -159,6 +159,12 @@ set(FM_CORE_SOURCES
     model/match_report.cpp
     model/match_commentary.h
     model/match_commentary.cpp
+    model/match_ball_physics.h
+    model/match_ball_physics_dispatch.cpp
+    model/match_ball_physics_binturong.cpp
+    model/match_ball_physics_binturong_members.h
+    model/match_ball_physics_aardvark.cpp
+    model/match_ball_physics_aardvark_members.h
     model/match_body.h
     model/match_body_dispatch.cpp
     model/match_body_binturong.cpp
@@ -179,13 +185,34 @@ set(FM_CORE_SOURCES
     model/match_handshake_binturong_members.h
     model/match_handshake_aardvark.cpp
     model/match_handshake_aardvark_members.h
+    model/match_manager.h
+    model/match_manager_dispatch.cpp
+    model/match_manager_binturong.cpp
+    model/match_manager_binturong_members.h
+    model/match_manager_aardvark.cpp
+    model/match_manager_aardvark_members.h
+    model/match_out_of_play.h
+    model/match_out_of_play_dispatch.cpp
+    model/match_out_of_play_binturong.cpp
+    model/match_out_of_play_binturong_members.h
+    model/match_out_of_play_aardvark.cpp
+    model/match_out_of_play_aardvark_members.h
     model/match_contact_binturong.h
     model/match_engine.h
     model/match_engine_internal.h
     model/match_engine.cpp
     model/match_engine_tracking.cpp
+    model/match_engine_drills.cpp
+    model/match_engine_jitter.cpp
+    model/match_engine_play.cpp
     model/match_events.h
     model/match_recorder.h
+    model/match_referee.h
+    model/match_referee_dispatch.cpp
+    model/match_referee_binturong.cpp
+    model/match_referee_binturong_members.h
+    model/match_referee_aardvark.cpp
+    model/match_referee_aardvark_members.h
     model/match_insights.h
     model/match_insights.cpp
     model/match_tracking.h
@@ -193,6 +220,7 @@ set(FM_CORE_SOURCES
     model/match_rules.h
     model/match_rules.cpp
     model/match_scenario.h
+    model/match_state.h
     model/match_scheduler.h
     model/match_scheduler.cpp
     model/match_tuning.h
@@ -355,6 +383,7 @@ set(FM_UI_SOURCES
     gui/player_ui.h
     gui/render/imatch_renderer.h
     gui/render/match_render_snapshot.h
+    gui/render/match_render_snapshot.cpp
     gui/render/match_renderer_2d.h
     gui/render/match_renderer_2d.cpp
     gui/render/match_render_2d_tuning.h

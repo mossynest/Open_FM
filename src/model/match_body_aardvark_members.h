@@ -96,4 +96,16 @@
   float aerialStrengthAardvark(const MatchPlayer& player, float ballHeightMetres) const;
   float claimChanceAardvark(const MatchPlayer& keeper, int crowding) const;
   void recoverFromTakeOnAardvark(MatchPlayer& defender);
+  // Striking (see strikeAs and the others in match_engine.h).
+  bool playsFirstTouchAardvark(const MatchPlayer& player, bool hands, float heightMetres) const;
+  float feetReachAardvark(const MatchPlayer& player) const;
+  bool ballBehindReachAardvark(const MatchPlayer& player, float gapX, float gapY, float gap) const;
+  Vector2F strikePointAardvark(const MatchPlayer& striker) const;
+  Kick strikeAsAardvark(const MatchPlayer& striker, StrikeKind kind, Vector2F target, float speed, float lift);
+  float clearanceDistanceAardvark(const MatchPlayer& defender, Vector2F origin, const ClearanceAim& aim) const;
+  /** A direct free kick: blocked by the wall, or a shot over it. */
+  void takeDirectFreeKickAardvark(MatchPlayer& taker);
+  BallRelease releaseFromAardvark(const MatchPlayer& kicker, ReleaseKind kind) const;
+  void meetWithHeadAardvark(const MatchPlayer& header);
+  bool followsRoutesAardvark(const MatchPlayer& player) const;
 // clang-format on

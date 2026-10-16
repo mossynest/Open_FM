@@ -23,12 +23,14 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <numbers>
 
 #include "model/match_engine.h"
 #include "model/match_engine_internal.h"
 #include "model/match_recorder.h"
 #include "model/match_rules.h"
+#include "model/player.h"
 
 using namespace MatchEngineInternal;
 
@@ -501,7 +503,7 @@ bool MatchEngine::updateDribbleAardvark(MatchPlayer& carrier, float dt)
         const float push = speed + randomFloat(R::MIN_HEAVY_PUSH_SPEED,
                                                R::MAX_HEAVY_PUSH_SPEED);
         const Vector2F origin = ball.position;
-        launchBall(carrier, origin,
+        launchBall(carrier, BallRelease{origin, 0.0f, 0.0f},
                    {origin.x + ball.dribbleDirection.x,
                     origin.y + ball.dribbleDirection.y},
                    push, 0.0f, 0.0f);
@@ -928,10 +930,13 @@ bool MatchEngine::tryOwnGoalTouchAardvark(MatchPlayer& defender)
                             aimMetres / MatchTuning::Pitch::WIDTH_METRES};
   const float height = ball.z;
   clearFlightState();
-  launchBall(defender, ball.position, target,
+  // It skews off him at the height it met him.
+  launchBall(defender,
+             BallRelease{ball.position, height,
+                         height * MatchTuning::Units::BALL_Z_METRES},
+             target,
              randomFloat(S::OWN_GOAL_MIN_SPEED, S::OWN_GOAL_MAX_SPEED),
              randomFloat(0.0f, S::OWN_GOAL_MAX_LIFT), 0.0f);
-  ball.z = height;
   lastShooter = nullptr;
   return true;
 }
@@ -1093,4 +1098,158 @@ void MatchEngine::recoverFromTakeOnAardvark(MatchPlayer& defender)
       std::max(defender.tackleCooldown, R::BEATEN_SECONDS);
   defender.velocity.x *= R::BEATEN_VELOCITY_RETAINED;
   defender.velocity.y *= R::BEATEN_VELOCITY_RETAINED;
+}
+
+// --- Striking and the wall ---------------------------------------------------
+
+void MatchEngine::takeDirectFreeKickAardvark(MatchPlayer& taker)
+{
+  // The wall blocks a share of attempts; the rest are struck over it with
+  // a little less precision, and the keeper's view is partly screened.
+  const float wallChance =
+      std::clamp(MatchTuning::SetPiece::WALL_BLOCK_BASE -
+                     taker.shooting * MatchTuning::SetPiece::WALL_BLOCK_SKILL,
+                 0.05f, 0.6f);
+  if (randomFloat(0.0f, 1.0f) < wallChance)
+  {
+    takeShot(taker);
+    const float outward = taker.isHomeTeam ? -1.0f : 1.0f;
+    const float speed =
+        length(ball.velocity) * MatchTuning::SetPiece::WALL_REBOUND_SPEED_SHARE;
+    ball.touchAttempts = 0;
+    MatchPlayer* wallPlayer = nullptr;
+    float best = std::numeric_limits<float>::max();
+    for (auto& player : players)
+    {
+      if (!active(player) || player.isHomeTeam == taker.isHomeTeam ||
+          player.isGoalkeeper)
+        continue;
+      const float d = distance(player.position, ball.position);
+      if (d < best)
+      {
+        best = d;
+        wallPlayer = &player;
+      }
+    }
+    ball.isShot = false;
+    ball.shotOnTarget = false;
+    ball.shotSaveResolved = true;
+    ball.velocity = {outward * speed * randomFloat(0.3f, 1.0f),
+                     speed * randomFloat(-0.8f, 0.8f)};
+    ball.velocityZ = randomFloat(0.0f, MatchTuning::Aerial::HEADER_LIFT);
+    if (wallPlayer)
+    {
+      ball.position = wallPlayer->position;
+      ball.lastPossessor = wallPlayer->player;
+      ball.kicker = wallPlayer->player;
+      ball.kickerLockout = MatchTuning::Passing::KICKER_LOCKOUT_SECONDS;
+      ++statsOf(*wallPlayer).clearances;
+      logEvent(MatchEventType::SHOT_BLOCKED, *wallPlayer).detail =
+          MatchEventDetail::WALL;
+    }
+    return;
+  }
+  takeShot(taker, MatchTuning::SetPiece::DIRECT_FREE_KICK_XG, false, true);
+  if (MatchPlayer* keeper = findGoalkeeper(!taker.isHomeTeam))
+  {
+    keepers[keeper->isHomeTeam ? 0 : 1].reactionRemaining +=
+        MatchTuning::SetPiece::WALL_SCREEN_SECONDS;
+  }
+}
+
+bool MatchEngine::playsFirstTouchAardvark(const MatchPlayer& /*player*/,
+                                          bool /*hands*/,
+                                          float /*heightMetres*/) const
+{
+  // The Aardvark body traps every ball the old way.
+  return false;
+}
+
+float MatchEngine::feetReachAardvark(const MatchPlayer& /*player*/) const
+{
+  return MatchTuning::Ball::OUTFIELD_CONTROL_RADIUS_METRES;
+}
+
+bool MatchEngine::ballBehindReachAardvark(const MatchPlayer& /*player*/,
+                                          float /*gapX*/, float /*gapY*/,
+                                          float /*gap*/) const
+{
+  // He reaches all round.
+  return false;
+}
+
+Vector2F MatchEngine::strikePointAardvark(const MatchPlayer& striker) const
+{
+  // Measured from his centre.
+  return striker.position;
+}
+
+MatchEngine::Kick MatchEngine::strikeAsAardvark(const MatchPlayer& /*striker*/,
+                                                StrikeKind /*kind*/,
+                                                Vector2F target, float speed,
+                                                float lift)
+{
+  // Struck exactly as asked.
+  Kick kick;
+  kick.target = target;
+  kick.speed = speed;
+  kick.verticalSpeed = lift;
+  return kick;
+}
+
+float MatchEngine::clearanceDistanceAardvark(const MatchPlayer& /*defender*/,
+                                             Vector2F /*origin*/,
+                                             const ClearanceAim& aim) const
+{
+  // The distance his brain aimed for.
+  return aim.metres;
+}
+
+MatchEngine::BallRelease MatchEngine::releaseFromAardvark(const MatchPlayer& kicker,
+                                                 ReleaseKind kind) const
+{
+  constexpr float Z_METRES = MatchTuning::Units::BALL_Z_METRES;
+  BallRelease from;
+  switch (kind)
+  {
+    case ReleaseKind::PASS:
+      // From where the ball is, off the ground.
+      from.position = ball.position;
+      break;
+    case ReleaseKind::SHOT:
+      // From where the ball is, at the shot's release height.
+      from.position = ball.position;
+      from.heightMetres = MatchTuning::Shooting::RELEASE_HEIGHT_METRES;
+      from.z = from.heightMetres / Z_METRES;
+      break;
+    case ReleaseKind::HEADED_SHOT:
+      // From where the ball is, at its height.
+      from.position = ball.position;
+      from.heightMetres = ball.z * Z_METRES;
+      from.z = from.heightMetres / Z_METRES;
+      break;
+    case ReleaseKind::CLEARANCE:
+      // A loose ball where it lies, else where he meets it; off the ground.
+      from.position = ball.inTouch ? ball.position : strikePointAardvark(kicker);
+      break;
+    case ReleaseKind::CLEAR_BEHIND:
+    case ReleaseKind::HEADER:
+      // Where he meets it, at its height.
+      from.position = strikePointAardvark(kicker);
+      from.z = ball.z;
+      from.heightMetres = ball.z * Z_METRES;
+      break;
+  }
+  return from;
+}
+
+void MatchEngine::meetWithHeadAardvark(const MatchPlayer& header)
+{
+  ball.position = strikePointAardvark(header);
+}
+
+bool MatchEngine::followsRoutesAardvark(const MatchPlayer& /*player*/) const
+{
+  // No routes: he heads straight for his target.
+  return false;
 }

@@ -31,7 +31,9 @@ struct StatsConfig;
  * times 1 - S and 1 + S, default 0.5, kept within its range), --range
  * "Name=low:high" (any variable's two values as given, beyond its range
  * too; repeatable), --seed S, --out-dir DIR (report.md, cells.csv,
- * ranking.csv; default a fresh fm-lab-touch-* folder in the temp folder).
+ * ranking.csv; default a fresh fm-lab-touch-* folder in the temp folder),
+ * --brains and --bodies (HOME,AWAY or one for both; default binturong, whose
+ * body has the new first touch).
  * Returns 0, or 3 for invalid options.
  */
 int runTouchSensitivity(const StatsConfig& config,

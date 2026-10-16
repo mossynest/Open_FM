@@ -19,9 +19,13 @@
 
 #include "global/types.h"
 #include "model/lineup.h"
+#include "model/match_ball_physics.h"
 #include "model/match_body.h"
 #include "model/match_brain.h"
 #include "model/match_handshake.h"
+#include "model/match_manager.h"
+#include "model/match_out_of_play.h"
+#include "model/match_referee.h"
 #include "model/strategy.h"
 
 class GameController;
@@ -39,6 +43,13 @@ std::array<BodyId, 2>& sandboxBodies();
 /** The handshake new sandbox matches, checks and drills are built with:
  * the --handshake option, else Binturong (--check: Aardvark). */
 HandshakeId& sandboxHandshake();
+/** The referee, AI managers (home, away), ball physics and out-of-play
+ * version new sandbox matches, checks and drills are played with: the
+ * --referee, --managers, --ball and --out-of-play options, else Aardvark. */
+RefereeId& sandboxReferee();
+std::array<ManagerId, 2>& sandboxManagers();
+BallPhysicsId& sandboxBallPhysics();
+OutOfPlayId& sandboxOutOfPlay();
 /** The home advantage new sandbox matches, checks and drills are played
  * with (MatchContext::homeAdvantageScale: 0 a neutral venue, 1 the game's
  * full home edge on attributes, execution and refereeing, up to 2): the
@@ -87,6 +98,14 @@ struct MatchSetup
   std::array<BodyId, 2> bodies{BodyId::AARDVARK, BodyId::AARDVARK};
   /** The match's handshake (older recordings: Aardvark). */
   HandshakeId handshake = HandshakeId::AARDVARK;
+  /** The match's referee (older recordings: Aardvark). */
+  RefereeId referee = RefereeId::AARDVARK;
+  /** Each side's AI manager (older recordings: Aardvark). */
+  std::array<ManagerId, 2> managers{ManagerId::AARDVARK, ManagerId::AARDVARK};
+  /** The match's ball physics (older recordings: Aardvark). */
+  BallPhysicsId ballPhysics = BallPhysicsId::AARDVARK;
+  /** The match's out-of-play version (older recordings: Aardvark). */
+  OutOfPlayId outOfPlay = OutOfPlayId::AARDVARK;
   /** The match's home advantage (older recordings: 1, the full edge). */
   float homeAdvantage = 1.0f;
 

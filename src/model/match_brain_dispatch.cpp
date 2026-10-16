@@ -77,6 +77,31 @@ MatchEngine::BallAction MatchEngine::chooseBallAction(MatchPlayer& carrier)
   return chooseBallActionAardvark(carrier);
 }
 
+MatchPlayer* MatchEngine::chooseTakeOn(MatchPlayer& carrier)
+{
+  switch (brainOf(carrier.isHomeTeam))
+  {
+    case BrainId::AARDVARK:
+      break;
+    case BrainId::BINTURONG:
+      return chooseTakeOnBinturong(carrier);
+  }
+  return chooseTakeOnAardvark(carrier);
+}
+
+void MatchEngine::planOvertake(std::size_t slot)
+{
+  switch (brainOf(players[slot].isHomeTeam))
+  {
+    case BrainId::AARDVARK:
+      break;
+    case BrainId::BINTURONG:
+      planOvertakeBinturong(slot);
+      return;
+  }
+  planOvertakeAardvark(slot);
+}
+
 void MatchEngine::afterPassReleased(const MatchPlayer& passer,
                                     const MatchPlayer& receiver)
 {

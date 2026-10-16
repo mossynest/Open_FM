@@ -599,7 +599,8 @@ class SprintDrill final : public MovementDrill
                     "Otherwise a flying start, timed from the line."));
     DrillParameter runs = setting("Runs", &runsChoice, 0.0f, 7.0f, true,
                                   "The way his body faces as he goes (the AI "
-                                  "runner; the Binturong body). Backward and "
+                                  "runner; facing another way than he runs is "
+                                  "the Binturong body's). Backward and "
                                   "sideways have only a walk and a jog. He "
                                   "turns his body first, gliding as he does.");
     runs.choices = {"Forward", "Backward", "Side-step left", "Side-step right", "Diagonal forward-left", "Diagonal forward-right", "Diagonal back-left", "Diagonal back-right"};
@@ -616,11 +617,7 @@ class SprintDrill final : public MovementDrill
     finishX = START_LINE + static_cast<float>(metres) / LENGTH;
     const float from =
         std::max(0.02f, startX - static_cast<float>(runUpMetres) / LENGTH);
-    // Facing another way than he runs is the Binturong body's.
     runs = static_cast<int>(runsChoice + 0.5f);
-    if (runs != 0)
-      for (const bool home : {true, false})
-        engine.setBody(home, BodyId::BINTURONG);
     startRunner(engine, ids, {from, 0.5f});
     // Through the line: the target lies beyond the finish. His body faces
     // down the track (0), back up it, across it (his left or right to the
@@ -769,9 +766,6 @@ class CourseDrill : public MovementDrill
   void beginCourse(MatchEngine& engine, const std::vector<PlayerID>& ids,
                    Vector2F start, std::vector<Vector2F> course)
   {
-    // Routes (waypoints on the way) are the Binturong body's.
-    for (const bool home : {true, false})
-      engine.setBody(home, BodyId::BINTURONG);
     startRunner(engine, ids, start);
     startPoint = start;
     points = std::move(course);
@@ -1837,7 +1831,8 @@ class FlagChaseDrill final : public CourseDrill
  * from how his body faces at the line (forward the way he faces, back, or
  * to his left or right: his travel changes, his body does not). The speed
  * he takes into it, the least he keeps through it, how long and how far
- * until he is settled into the new way, and the times. Binturong body.
+ * until he is settled into the new way, and the times. Turning like this is
+ * the Binturong body's.
  */
 class TurnAndRunDrill final : public MovementDrill
 {
@@ -1882,8 +1877,6 @@ class TurnAndRunDrill final : public MovementDrill
 
   void begin(MatchEngine& engine, const std::vector<PlayerID>& ids) override
   {
-    for (const bool home : {true, false})
-      engine.setBody(home, BodyId::BINTURONG);
     first = static_cast<int>(firstChoice + 0.5f);
     then = static_cast<int>(thenChoice + 0.5f);
     fromFacing = headsChoice >= 0.5f;
@@ -2077,8 +2070,8 @@ class TurnAndRunDrill final : public MovementDrill
  * Overtake: two (or three) players race flat out for the same finish. The
  * leader starts ahead but is slower; the chaser behind should go round him
  * if he can still get there first (movement targets plan 4a). A third
- * runner alongside the leader can block one side. Binturong brains and
- * bodies.
+ * runner alongside the leader can block one side. Going round is the
+ * Binturong brain's and body's.
  */
 class OvertakeDrill final : public Drill
 {
@@ -2129,11 +2122,6 @@ class OvertakeDrill final : public Drill
 
   void begin(MatchEngine& engine, const std::vector<PlayerID>& ids) override
   {
-    for (const bool home : {true, false})
-    {
-      engine.setBody(home, BodyId::BINTURONG);
-      engine.setBrain(home, BrainId::BINTURONG);
-    }
     // All flat out, as if chasing a loose ball, whatever job the brain has.
     MatchEngine::DrillRules rules = engine.getDrillRules();
     rules.chaseEffort = true;
@@ -2283,9 +2271,8 @@ class OvertakeDrill final : public Drill
 /**
  * Loose ball: a ball rolled along the pitch, nobody's pass. A chaser starts
  * just behind it, a team-mate further along its path (and an opponent if
- * set). The brain picks who goes for it (Binturong brains and bodies): the
- * one who can meet it first on its path should, not the one nearest where it
- * is now.
+ * set). The brain picks who goes for it: the one who can meet it first on
+ * its path should, not the one nearest where it is now.
  */
 class LooseBallDrill final : public Drill
 {
@@ -2323,11 +2310,6 @@ class LooseBallDrill final : public Drill
 
   void begin(MatchEngine& engine, const std::vector<PlayerID>& ids) override
   {
-    for (const bool home : {true, false})
-    {
-      engine.setBody(home, BodyId::BINTURONG);
-      engine.setBrain(home, BrainId::BINTURONG);
-    }
     ballSpeed = ballSpeedSetting;
     rival = static_cast<int>(rivalChoice + 0.5f);
     chaserId = ids[0];
@@ -2782,7 +2764,7 @@ class ShotDrill final : public Drill
 // --- First touch -----------------------------------------------------------
 
 /**
- * One ball played to one receiver (Binturong body): how well his first touch
+ * One ball played to one receiver: how well his first touch
  * comes off, with every variable of the ball, the receiver and the touch's
  * tuning knobs as a setting (see Notes and plans/
  * match_engine_first_touch_tuning_plan.md).
@@ -2802,9 +2784,10 @@ class FirstTouchDrill final : public Drill
   const char* name() const override { return "First touch"; }
   const char* summary() const override
   {
-    return "One ball played to a receiver with the Binturong body: its pace, "
-           "the angle it comes from, how far he has to go to it, bounce, his "
-           "own pass or a loose ball, a pressing defender. Measures how his "
+    return "One ball played to a receiver (the new first touch is the "
+           "Binturong body's): its pace, the angle it comes from, how far he "
+           "has to go to it, bounce, his own pass or a loose ball, a pressing "
+           "defender. Measures how his "
            "first touch comes off (errors, heavy touches, the ball lost), "
            "with his First Touch and every tuning knob of the touch as "
            "settings. Pick a situation to start from.";
@@ -2863,13 +2846,6 @@ class FirstTouchDrill final : public Drill
     DrillParameter foot = setting("Foot", &footChoice, 0.0f, 1.0f, true);
     foot.choices = {"Right", "Left"};
     add(foot, "Receiver");
-    DrillParameter brain =
-        setting("Brain", &brainChoice, 0.0f, 1.0f, true,
-                "Binturong: he times the touch and chooses it (set or into "
-                "stride).\nAardvark: he plays it at first contact, set "
-                "ahead of him.");
-    brain.choices = {"Binturong (timed)", "Aardvark (first contact)"};
-    add(brain, "Receiver");
 
     DrillParameter defender =
         setting("Defender", &defenderChoice, 0.0f, 1.0f, true,
@@ -2962,14 +2938,7 @@ class FirstTouchDrill final : public Drill
     receiverId = ids[0];
     hasDefender = defenderChoice > 0.5f;
     defenderId = hasDefender ? ids[1] : 0;
-    // The new first touch is the Binturong body's; the brain is a setting.
-    const BrainId brain =
-        brainChoice < 0.5f ? BrainId::BINTURONG : BrainId::AARDVARK;
-    for (const bool home : {true, false})
-    {
-      engine.setBody(home, BodyId::BINTURONG);
-      engine.setBrain(home, brain);
-    }
+    receiverBrain = engine.getBrain(true);
     engine.setFirstTouchKnobs(knobs);
 
     // Geometry in metres: he faces up the pitch (+x); the ball comes from
@@ -3112,9 +3081,9 @@ class FirstTouchDrill final : public Drill
         ballKind < 0.5f ? "his pass" : "loose"));
     lines.push_back(std::format(
         "Receiver: First Touch {:.0f}, Pace {:.0f}, condition {:.0f}, {} "
-        "foot, {} · run to meet {:.1f} m, run-up {:.0f} m{}",
+        "foot, {} brain · run to meet {:.1f} m, run-up {:.0f} m{}",
         firstTouch, pace, condition, footChoice < 0.5f ? "right" : "left",
-        brainChoice < 0.5f ? "timed" : "first contact", runToMeet, runUp,
+        brainName(receiverBrain), runToMeet, runUp,
         hasDefender ? std::format(" · defender {:.0f} m (Def {:.0f})",
                                   defenderDistance, defending)
                     : std::string()));
@@ -3195,19 +3164,20 @@ class FirstTouchDrill final : public Drill
     Vector2F point{};
   };
 
-  /** Seconds for the ball, as fed, to travel `metres` (the engine's own
+  /** Seconds for the ball, as fed, to travel `metres` (the match's own
    * flight and rolling physics, in its ball sub-steps). */
-  [[nodiscard]] float rollSeconds(float metres) const
+  [[nodiscard]] float rollSeconds(const MatchEngine& engine,
+                                  float metres) const
   {
     constexpr float DT =
         STEP / static_cast<float>(MatchTuning::Timing::BALL_SUBSTEPS);
-    MatchEngineInternal::FlightState flight{ballSpeed, bounce, 0.0f, false};
+    FlightState flight{ballSpeed, bounce, 0.0f, false};
     float travelled = 0.0f;
     float seconds = 0.0f;
     while (travelled < metres && flight.horizontalSpeed > 0.0f &&
            seconds < TIME_LIMIT)
     {
-      travelled += MatchEngineInternal::stepFlight(flight, DT);
+      travelled += engine.stepFlight(flight, DT);
       seconds += DT;
     }
     return seconds;
@@ -3226,7 +3196,7 @@ class FirstTouchDrill final : public Drill
       // On the run: the feed spot is placed, at the set distance and angle,
       // from where he will be when the ball gets there (his current
       // velocity over its exact travel time), still `passesBy` to his side.
-      const float seconds = rollSeconds(feedDistance) + STEP;
+      const float seconds = rollSeconds(engine, feedDistance) + STEP;
       const Vector2F ahead = toPitch({receiver->velocity.x * seconds,
                                       receiver->velocity.y * seconds});
       const Vector2F meet{receiver->position.x + ahead.x,
@@ -3252,7 +3222,8 @@ class FirstTouchDrill final : public Drill
   float pace = 70.0f;
   float condition = 100.0f;
   float footChoice = 0.0f;
-  float brainChoice = 0.0f;
+  /** The receiver's brain (the sandbox's home brain), for the summary. */
+  BrainId receiverBrain = BrainId::AARDVARK;
   // Defender
   float defenderChoice = 0.0f;
   float defenderDistance = 3.0f;
@@ -3284,7 +3255,7 @@ class FirstTouchDrill final : public Drill
 // --- Pass ------------------------------------------------------------------
 
 /**
- * One pass to one receiver (Binturong body): how the strike comes off and
+ * One pass to one receiver: how the strike comes off and
  * where the ball really goes, with every variable of the passer and every
  * strike knob of passes and crosses as a setting (see Notes and plans/
  * match_engine_contact_plan.md).
@@ -3304,10 +3275,11 @@ class PassDrill final : public Drill
   const char* summary() const override
   {
     return "A passer plays one pass to a receiver held on his spot "
-           "(Binturong body): its length and direction, played as the AI "
-           "would or forced along the ground or lofted, from the middle or "
-           "from wide in the final third (a cross), standing or after a "
-           "run-up, with a defender pressing him if you like. Measures how "
+           "(strike contact is the Binturong body's): its length and "
+           "direction, played as the AI would or forced along the ground or "
+           "lofted, from the middle or from wide in the final third (a "
+           "cross), standing or after a run-up, with a defender pressing him "
+           "if you like. Measures how "
            "the strike comes off (each job's failure and error, the "
            "conditions) and where the ball really went, with his Passing and "
            "every strike knob of passes and crosses as settings.";
@@ -3458,11 +3430,6 @@ class PassDrill final : public Drill
     receiverId = ids[1];
     hasDefender = defenderChoice > 0.5f;
     defenderId = hasDefender ? ids[2] : 0;
-    for (const bool home : {true, false})
-    {
-      engine.setBody(home, BodyId::BINTURONG);
-      engine.setBrain(home, BrainId::BINTURONG);
-    }
     engine.setStrikeKnobs(knobs);
 
     // Geometry in metres: he faces up the pitch (+x) and passes from where

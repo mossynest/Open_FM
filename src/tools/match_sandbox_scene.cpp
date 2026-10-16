@@ -569,6 +569,8 @@ void MatchSandboxScene::renderSide(Side& side, bool home, float width,
   renderBrainPicker(home);
   ImGui::SameLine(0.0f, Theme::Space::L * Theme::scale());
   renderBodyPicker(home);
+  ImGui::SameLine(0.0f, Theme::Space::L * Theme::scale());
+  renderManagerPicker(home);
   if (const auto team = mutableTeam(guiView, side.team))
   {
     ImGui::Spacing();
@@ -630,6 +632,15 @@ void MatchSandboxScene::renderBodyPicker(bool home)
   ImGui::SameLine();
   SandboxPickers::body("##body", sandboxBodies()[home ? 0 : 1],
                        160.0f * Theme::scale());
+}
+
+void MatchSandboxScene::renderManagerPicker(bool home)
+{
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted("Manager");
+  ImGui::SameLine();
+  SandboxPickers::manager("##manager", sandboxManagers()[home ? 0 : 1],
+                          160.0f * Theme::scale());
 }
 
 void MatchSandboxScene::renderFormation(Team& team)
@@ -913,6 +924,19 @@ void MatchSandboxScene::renderFooter()
         "the attribute scale (level shift, stretch), top speed and "
         "acceleration, roles, positions, match context. Aardvark is the "
         "inherited engine; Binturong is being developed.");
+  ImGui::SameLine(0.0f, Theme::Space::XL * scale);
+  ImGui::TextUnformatted("Referee");
+  ImGui::SameLine();
+  SandboxPickers::referee("##referee", sandboxReferee(), 120.0f * scale);
+  ImGui::SameLine(0.0f, Theme::Space::XL * scale);
+  ImGui::TextUnformatted("Ball");
+  ImGui::SameLine();
+  SandboxPickers::ballPhysics("##ball", sandboxBallPhysics(), 120.0f * scale);
+  ImGui::SameLine(0.0f, Theme::Space::XL * scale);
+  ImGui::TextUnformatted("Out of play");
+  ImGui::SameLine();
+  SandboxPickers::outOfPlay("##out_of_play", sandboxOutOfPlay(),
+                            120.0f * scale);
   ImGui::SameLine(0.0f, Theme::Space::XL * scale);
   ImGui::TextUnformatted("Home advantage");
   ImGui::SameLine();

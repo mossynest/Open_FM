@@ -47,4 +47,75 @@ void body(const char* id, BodyId& body, float width)
         "Contests between players, the ball and the rules are the same for "
         "both.");
 }
+
+void manager(const char* id, ManagerId& manager, float width)
+{
+  ImGui::SetNextItemWidth(width);
+  if (ImGui::BeginCombo(id, managerName(manager).data()))
+  {
+    for (const ManagerId option : ALL_MANAGERS)
+      if (ImGui::Selectable(managerName(option).data(), option == manager))
+        manager = option;
+    ImGui::EndCombo();
+  }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip(
+        "The AI manager running this side's touchline when the engine "
+        "manages it: substitutions (injuries, fatigue, cards, the score), who "
+        "comes on, and the late shouts. Aardvark is the inherited engine; "
+        "Binturong is being developed.");
+}
+
+void referee(const char* id, RefereeId& referee, float width)
+{
+  ImGui::SetNextItemWidth(width);
+  if (ImGui::BeginCombo(id, refereeName(referee).data()))
+  {
+    for (const RefereeId option : ALL_REFEREES)
+      if (ImGui::Selectable(refereeName(option).data(), option == referee))
+        referee = option;
+    ImGui::EndCombo();
+  }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip(
+        "The match's referee: how fouls are dealt with (cards, advantage, "
+        "free kick or penalty), offside calls and added time. Aardvark is the "
+        "inherited engine; Binturong is being developed.");
+}
+
+void ballPhysics(const char* id, BallPhysicsId& physics, float width)
+{
+  ImGui::SetNextItemWidth(width);
+  if (ImGui::BeginCombo(id, ballPhysicsName(physics).data()))
+  {
+    for (const BallPhysicsId option : ALL_BALL_PHYSICS)
+      if (ImGui::Selectable(ballPhysicsName(option).data(), option == physics))
+        physics = option;
+    ImGui::EndCombo();
+  }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip(
+        "How the ball moves on its own once struck: flight, drag, bounces, "
+        "rolling and swerve, and the kicks worked out from them. Brains and "
+        "bodies predict with the same physics. Aardvark is the inherited "
+        "engine; Binturong is being developed.");
+}
+
+void outOfPlay(const char* id, OutOfPlayId& version, float width)
+{
+  ImGui::SetNextItemWidth(width);
+  if (ImGui::BeginCombo(id, outOfPlayName(version).data()))
+  {
+    for (const OutOfPlayId option : ALL_OUT_OF_PLAY)
+      if (ImGui::Selectable(outOfPlayName(option).data(), option == version))
+        version = option;
+    ImGui::EndCombo();
+  }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip(
+        "What happens when the ball leaves play and how play restarts: goals, "
+        "the woodwork, corners, goal kicks, throw-ins, and every restart set "
+        "up and taken. Who takes it and what he does with it are the brain's. "
+        "Aardvark is the inherited engine; Binturong is being developed.");
+}
 }  // namespace SandboxPickers

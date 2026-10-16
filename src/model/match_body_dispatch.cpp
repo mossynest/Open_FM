@@ -518,3 +518,132 @@ void MatchEngine::recoverFromTakeOn(MatchPlayer& defender)
   }
   recoverFromTakeOnAardvark(defender);
 }
+
+bool MatchEngine::playsFirstTouch(const MatchPlayer& player, bool hands,
+                                  float heightMetres) const
+{
+  switch (bodyOf(player.isHomeTeam))
+  {
+    case BodyId::AARDVARK:
+      break;
+    case BodyId::BINTURONG:
+      return playsFirstTouchBinturong(player, hands, heightMetres);
+  }
+  return playsFirstTouchAardvark(player, hands, heightMetres);
+}
+
+float MatchEngine::feetReach(const MatchPlayer& player) const
+{
+  switch (bodyOf(player.isHomeTeam))
+  {
+    case BodyId::AARDVARK:
+      break;
+    case BodyId::BINTURONG:
+      return feetReachBinturong(player);
+  }
+  return feetReachAardvark(player);
+}
+
+bool MatchEngine::ballBehindReach(const MatchPlayer& player, float gapX,
+                                  float gapY, float gap) const
+{
+  switch (bodyOf(player.isHomeTeam))
+  {
+    case BodyId::AARDVARK:
+      break;
+    case BodyId::BINTURONG:
+      return ballBehindReachBinturong(player, gapX, gapY, gap);
+  }
+  return ballBehindReachAardvark(player, gapX, gapY, gap);
+}
+
+Vector2F MatchEngine::strikePoint(const MatchPlayer& striker) const
+{
+  switch (bodyOf(striker.isHomeTeam))
+  {
+    case BodyId::AARDVARK:
+      break;
+    case BodyId::BINTURONG:
+      return strikePointBinturong(striker);
+  }
+  return strikePointAardvark(striker);
+}
+
+MatchEngine::Kick MatchEngine::strikeAs(const MatchPlayer& striker,
+                                        StrikeKind kind, Vector2F target,
+                                        float speed, float lift)
+{
+  switch (bodyOf(striker.isHomeTeam))
+  {
+    case BodyId::AARDVARK:
+      break;
+    case BodyId::BINTURONG:
+      return strikeAsBinturong(striker, kind, target, speed, lift);
+  }
+  return strikeAsAardvark(striker, kind, target, speed, lift);
+}
+
+float MatchEngine::clearanceDistance(const MatchPlayer& defender,
+                                     Vector2F origin,
+                                     const ClearanceAim& aim) const
+{
+  switch (bodyOf(defender.isHomeTeam))
+  {
+    case BodyId::AARDVARK:
+      break;
+    case BodyId::BINTURONG:
+      return clearanceDistanceBinturong(defender, origin, aim);
+  }
+  return clearanceDistanceAardvark(defender, origin, aim);
+}
+
+void MatchEngine::takeDirectFreeKick(MatchPlayer& taker)
+{
+  switch (bodyOf(taker.isHomeTeam))
+  {
+    case BodyId::AARDVARK:
+      break;
+    case BodyId::BINTURONG:
+      takeDirectFreeKickBinturong(taker);
+      return;
+  }
+  takeDirectFreeKickAardvark(taker);
+}
+
+MatchEngine::BallRelease MatchEngine::releaseFrom(const MatchPlayer& kicker,
+                                                  ReleaseKind kind) const
+{
+  switch (bodyOf(kicker.isHomeTeam))
+  {
+    case BodyId::AARDVARK:
+      break;
+    case BodyId::BINTURONG:
+      return releaseFromBinturong(kicker, kind);
+  }
+  return releaseFromAardvark(kicker, kind);
+}
+
+void MatchEngine::meetWithHead(const MatchPlayer& header)
+{
+  switch (bodyOf(header.isHomeTeam))
+  {
+    case BodyId::AARDVARK:
+      break;
+    case BodyId::BINTURONG:
+      meetWithHeadBinturong(header);
+      return;
+  }
+  meetWithHeadAardvark(header);
+}
+
+bool MatchEngine::followsRoutes(const MatchPlayer& player) const
+{
+  switch (bodyOf(player.isHomeTeam))
+  {
+    case BodyId::AARDVARK:
+      break;
+    case BodyId::BINTURONG:
+      return followsRoutesBinturong(player);
+  }
+  return followsRoutesAardvark(player);
+}

@@ -16,10 +16,11 @@
   /** Off-ball players of a Binturong-brained side racing someone slower to
    * the same target go round him when that still wins the race (movement
    * targets plan 4a). Runs after the targets (and drill targets) are set. */
-  void planOvertakesBinturong();
+  void planOvertakeBinturong(std::size_t slot);
   void assignMarksBinturong(bool home);
   Vector2F goalkeeperTargetBinturong(MatchPlayer& keeper, const MatchPlayer* carrier);
   BallAction chooseBallActionBinturong(MatchPlayer& carrier);
+  MatchPlayer* chooseTakeOnBinturong(MatchPlayer& carrier);
   void afterPassReleasedBinturong(const MatchPlayer& passer, const MatchPlayer& receiver);
   /** @param details Debugger detail: every team-mate looked at (or null). */
   std::optional<PassOption> choosePassTargetBinturong(
