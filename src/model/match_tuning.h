@@ -209,6 +209,18 @@ struct MatchTuning final
      * slow). */
     static constexpr float BODY_TURN_RATE_LOW = 9.0f;
     static constexpr float BODY_TURN_RATE_HIGH = 18.0f;
+    /** Binturong body: Agility's boost to his acceleration, as a share of
+     * the Acceleration stat's range (1 to 99), none at Agility 1 up to this
+     * at 99 (a design choice: quick feet help him get going, a little). */
+    static constexpr float AGILITY_ACCELERATION_BOOST = 0.05f;
+    /** Binturong body: his hardest braking (m/s^2), set by Agility, at
+     * Agility 1 and 99 (the handshake's Physicality range, 6-8, kept:
+     * braking peaks of 6-8 m/s^2, Harper et al. 2020). */
+    static constexpr float BRAKING_AT_AGILITY_1 = 6.0f;
+    static constexpr float BRAKING_AT_AGILITY_99 = 8.0f;
+    /** Binturong body: Acceleration's boost to his braking, as a share of
+     * the braking range above, none at Acceleration 1 up to this at 99. */
+    static constexpr float ACCELERATION_BRAKING_BOOST = 0.05f;
     /**
      * Moving at an angle to his body (orientation plan): the eight
      * directions, as the angle between body and run, from 0 (forward) by

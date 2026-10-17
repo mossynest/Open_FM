@@ -319,11 +319,38 @@ inline float bodyTurnRate(const MatchPlayer& player)
          (P::BODY_TURN_RATE_HIGH - P::BODY_TURN_RATE_LOW) * share;
 }
 
-/** His fresh maximum acceleration A0 (m/s^2): the Acceleration stat. */
+/** Where a derived stat's rating sits from 1 (0) to 99 (1). */
+inline float statShare(const MatchPlayer& player, DerivedStat stat)
+{
+  return std::clamp((player.derivedStat(stat) - STAT_1_RATING) /
+                        (STAT_99_RATING - STAT_1_RATING),
+                    0.0f, 1.0f);
+}
+
+/** His fresh maximum acceleration A0 (m/s^2): the Acceleration stat, plus
+ * Agility's boost (a share of the stat's range, the same for everyone at
+ * the same Agility). */
 inline float playerAcceleration(const MatchPlayer& player)
 {
+  const DerivedStatInfo& info = derivedStatInfo(DerivedStat::ACCELERATION);
   return derivedPhysicalValue(DerivedStat::ACCELERATION,
-                              player.derivedStat(DerivedStat::ACCELERATION));
+                              player.derivedStat(DerivedStat::ACCELERATION)) +
+         MatchTuning::Player::AGILITY_ACCELERATION_BOOST *
+             (info.highValue - info.lowValue) *
+             statShare(player, DerivedStat::AGILITY);
+}
+
+/** His fresh hardest braking (m/s^2): Agility, plus Acceleration's boost
+ * (a share of the braking range). The handshake's braking (from
+ * Physicality) is the Aardvark body's. */
+inline float playerBraking(const MatchPlayer& player)
+{
+  using P = MatchTuning::Player;
+  const float range = P::BRAKING_AT_AGILITY_99 - P::BRAKING_AT_AGILITY_1;
+  return P::BRAKING_AT_AGILITY_1 +
+         range * statShare(player, DerivedStat::AGILITY) +
+         P::ACCELERATION_BRAKING_BOOST * range *
+             statShare(player, DerivedStat::ACCELERATION);
 }
 
 // Energy: two tanks (critical speed and D', the W' balance model of Skiba et
@@ -842,7 +869,7 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     injury[lane] =
         player.isInjured ? MatchTuning::Injury::INJURED_SPEED_SCALE : 1.0f;
     acceleration[lane] = playerAcceleration(player);
-    braking[lane] = player.braking;
+    braking[lane] = playerBraking(player);
     // How hard he chooses to run is his side's brain's.
     const MovementStyle& style = movementStyle(player.isHomeTeam);
     intentScale[lane] =
@@ -1190,7 +1217,7 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
   // fatigue tiers).
   const float legs = tieredMovement(fuel);
   const float acceleration = playerAcceleration(player) * legs;
-  const float braking = player.braking * legs;
+  const float braking = playerBraking(player) * legs;
   Vector2F velocity = player.velocity;
   const float speed = length(velocity);
   const Vector2F change{desired.x - velocity.x, desired.y - velocity.y};

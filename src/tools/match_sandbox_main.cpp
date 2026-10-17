@@ -279,12 +279,12 @@ int main(int argc, char* argv[])
     if (measureDrill)
       return runMeasureCommand(controller.getStatsConfig(), *measureDrill,
                                measureArguments);
-    // The window opens on Team 66 v Team 66, Aardvark against Binturong, so
+    // The window opens on Team 66 v Team 66, Binturong against Aardvark, so
     // the two engines meet on equal players. The headless commands above
     // keep the plain world and Aardvark for both.
     addSandboxTestTeams(*controller.getGameData());
-    if (!brainsGiven) sandboxBrains() = {BrainId::AARDVARK, BrainId::BINTURONG};
-    if (!bodiesGiven) sandboxBodies() = {BodyId::AARDVARK, BodyId::BINTURONG};
+    if (!brainsGiven) sandboxBrains() = {BrainId::BINTURONG, BrainId::AARDVARK};
+    if (!bodiesGiven) sandboxBodies() = {BodyId::BINTURONG, BodyId::AARDVARK};
     GUIView view(controller);
     view.run(
         [kickOff, drill, drillView](GUIView* gui)

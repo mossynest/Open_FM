@@ -135,7 +135,8 @@ inline constexpr std::array<DerivedStatInfo, DERIVED_STAT_COUNT> DERIVED_STATS{{
     // ---- Future game stats ------------------------------------------------
     {DerivedLayer::FUTURE_GAME_STAT, "Agility", "Agi",
      "Changing direction: how sharply he can turn at speed (a multiplier on "
-     "the lateral grip every player has).",
+     "the lateral grip every player has); also his braking, and a small "
+     "boost to his acceleration.",
      "x", 0.9f, 1.1f, 0.65f, 1.2f},
     {DerivedLayer::FUTURE_GAME_STAT, "First touch", "Tch",
      "Receiving the ball: taking the pace off it and placing it where he "

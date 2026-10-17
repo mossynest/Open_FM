@@ -163,10 +163,10 @@ struct RunnerAttributes
   float pace = 70.0f;
   float physicality = 70.0f;
   float stamina = 70.0f;
-  /** The Agility and Acceleration derived stats; 0 leaves each to its
-   * recipe. */
-  float agility = 0.0f;
-  float acceleration = 0.0f;
+  /** The Agility and Acceleration derived stats, set directly (not from
+   * their recipes). */
+  float agility = 70.0f;
+  float acceleration = 70.0f;
   /** Fuel (condition) at the start, 0-100. */
   float condition = 100.0f;
 
@@ -174,19 +174,21 @@ struct RunnerAttributes
   {
     parameters.push_back(setting("Pace", &pace, 1.0f, 100.0f, true));
     parameters.push_back(setting("Physicality", &physicality, 1.0f, 100.0f, true,
-                          "Acceleration, braking and duels."));
+                          "Duels; braking in the Aardvark body. (Acceleration "
+                          "is its own setting here.)"));
     parameters.push_back(setting("Stamina", &stamina, 1.0f, 100.0f, true,
                           "Endurance: how fast condition and the sprint "
                           "reserve drain and recover."));
-    parameters.push_back(setting("Agility", &agility, 0.0f, 100.0f, true,
+    parameters.push_back(setting("Agility", &agility, 1.0f, 100.0f, true,
                           "Grip: how sharply he turns at speed (0.9x at 45, "
-                          "1.1x at 85).\n0: from its recipe (mirrors "
-                          "acceleration: Pace and Physicality)."));
-    parameters.push_back(setting("Acceleration", &acceleration, 0.0f, 100.0f,
+                          "1.1x at 85), how fast his body turns, his braking "
+                          "(6 m/s² at 1, 8 at 99), and up to +0.2 m/s² "
+                          "acceleration."));
+    parameters.push_back(setting("Acceleration", &acceleration, 1.0f, 100.0f,
                           true,
                           "His push from a standstill (5.5 m/s² at 1, 9.5 at "
-                          "99).\n0: from its recipe (Pace and Physicality, "
-                          "1.6 : 0.6)."));
+                          "99, plus Agility's boost), and up to +0.1 m/s² "
+                          "braking."));
     parameters.push_back(setting("Condition", &condition, 0.0f, 100.0f, true,
                           "Fuel at the start (100: fresh). Lower it to test "
                           "a tired player, e.g. a sprint after a match."));
@@ -197,18 +199,15 @@ struct RunnerAttributes
   }
   [[nodiscard]] std::map<DerivedStat, float> derived() const
   {
-    std::map<DerivedStat, float> derived;
-    if (agility > 0.0f) derived[DerivedStat::AGILITY] = agility;
-    if (acceleration > 0.0f) derived[DerivedStat::ACCELERATION] = acceleration;
-    return derived;
+    return {{DerivedStat::AGILITY, agility},
+            {DerivedStat::ACCELERATION, acceleration}};
   }
   [[nodiscard]] std::string describe() const
   {
-    std::string text = std::format("Pace {:.0f} · Physicality {:.0f} · Stamina {:.0f}",
-                                   pace, physicality, stamina);
-    if (agility > 0.0f) text += std::format(" · Agility {:.0f}", agility);
-    if (acceleration > 0.0f)
-      text += std::format(" · Acceleration {:.0f}", acceleration);
+    std::string text = std::format(
+        "Pace {:.0f} · Physicality {:.0f} · Stamina {:.0f} · Agility {:.0f} · "
+        "Acceleration {:.0f}",
+        pace, physicality, stamina, agility, acceleration);
     if (condition < 100.0f) text += std::format(" · Condition {:.0f}", condition);
     return text;
   }
@@ -219,26 +218,23 @@ struct DribblerAttributes
 {
   float dribbling = 70.0f;
   float passing = 70.0f;
-  /** The First Touch derived stat; 0 leaves it to its recipe. */
-  float firstTouch = 0.0f;
+  /** The First Touch derived stat, set directly (not from its recipe). */
+  float firstTouch = 70.0f;
 
   void addTo(std::vector<DrillParameter>& parameters)
   {
     parameters.push_back(setting("Dribbling", &dribbling, 1.0f, 100.0f, true,
                           "With the ball: touch length and rhythm, heavy "
-                          "touches; 0.6 of First Touch."));
+                          "touches."));
     parameters.push_back(setting("Passing", &passing, 1.0f, 100.0f, true,
-                          "With the ball: 0.4 of First Touch."));
-    parameters.push_back(setting("First touch", &firstTouch, 0.0f, 100.0f, true,
-                          "With the ball: control of each touch.\n0: from its "
-                          "recipe (0.6 Dribbling + 0.4 Passing)."));
+                          "With the ball."));
+    parameters.push_back(setting("First touch", &firstTouch, 1.0f, 100.0f, true,
+                          "With the ball: control of each touch."));
   }
   [[nodiscard]] std::string describe() const
   {
-    std::string text =
-        std::format("Dribbling {:.0f} · Passing {:.0f}", dribbling, passing);
-    if (firstTouch > 0.0f) text += std::format(" · First touch {:.0f}", firstTouch);
-    return text;
+    return std::format("Dribbling {:.0f} · Passing {:.0f} · First touch {:.0f}",
+                       dribbling, passing, firstTouch);
   }
 };
 
@@ -348,8 +344,7 @@ class MovementDrill : public Drill
     std::map<DerivedStat, float> derived = runner.derived();
     stats["Dribbling"] = dribbler.dribbling;
     stats["Passing"] = dribbler.passing;
-    if (dribbler.firstTouch > 0.0f)
-      derived[DerivedStat::FIRST_TOUCH] = dribbler.firstTouch;
+    derived[DerivedStat::FIRST_TOUCH] = dribbler.firstTouch;
     DrillPlayerSpec spec{"Runner", PlayerRole::CM, true, stats, 180, derived};
     spec.condition = runner.condition;
     return {spec};

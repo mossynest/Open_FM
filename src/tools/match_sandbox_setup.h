@@ -34,11 +34,11 @@ class MatchEngine;
 /**
  * The brains (home, away) new sandbox matches, checks and drills start with:
  * the sandbox's --brains option, else Aardvark for both sides (the window
- * opens on Aardvark v Binturong instead; see match_sandbox_main.cpp).
+ * opens on Binturong v Aardvark instead; see match_sandbox_main.cpp).
  */
 std::array<BrainId, 2>& sandboxBrains();
 /** The same for bodies: the --bodies option, else Aardvark for both (the
- * window: Aardvark v Binturong). */
+ * window: Binturong v Aardvark). */
 std::array<BodyId, 2>& sandboxBodies();
 /** The handshake new sandbox matches, checks and drills are built with:
  * the --handshake option, else Binturong (--check: Aardvark). */
