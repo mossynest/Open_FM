@@ -693,9 +693,18 @@ bool runFirstTouchChecks(const std::vector<const Team*>& clubs,
           // physics moved it (a touch changes its velocity, not where it is).
           // Left out: a step in which someone else played it and he won it
           // back (several touches in one step).
+          // A touch during the step may have sent it faster than either
+          // end shows: rolling resistance takes up to this much off by the
+          // step's end.
+          using B = MatchTuning::Ball;
+          const float fastest = std::max(lastSpeed, speedOf(ball.velocity));
+          const float seconds = DT * stepCount;
+          const float rollingLoss =
+              (B::ROLLING_DECELERATION +
+               B::ROLLING_VISCOUS_PER_SECOND * fastest) *
+              seconds;
           const float allowed =
-              std::max(lastSpeed, speedOf(ball.velocity)) * DT * stepCount +
-              SLACK_METRES;
+              (fastest + rollingLoss) * seconds + SLACK_METRES;
           setup.worstExcess = std::max(
               setup.worstExcess, metres(lastPosition, ball.position) - allowed);
         }

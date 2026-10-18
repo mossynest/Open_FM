@@ -57,23 +57,32 @@
                                            float pressure) const;
   /** A strike's contact profile (provisional, contact plan §3). */
   ContactProfile strikeProfileBinturong(StrikeKind kind) const;
+  /** Where a strike meets the ball: where it lies, its gap from his centre
+   * against the 0.9 m strike reach, its height. */
+  TouchMoment strikeMomentBinturong(const MatchPlayer& striker) const;
   /** A strike as a contact where the ball lies: `aim` metric unit, `speed`
    * over the ground and `lift` upward (m/s). No random draws. */
   ContactAssessment assessStrikeBinturong(const MatchPlayer& striker,
                                           const ContactProfile& profile,
                                           Vector2F aim, float speed,
                                           float lift = 0.0f) const;
-  /** Tallies an open-play strike and sends its debugger detail; `outcome`
-   * when it was carried out (with `skill`), null when only measured. */
-  void recordStrikeBinturong(const MatchPlayer& striker, StrikeKind kind,
-                             const ContactAssessment& contact,
-                             const ContactOutcome* outcome, float skill);
+  /** Every contact, touch or strike (unified kick plan): the request's
+   * profile, assessed at `moment`, carried out with his skill for it, and
+   * reported. */
+  ContactResult contactBinturong(const MatchPlayer& player,
+                                 const ContactRequest& request,
+                                 const TouchMoment& moment);
+  /** Tallies an open-play strike, and sends any contact's debugger
+   * detail. */
+  void reportContactBinturong(const MatchPlayer& player,
+                              const ContactRequest& request,
+                              const ContactResult& result);
   /** His skill for a kind of strike (0-1). */
   float strikeSkillBinturong(const MatchPlayer& striker, StrikeKind kind) const;
   /** A strike carried out (contact plan step 3): from the ball where it
    * lies towards `target` at `speed` over the ground and `lift` upward,
-   * with the kind's profile (its angle error times `precision`) and his
-   * skill for it; recorded. The kick's target gives only its direction. */
+   * as a contact (contactBinturong; its angle error times `precision`).
+   * The kick's target gives only its direction. */
   Kick strikeContactBinturong(const MatchPlayer& striker, StrikeKind kind,
                               Vector2F target, float speed, float lift,
                               float precision = 1.0f);
@@ -154,7 +163,7 @@
   // Striking (see strikeAs and the others in match_engine.h).
   bool playsFirstTouchBinturong(const MatchPlayer& player, bool hands, float heightMetres) const;
   float feetReachBinturong(const MatchPlayer& player) const;
-  bool ballBehindReachBinturong(const MatchPlayer& player, float gapX, float gapY, float gap) const;
+  bool ballBehindReachBinturong(const MatchPlayer& player, float gapX, float gapY, float gap, float turnSeconds) const;
   Vector2F strikePointBinturong(const MatchPlayer& striker) const;
   Kick strikeAsBinturong(const MatchPlayer& striker, StrikeKind kind, Vector2F target, float speed, float lift);
   float clearanceDistanceBinturong(const MatchPlayer& defender, Vector2F origin, const ClearanceAim& aim) const;

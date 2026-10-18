@@ -628,6 +628,43 @@ struct ContactOutcome
   float actualSpeed = 0.0f;
 };
 
+/** One contact the body is asked for (unified kick plan): a touch, with
+ * the touch profile and his First Touch, or a strike of kind `strike`,
+ * with its profile and his skill for it. What he means: the direction
+ * seen from above (metric, unit), the pace over the ground and upward
+ * (m/s). */
+struct ContactRequest
+{
+  enum class Kind : std::uint8_t
+  {
+    FIRST_TOUCH,
+    DRIBBLE_TOUCH,
+    STRIKE,
+  };
+  Kind kind = Kind::FIRST_TOUCH;
+  StrikeKind strike = StrikeKind::GROUND_PASS;
+  Vector2F aim{1.0f, 0.0f};
+  float speed = 0.0f;
+  float lift = 0.0f;
+  /** How little he expected it (0-1, the brain's read; 0 for his own ball
+   * or one he chose to strike). */
+  float surprise = 0.0f;
+  /** How pressed he is (0-1, the brain's read); without it the body reads
+   * it from the profile's pressure radius. */
+  std::optional<float> pressure;
+  /** Scales a strike's angle error (a shot's spread). */
+  float precision = 1.0f;
+};
+
+/** A contact assessed and carried out, and the skill it was carried out
+ * with. */
+struct ContactResult
+{
+  ContactAssessment contact;
+  ContactOutcome outcome;
+  float skill = 0.0f;
+};
+
 /**
  * The ball.`position` is normalised; `z` is the height in length units
  * (z * MatchTuning::Units::BALL_Z_METRES = metres) for renderers. Velocities
@@ -2077,6 +2114,36 @@ class MatchEngine
     bool lofted = false;
   };
 
+  /** A strike decided at the step's start on a loose ball at his feet,
+   * played where he next meets it in the ball's sweep (unified kick plan
+   * step 3). Everything it does (offside, stats, the record) happens then;
+   * unplayed by the step's end, it is dropped and he decides again. */
+  struct PendingStrike
+  {
+    enum class Kind : std::uint8_t
+    {
+      PASS,
+      SHOT,
+      CLEAR,
+    };
+    Kind kind = Kind::PASS;
+    MatchPlayer* striker = nullptr;
+    PassOption pass;
+    bool forceLofted = false;
+    float forcedXG = -1.0f;
+  };
+  std::optional<PendingStrike> pendingStrike;
+  /** True while the carrier decides what to do with a loose ball at his
+   * feet: a pass, shot or clearance then waits for the sweep. */
+  bool strikesWaitForSweep = false;
+  /** The sweep moment a strike is being played at, while it is. */
+  std::optional<TouchMoment> strikeAt;
+  /** Holds `strike` for the sweep when strikes wait for it; false if it is
+   * to be played now. */
+  bool holdStrikeForSweep(const PendingStrike& strike);
+  /** Plays the held strike where he meets the ball (`moment`). */
+  void playPendingStrike(const TouchMoment& moment);
+
   // --- Brain: decisions ------------------------------------------------------
   // What a side's players choose to do. Each choice returns an intention that
   // the body (physics, execution, contests, rules) then carries out; see
@@ -2807,6 +2874,17 @@ class MatchEngine
   void launchBall(const MatchPlayer& kicker, const BallRelease& from,
                   Vector2F target, float horizontalSpeed, float verticalSpeed,
                   float curve);
+  /** What every contact does to the ball (unified kick plan): it leaves
+   * from `position` (normalised) at height `z` (length units) with the
+   * velocity off his foot, played by `kicker`, who may not touch it again
+   * for `kickerLockout` seconds. Possession is the caller's. */
+  void sendBallOff(const MatchPlayer& kicker, Vector2F position, float z,
+                   Vector2F velocity, float velocityZ, float curve,
+                   float kickerLockout);
+  /** A touch's record on the ball: what he tried, how it went, and how far
+   * it is from him now. */
+  void noteTouchOnBall(const MatchPlayer& player, const TouchIntent& intent,
+                       const TouchResult& touch, const TouchMoment& moment);
   /** Whether this contact is played with the new first touch (a feet-height
    * ball played on under physics, not trapped dead). */
   bool playsFirstTouch(const MatchPlayer& player, bool hands,
@@ -2814,9 +2892,10 @@ class MatchEngine
   /** How far from his centre he can play a ball at his feet. */
   float feetReach(const MatchPlayer& player) const;
   /** Whether a ball `gap` metres away (`gapX`, `gapY` from the ball to him)
-   * is behind him beyond his reach (a dead zone). */
+   * is behind him beyond his reach (a dead zone), or will be once his body
+   * has turned for `turnSeconds` the way it turns now. */
   bool ballBehindReach(const MatchPlayer& player, float gapX, float gapY,
-                       float gap) const;
+                       float gap, float turnSeconds = 0.0f) const;
   /** Where his strike starts. */
   Vector2F strikePoint(const MatchPlayer& striker) const;
   /** A strike towards `target` at `speed` over the ground and `lift`

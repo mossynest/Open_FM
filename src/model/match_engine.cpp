@@ -1190,6 +1190,8 @@ void MatchEngine::simulateStepBody(float dt)
     trackPressures();
     if ((!ball.possessedBy || ball.inTouch) && state == MatchState::PLAYING)
       updateBall(dt);
+    // A strike he never got to in the sweep is dropped: he decides again.
+    pendingStrike.reset();
     // Possession belongs to the side in control, including its passes in
     // flight and the loose balls it last played.
     if (lastControlledTeamHome)
@@ -2228,6 +2230,9 @@ void MatchEngine::resolvePossessionAndActions(float dt)
        (controlled && carrier->trapTimer <= 0.0f)) &&
       ball.dribbleExposure <= MatchTuning::Dribble::KICK_REACH_METRES)
   {
+    // A loose ball at his feet is struck where he next meets it in the
+    // ball's sweep, not where it lies now.
+    strikesWaitForSweep = ball.inTouch;
     if (controlled)
     {
       performControlledAction(*carrier);
@@ -2263,6 +2268,7 @@ void MatchEngine::resolvePossessionAndActions(float dt)
     {
       decideAction(*carrier);
     }
+    strikesWaitForSweep = false;
   }
 }
 
@@ -2695,6 +2701,9 @@ void MatchEngine::passBall(MatchPlayer& passer, const PassOption& option,
   Vector2F target = option.targetPoint;
   const float passDistance = option.passDistance;
   if (passDistance <= EPSILON) return;
+  if (holdStrikeForSweep({PendingStrike::Kind::PASS, &passer, option,
+                          forceLofted}))
+    return;
   const bool lofted = forceLofted || option.lofted;
 
   clearFlightState();
@@ -2846,6 +2855,10 @@ float MatchEngine::strikeShot(MatchPlayer& shooter, float forcedXG, bool header,
 void MatchEngine::takeShot(MatchPlayer& shooter, float forcedXG, bool header,
                            bool freeKick)
 {
+  if (!header && !freeKick &&
+      holdStrikeForSweep(
+          {PendingStrike::Kind::SHOT, &shooter, {}, false, forcedXG}))
+    return;
   const bool penalty = state == MatchState::PENALTY;
   const float xg = strikeShot(shooter, forcedXG, header, penalty, freeKick);
 
@@ -2917,17 +2930,11 @@ void MatchEngine::launchBall(const MatchPlayer& kicker,
   // Where and how high it leaves are his body's (releaseFrom); this only
   // sets it off.
   const Vector2F direction = metricDirection(from.position, target);
-  ball.position = from.position;
-  ball.z = from.z;
-  ball.velocity = {direction.x * horizontalSpeed,
-                   direction.y * horizontalSpeed};
-  ball.velocityZ = verticalSpeed;
-  ball.curve = curve;
+  sendBallOff(kicker, from.position, from.z,
+              {direction.x * horizontalSpeed, direction.y * horizontalSpeed},
+              verticalSpeed, curve, MatchTuning::Passing::KICKER_LOCKOUT_SECONDS);
   clearPossession();
   ball.lastPossessor = kicker.player;
-  ball.kicker = kicker.player;
-  ball.kickerLockout = MatchTuning::Passing::KICKER_LOCKOUT_SECONDS;
-  ball.touchAttempts = 0;
 }
 
 bool MatchEngine::wantsDetail() const
@@ -3291,6 +3298,13 @@ void MatchEngine::resolveLooseBall()
     if (&player == touchOwner)
     {
       const std::uint32_t bit = 1U << contact.slot;
+      // A pass, shot or clearance he chose at the step's start: struck here.
+      if (pendingStrike && pendingStrike->striker == &player)
+      {
+        ball.touchWaiting &= ~bit;
+        playPendingStrike(moment);
+        return;
+      }
       if (!dribbleTouchDue(player, moment))
       {
         ball.touchWaiting &= ~bit;
@@ -3603,6 +3617,8 @@ void MatchEngine::clearBehind(MatchPlayer& defender, bool headed)
 
 void MatchEngine::clearBall(MatchPlayer& defender)
 {
+  if (holdStrikeForSweep({PendingStrike::Kind::CLEAR, &defender}))
+    return;
   trackTouch(defender);
   const ClearanceAim aim = chooseClearanceAim(defender);
   const Vector2F target = aim.target;
@@ -3834,19 +3850,77 @@ void MatchEngine::playFirstTouch(MatchPlayer& player, const TouchMoment& moment)
   // He owns it from the touch (phases, transitions, touches), but the ball
   // carries on from where he met it instead of being placed at his feet.
   setPossession(player);
-  ball.position = {std::clamp(contactPoint.x, 0.001f, 0.999f),
-                   std::clamp(contactPoint.y, 0.001f, 0.999f)};
-  ball.velocity = touch.velocity;
   // It keeps the height he met it at: the touch changes only its velocity.
-  ball.z = moment.height / MatchTuning::Units::BALL_Z_METRES;
-  ball.velocityZ = touch.verticalSpeed;
-  ball.curve = 0.0f;
-  ball.kicker = player.player;
-  ball.kickerLockout = 0.0f;
-  ball.touchAttempts = 0;
+  sendBallOff(player,
+              {std::clamp(contactPoint.x, 0.001f, 0.999f),
+               std::clamp(contactPoint.y, 0.001f, 0.999f)},
+              moment.height / MatchTuning::Units::BALL_Z_METRES, touch.velocity,
+              touch.verticalSpeed, 0.0f, 0.0f);
   ball.inTouch = true;
   ball.touchCollected = false;
   ball.touchPasser = receivingPass ? passer : nullptr;
+  noteTouchOnBall(player, intent, touch, moment);
+  ball.dribbleTouchLength =
+      std::max(ball.touchGap, MatchTuning::Dribble::MAX_TOUCH_METRES);
+}
+
+void MatchEngine::sendBallOff(const MatchPlayer& kicker, Vector2F position,
+                              float z, Vector2F velocity, float velocityZ,
+                              float curve, float kickerLockout)
+{
+  ball.position = position;
+  ball.z = z;
+  ball.velocity = velocity;
+  ball.velocityZ = velocityZ;
+  ball.curve = curve;
+  ball.kicker = kicker.player;
+  ball.kickerLockout = kickerLockout;
+  ball.touchAttempts = 0;
+}
+
+bool MatchEngine::holdStrikeForSweep(const PendingStrike& strike)
+{
+  // Only while he decides on a loose ball at his feet: a dead ball, a ball
+  // in a keeper's hands or a header is struck at once.
+  if (!strikesWaitForSweep || !strike.striker ||
+      state != MatchState::PLAYING || !ball.inTouch || !ball.touchCollected ||
+      ball.possessedBy != strike.striker->player)
+    return false;
+  pendingStrike = strike;
+  return true;
+}
+
+void MatchEngine::playPendingStrike(const TouchMoment& moment)
+{
+  const PendingStrike strike = *pendingStrike;
+  pendingStrike.reset();
+  MatchPlayer& striker = *strike.striker;
+  // He meets it where it is on its path, as a touch does: the strike is
+  // assessed at that moment and the ball leaves from there.
+  ball.position = {std::clamp(moment.contactPoint.x, 0.001f, 0.999f),
+                   std::clamp(moment.contactPoint.y, 0.001f, 0.999f)};
+  ball.z = moment.height / MatchTuning::Units::BALL_Z_METRES;
+  strikeAt = moment;
+  switch (strike.kind)
+  {
+    case PendingStrike::Kind::PASS:
+      passBall(striker, strike.pass, strike.forceLofted);
+      break;
+    case PendingStrike::Kind::SHOT:
+      takeShot(striker, strike.forcedXG);
+      break;
+    case PendingStrike::Kind::CLEAR:
+      clearBall(striker);
+      break;
+  }
+  strikeAt.reset();
+}
+
+void MatchEngine::noteTouchOnBall(const MatchPlayer& player,
+                                  const TouchIntent& intent,
+                                  const TouchResult& touch,
+                                  const TouchMoment& moment)
+{
   ball.touchKind = intent.kind;
   ball.touchContactGap = moment.gap;
   ball.touchContactHeight = moment.height;
@@ -3863,8 +3937,6 @@ void MatchEngine::playFirstTouch(MatchPlayer& player, const TouchMoment& moment)
   ball.touchGap = gap;
   ball.touchPeakGap = gap;
   ball.dribbleExposure = gap;
-  ball.dribbleTouchLength =
-      std::max(gap, MatchTuning::Dribble::MAX_TOUCH_METRES);
 }
 
 MatchEngine::DribbleAim MatchEngine::dribbleAim(const MatchPlayer& player) const
@@ -4013,37 +4085,18 @@ void MatchEngine::playDribbleTouch(MatchPlayer& player, const TouchMoment& momen
   ++dribbleTouches;
   dribbleContactGapSum += moment.gap;
   trackTouch(player);
-  ball.position = {std::clamp(moment.contactPoint.x, 0.001f, 0.999f),
-                   std::clamp(moment.contactPoint.y, 0.001f, 0.999f)};
-  ball.velocity = touch.velocity;
   // It keeps the height he met it at: the touch changes only its velocity.
-  ball.z = moment.height / MatchTuning::Units::BALL_Z_METRES;
-  ball.velocityZ = touch.verticalSpeed;
-  ball.curve = 0.0f;
-  ball.kicker = player.player;
-  ball.kickerLockout = 0.0f;
-  ball.touchAttempts = 0;
+  sendBallOff(player,
+              {std::clamp(moment.contactPoint.x, 0.001f, 0.999f),
+               std::clamp(moment.contactPoint.y, 0.001f, 0.999f)},
+              moment.height / MatchTuning::Units::BALL_Z_METRES, touch.velocity,
+              touch.verticalSpeed, 0.0f, 0.0f);
   ball.ownTouchCooldown = MatchTuning::Dribble::LOOSE_TOUCH_INTERVAL;
-  ball.touchKind = intent.kind;
-  ball.touchContactGap = moment.gap;
-  ball.touchContactHeight = moment.height;
-  ball.touchAngleError = touch.angleError;
-  ball.touchWeightError = touch.weightError;
-  ball.touchAngleDifficulty = touch.angleDifficulty;
-  ball.touchWeightDifficulty = touch.weightDifficulty;
-  ball.touchAngleFailed = touch.angleFailed;
-  ball.touchWeightFailed = touch.weightFailed;
-  ball.touchTurn = touch.turn;
-  ball.touchOutward = touch.outward;
-  ball.touchPaceChange = touch.paceChange;
+  noteTouchOnBall(player, intent, touch, moment);
   if (touch.angleFailed || touch.weightFailed) ++dribbleFailedTouches;
   const float speed = length(touch.velocity);
   if (speed > EPSILON)
     ball.dribbleDirection = {touch.velocity.x / speed, touch.velocity.y / speed};
-  const float gap = distance(player.position, ball.position);
-  ball.touchGap = gap;
-  ball.touchPeakGap = gap;
-  ball.dribbleExposure = gap;
 }
 
 void MatchEngine::updateTouch(MatchPlayer& carrier, float dt)

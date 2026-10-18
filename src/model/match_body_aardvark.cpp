@@ -1172,7 +1172,8 @@ float MatchEngine::feetReachAardvark(const MatchPlayer& /*player*/) const
 
 bool MatchEngine::ballBehindReachAardvark(const MatchPlayer& /*player*/,
                                           float /*gapX*/, float /*gapY*/,
-                                          float /*gap*/) const
+                                          float /*gap*/,
+                                          float /*turnSeconds*/) const
 {
   // He reaches all round.
   return false;

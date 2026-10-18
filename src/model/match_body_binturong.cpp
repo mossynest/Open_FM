@@ -1631,36 +1631,78 @@ ContactProfile strikeContactProfile(const StrikeKnobs& strikeKnobs,
   return profile;
 }
 
-ContactAssessment MatchEngine::assessStrikeBinturong(
-    const MatchPlayer& striker, const ContactProfile& profile, Vector2F aim,
-    float speed, float lift) const
+TouchMoment MatchEngine::strikeMomentBinturong(const MatchPlayer& striker) const
 {
-  // The ball where it lies, how far from his centre against the 0.9 m in
-  // which he may strike it, and its height; he chose to strike it.
+  // Where he meets it in the ball's sweep, when he does (a loose ball at
+  // his feet: unified kick plan step 3).
+  if (strikeAt) return *strikeAt;
+  // Otherwise (a dead ball, a keeper's from his hands, or the brain looking
+  // ahead): the ball where it lies, how far from his centre against the
+  // 0.9 m in which he may strike it, and its height.
   TouchMoment moment;
   moment.contactPoint = ball.position;
   moment.gap = distance(striker.position, ball.position);
   moment.reach = MatchTuning::Dribble::KICK_REACH_METRES;
   moment.height = ball.z * MatchTuning::Units::BALL_Z_METRES;
-  // Strikes have no intent from the brain yet: the body reads the
-  // pressure (vertical contact plan step 4).
+  return moment;
+}
+
+ContactAssessment MatchEngine::assessStrikeBinturong(
+    const MatchPlayer& striker, const ContactProfile& profile, Vector2F aim,
+    float speed, float lift) const
+{
+  // He chose to strike it. Strikes have no intent from the brain yet: the
+  // body reads the pressure (vertical contact plan step 4).
   return assessContactBinturong(
-      striker, profile, aim, speed, lift, moment, 0.0f,
+      striker, profile, aim, speed, lift, strikeMomentBinturong(striker), 0.0f,
       contactPressure(nearestOpponentDistance(striker), profile.pressureRadius));
 }
 
-void MatchEngine::recordStrikeBinturong(const MatchPlayer& striker,
-                                        StrikeKind kind,
-                                        const ContactAssessment& contact,
-                                        const ContactOutcome* outcome,
-                                        float skill)
+ContactResult MatchEngine::contactBinturong(const MatchPlayer& player,
+                                            const ContactRequest& request,
+                                            const TouchMoment& moment)
 {
-  // Open play (and throw-ins, a throw's only restart): a dead ball is
-  // struck from a standstill.
-  if (state == MatchState::PLAYING || kind == StrikeKind::THROW)
+  // Every contact the same way (unified kick plan step 1): the kind's
+  // profile, assessed where he meets the ball, carried out with his skill
+  // for it, and reported.
+  const bool strike = request.kind == ContactRequest::Kind::STRIKE;
+  ContactProfile profile =
+      strike ? strikeProfileBinturong(request.strike) : touchProfileBinturong();
+  if (request.precision != 1.0f)
+  {
+    profile.angleJitter *= request.precision;
+    profile.angleMissAbsoluteBase *= request.precision;
+    profile.angleMissAbsoluteRange *= request.precision;
+  }
+  // Without the brain's read of the pressure, the body reads it.
+  const float pressure = request.pressure.value_or(contactPressure(
+      nearestOpponentDistance(player), profile.pressureRadius));
+  ContactResult result;
+  result.contact =
+      assessContactBinturong(player, profile, request.aim, request.speed,
+                             request.lift, moment, request.surprise, pressure);
+  result.skill = strike ? strikeSkillBinturong(player, request.strike)
+                        : player.derivedStat(DerivedStat::FIRST_TOUCH);
+  result.outcome =
+      carryOutContactBinturong(player, profile, result.contact, result.skill);
+  reportContactBinturong(player, request, result);
+  return result;
+}
+
+void MatchEngine::reportContactBinturong(const MatchPlayer& player,
+                                         const ContactRequest& request,
+                                         const ContactResult& result)
+{
+  const ContactAssessment& contact = result.contact;
+  const ContactOutcome& outcome = result.outcome;
+  const bool strike = request.kind == ContactRequest::Kind::STRIKE;
+  // Strikes are tallied in open play (and throw-ins, a throw's only
+  // restart): a dead ball is struck from a standstill.
+  if (strike &&
+      (state == MatchState::PLAYING || request.strike == StrikeKind::THROW))
   {
     StrikeContactStats::ByKind& tally =
-        strikeContacts.byKind[static_cast<std::size_t>(kind)];
+        strikeContacts.byKind[static_cast<std::size_t>(request.strike)];
     ++tally.strikes;
     tally.angleDifficulty += contact.angleDifficulty;
     tally.weightDifficulty += contact.weightDifficulty;
@@ -1670,24 +1712,26 @@ void MatchEngine::recordStrikeBinturong(const MatchPlayer& striker,
       tally.factorSum[index] += value;
       if (value >= 0.5f) ++tally.factorMarked[index];
     }
-    if (outcome)
-    {
-      ++tally.carriedOut;
-      if (outcome->angleFailed) ++tally.angleFailed;
-      if (outcome->weightFailed) ++tally.weightFailed;
-      tally.angleErrorSum += std::abs(outcome->achievedTurn - contact.turn);
-      tally.weightErrorSum += outcome->actualSpeed - contact.intendedSpeed;
-      tally.elevationErrorSum +=
-          outcome->achievedElevation - contact.intendedElevation;
-    }
+    ++tally.carriedOut;
+    if (outcome.angleFailed) ++tally.angleFailed;
+    if (outcome.weightFailed) ++tally.weightFailed;
+    tally.angleErrorSum += std::abs(outcome.achievedTurn - contact.turn);
+    tally.weightErrorSum += outcome.actualSpeed - contact.intendedSpeed;
+    tally.elevationErrorSum +=
+        outcome.achievedElevation - contact.intendedElevation;
   }
 
   if (!wantsDetail()) return;
   MatchDuelDetail duel;
-  duel.kind = MatchDuelDetail::Kind::STRIKE;
-  duel.strike = kind;
-  duel.player = striker.player ? striker.player->getId() : 0;
-  duel.homeTeam = striker.isHomeTeam;
+  duel.kind = strike ? MatchDuelDetail::Kind::STRIKE
+                     : MatchDuelDetail::Kind::FIRST_TOUCH;
+  if (strike)
+  {
+    duel.strike = request.strike;
+    duel.strikeCarriedOut = true;
+  }
+  duel.player = player.player ? player.player->getId() : 0;
+  duel.homeTeam = player.isHomeTeam;
   duel.chance.total = contact.angleDifficulty;
   duel.foul.total = contact.weightDifficulty;
   for (std::size_t index = 0; index < CONTACT_FACTOR_COUNT; ++index)
@@ -1701,24 +1745,20 @@ void MatchEngine::recordStrikeBinturong(const MatchPlayer& striker,
   for (ScoreBreakdown* breakdown : {&duel.chance, &duel.foul})
     if (const float clamp = breakdown->residual(); std::abs(clamp) > 1e-6f)
       breakdown->add("clamped to its range", TermSource::SITUATION, clamp);
+  duel.touchSkill = result.skill;
   duel.intendedSpeed = contact.intendedSpeed;
+  duel.actualSpeed = outcome.actualSpeed;
   duel.turn = std::abs(contact.turn);
   duel.outward = contact.outward && std::abs(contact.turn) > EPSILON;
   duel.paceChange = contact.paceChange;
-  if (outcome)
-  {
-    duel.strikeCarriedOut = true;
-    duel.touchSkill = skill;
-    duel.actualSpeed = outcome->actualSpeed;
-    // Signed along the turn, as for the touch: - short of it, + past it.
-    duel.angleError = (outcome->achievedTurn - contact.turn) *
-                      (contact.turn < 0.0f ? -1.0f : 1.0f);
-    duel.angleFailChance = outcome->angleFailChance;
-    duel.angleFailed = outcome->angleFailed;
-    duel.weightError = outcome->actualSpeed - contact.intendedSpeed;
-    duel.weightFailChance = outcome->weightFailChance;
-    duel.weightFailed = outcome->weightFailed;
-  }
+  // Signed along the turn: - short of it, + past it.
+  duel.angleError = (outcome.achievedTurn - contact.turn) *
+                    (contact.turn < 0.0f ? -1.0f : 1.0f);
+  duel.angleFailChance = outcome.angleFailChance;
+  duel.angleFailed = outcome.angleFailed;
+  duel.weightError = outcome.actualSpeed - contact.intendedSpeed;
+  duel.weightFailChance = outcome.weightFailChance;
+  duel.weightFailed = outcome.weightFailed;
   if (MatchRecorder* recorder = getRecorder())
     recorder->onDuelDetail(*this, duel);
 }
@@ -1756,19 +1796,16 @@ MatchEngine::Kick MatchEngine::strikeContactBinturong(
   // leaves as it came off him.
   const Vector2F origin = ball.position;
   const Vector2F aim = metricDirection(origin, target);
-  ContactProfile profile = strikeProfileBinturong(kind);
-  if (precision != 1.0f)
-  {
-    profile.angleJitter *= precision;
-    profile.angleMissAbsoluteBase *= precision;
-    profile.angleMissAbsoluteRange *= precision;
-  }
-  const ContactAssessment contact =
-      assessStrikeBinturong(striker, profile, aim, speed, lift);
-  const float skill = strikeSkillBinturong(striker, kind);
+  ContactRequest request;
+  request.kind = ContactRequest::Kind::STRIKE;
+  request.strike = kind;
+  request.aim = aim;
+  request.speed = speed;
+  request.lift = lift;
+  request.precision = precision;
   const ContactOutcome outcome =
-      carryOutContactBinturong(striker, profile, contact, skill);
-  recordStrikeBinturong(striker, kind, contact, &outcome, skill);
+      contactBinturong(striker, request, strikeMomentBinturong(striker))
+          .outcome;
   const float along = length(outcome.velocity);
   const Vector2F heading =
       along > EPSILON
@@ -2283,14 +2320,17 @@ TouchResult MatchEngine::firstTouchBinturong(const MatchPlayer& player,
 
   // The touch is a contact with the touch profile, carried out with his
   // First Touch.
-  const ContactProfile profile = touchProfileBinturong();
-  const ContactAssessment contact = assessContactBinturong(
-      player, profile, aim, intendedSpeed, intent.liftSpeed, moment,
-      ownBall ? 0.0f : intent.surprise, intent.pressure);
-  const float skill = player.derivedStat(DerivedStat::FIRST_TOUCH);
-  const ContactOutcome outcome =
-      carryOutContactBinturong(player, profile, contact, skill);
-  const float turn = contact.turn;
+  ContactRequest request;
+  request.kind = ownBall ? ContactRequest::Kind::DRIBBLE_TOUCH
+                         : ContactRequest::Kind::FIRST_TOUCH;
+  request.aim = aim;
+  request.speed = intendedSpeed;
+  request.lift = intent.liftSpeed;
+  request.surprise = ownBall ? 0.0f : intent.surprise;
+  request.pressure = intent.pressure;
+  const ContactResult contact = contactBinturong(player, request, moment);
+  const ContactOutcome& outcome = contact.outcome;
+  const float turn = contact.contact.turn;
 
   TouchResult result;
   result.velocity = outcome.velocity;
@@ -2298,50 +2338,14 @@ TouchResult MatchEngine::firstTouchBinturong(const MatchPlayer& player,
   // Signed along the turn: - short of it, + past it.
   result.angleError =
       (outcome.achievedTurn - turn) * (turn < 0.0f ? -1.0f : 1.0f);
-  result.weightError = outcome.actualSpeed - intendedSpeed;
-  result.angleDifficulty = contact.angleDifficulty;
-  result.weightDifficulty = contact.weightDifficulty;
+  result.weightError = outcome.actualSpeed - contact.contact.intendedSpeed;
+  result.angleDifficulty = contact.contact.angleDifficulty;
+  result.weightDifficulty = contact.contact.weightDifficulty;
   result.angleFailed = outcome.angleFailed;
   result.weightFailed = outcome.weightFailed;
   result.turn = std::abs(turn);
-  result.outward = contact.outward && std::abs(turn) > EPSILON;
-  result.paceChange = contact.paceChange;
-
-  if (wantsDetail())
-  {
-    MatchDuelDetail duel;
-    duel.kind = MatchDuelDetail::Kind::FIRST_TOUCH;
-    duel.player = player.player ? player.player->getId() : 0;
-    duel.homeTeam = player.isHomeTeam;
-    duel.chance.total = contact.angleDifficulty;
-    duel.foul.total = contact.weightDifficulty;
-    for (std::size_t index = 0; index < CONTACT_FACTOR_COUNT; ++index)
-    {
-      const ContactFactor& factor = contact.factors[index];
-      if (factor.angleWeight != 0.0f)
-        duel.chance.add(factor.name, factor.source,
-                        contact.added(index, ContactJob::ANGLE));
-      if (factor.weightWeight != 0.0f)
-        duel.foul.add(factor.name, factor.source, contact.added(index, ContactJob::WEIGHT));
-    }
-    for (ScoreBreakdown* breakdown : {&duel.chance, &duel.foul})
-      if (const float clamp = breakdown->residual(); std::abs(clamp) > 1e-6f)
-        breakdown->add("clamped to its range", TermSource::SITUATION, clamp);
-    duel.touchSkill = skill;
-    duel.intendedSpeed = intendedSpeed;
-    duel.actualSpeed = outcome.actualSpeed;
-    duel.turn = result.turn;
-    duel.outward = result.outward;
-    duel.paceChange = contact.paceChange;
-    duel.angleError = result.angleError;
-    duel.angleFailChance = outcome.angleFailChance;
-    duel.angleFailed = outcome.angleFailed;
-    duel.weightError = result.weightError;
-    duel.weightFailChance = outcome.weightFailChance;
-    duel.weightFailed = outcome.weightFailed;
-    if (MatchRecorder* recorder = getRecorder())
-      recorder->onDuelDetail(*this, duel);
-  }
+  result.outward = contact.contact.outward && std::abs(turn) > EPSILON;
+  result.paceChange = contact.contact.paceChange;
   return result;
 }
 
@@ -2366,7 +2370,9 @@ MatchEngine::Kick MatchEngine::kickPassBinturong(const MatchPlayer& passer,
   if (lofted)
   {
     // Launched to drop at the target: long passes at chest height to be
-    // controlled, crosses at head height to be attacked.
+    // controlled, crosses at head height to be attacked; from the height
+    // the ball is struck at.
+    const float startMetres = ball.z * MatchTuning::Units::BALL_Z_METRES;
     const float arrivalMetres =
         delivery ? MatchTuning::Aerial::ARRIVAL_HEIGHT_METRES
                  : MatchTuning::Passing::LOFTED_ARRIVAL_HEIGHT_METRES;
@@ -2375,7 +2381,7 @@ MatchEngine::Kick MatchEngine::kickPassBinturong(const MatchPlayer& passer,
                      passDistance * MatchTuning::Passing::LOFTED_SPEED_PER_METRE,
                  MatchTuning::Passing::MAX_LOFTED_SPEED);
     const float up =
-        loftVerticalSpeed(passDistance, along, 0.0f, arrivalMetres);
+        loftVerticalSpeed(passDistance, along, startMetres, arrivalMetres);
     return strikeContactBinturong(passer, kind, target, along, up);
   }
   // Along the ground, weighted to arrive at a controllable pace; longer
@@ -3026,14 +3032,40 @@ float MatchEngine::feetReachBinturong(const MatchPlayer& player) const
 
 bool MatchEngine::ballBehindReachBinturong(const MatchPlayer& player,
                                            float gapX, float gapY,
-                                           float gap) const
+                                           float gap, float turnSeconds) const
 {
   // An outfielder cannot touch a ball behind him beyond the comfort gap
   // (the dead zone).
   if (player.isGoalkeeper) return false;
+  float angle = player.facingAngle;
+  if (turnSeconds > 0.0f)
+  {
+    // As his body turns (integrateMovementsBinturong): toward the facing
+    // asked of him, else toward his run, at his turn rate.
+    using P = MatchTuning::Player;
+    const float speedSquared = player.velocity.x * player.velocity.x +
+                               player.velocity.y * player.velocity.y;
+    const bool running = speedSquared > P::MOVEMENT_FACING_THRESHOLD *
+                                            P::MOVEMENT_FACING_THRESHOLD;
+    if (player.facingRequested || running)
+    {
+      const float target =
+          player.facingRequested
+              ? player.facingRequest
+              : fastAtan2(player.velocity.y / MatchTuning::Pitch::WIDTH_METRES,
+                          player.velocity.x / MatchTuning::Pitch::LENGTH_METRES);
+      float difference = target - angle;
+      if (difference > std::numbers::pi_v<float>)
+        difference -= TWO_PI;
+      else if (difference < -std::numbers::pi_v<float>)
+        difference += TWO_PI;
+      const float turn = bodyTurnRate(player) * turnSeconds;
+      angle += std::clamp(difference, -turn, turn);
+    }
+  }
   const Vector2F facing = normalized(
-      {std::cos(player.facingAngle) * MatchTuning::Pitch::LENGTH_METRES,
-       std::sin(player.facingAngle) * MatchTuning::Pitch::WIDTH_METRES});
+      {std::cos(angle) * MatchTuning::Pitch::LENGTH_METRES,
+       std::sin(angle) * MatchTuning::Pitch::WIDTH_METRES});
   const Vector2F toBall =
       gap > EPSILON ? Vector2F{-gapX / gap, -gapY / gap} : facing;
   return inTouchDeadZone(facing, toBall, gap,
@@ -3066,15 +3098,17 @@ float MatchEngine::clearanceDistanceBinturong(const MatchPlayer& /*defender*/,
 MatchEngine::BallRelease MatchEngine::releaseFromBinturong(const MatchPlayer& kicker,
                                                  ReleaseKind kind) const
 {
-  // Not all of these leave the ball as it was: a pass, shot or clearance
-  // starts at a set height rather than the height it is at.
+  // Not all of these leave the ball as it was: a shot or clearance starts
+  // at a set height rather than the height it is at.
   constexpr float Z_METRES = MatchTuning::Units::BALL_Z_METRES;
   BallRelease from;
   switch (kind)
   {
     case ReleaseKind::PASS:
-      // From where the ball is, off the ground.
+      // From where the ball is, at its height.
       from.position = ball.position;
+      from.z = ball.z;
+      from.heightMetres = ball.z * Z_METRES;
       break;
     case ReleaseKind::SHOT:
       // From where the ball is, at the shot's release height.

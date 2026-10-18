@@ -2263,6 +2263,7 @@ bool MatchEngine::waitsForCloserBinturong(const MatchPlayer& player,
   float bestGap = moment.gap;
   int bestStep = 0;
   float gapAfterMove = 0.0f;
+  bool nearDeadZoneAfterMove = false;
   // The first sub-step at which a bounce lifts it out of reach of his feet.
   int risesAt = LOOKAHEAD + 1;
   for (int step = 1; step <= LOOKAHEAD; ++step)
@@ -2280,9 +2281,40 @@ bool MatchEngine::waitsForCloserBinturong(const MatchPlayer& player,
                              path[static_cast<std::size_t>(step)].y -
                                  (playerStart.y + player.velocity.y * moved)};
     const float gap = length(gapVector);
-    // Out of his reach by the next sub-step: this is his last chance.
-    if (step == 1 && gap > moment.reach) return false;
-    if (step == moment.substepsLeft + 1) gapAfterMove = gap;
+    // Out of his reach, or behind him in his dead zone (as he will face
+    // after his moves before then): by the next sub-step this is his last
+    // chance; later, nothing past it is worth waiting for.
+    const bool outOfReach =
+        gap > moment.reach ||
+        ballBehindReach(player, -gapVector.x, -gapVector.y, gap, moved);
+    if (outOfReach)
+    {
+      if (step == 1) return false;
+      break;
+    }
+    if (step == moment.substepsLeft + 1)
+    {
+      gapAfterMove = gap;
+      // Where he will really be is uncertain by about the wait margin: the
+      // ball should be clear of his dead zone even that much further from
+      // him, or that far round him either way.
+      if (gap > EPSILON)
+      {
+        const float margin = knob[K::WAIT_MARGIN];
+        const float slack = std::atan2(margin, gap);
+        const float out = (gap + margin) / gap;
+        for (const float side : {-slack, 0.0f, slack})
+        {
+          const float c = std::cos(side) * out;
+          const float s = std::sin(side) * out;
+          const Vector2F round{gapVector.x * c - gapVector.y * s,
+                               gapVector.x * s + gapVector.y * c};
+          if (ballBehindReach(player, -round.x, -round.y, gap + margin,
+                              moved))
+            nearDeadZoneAfterMove = true;
+        }
+      }
+    }
     if (gap < bestGap)
     {
       bestGap = gap;
@@ -2299,7 +2331,8 @@ bool MatchEngine::waitsForCloserBinturong(const MatchPlayer& player,
   // His own next move is the least certain part of the read: wait through
   // it only if the ball is still safely inside his reach just after.
   if (bestStep > moment.substepsLeft &&
-      gapAfterMove > moment.reach - knob[K::WAIT_MARGIN])
+      (gapAfterMove > moment.reach - knob[K::WAIT_MARGIN] ||
+       nearDeadZoneAfterMove))
     return false;
   // An opponent who can get to the ball's path first would take it: play
   // it now, stretched or not.

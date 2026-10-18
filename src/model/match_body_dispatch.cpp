@@ -545,16 +545,17 @@ float MatchEngine::feetReach(const MatchPlayer& player) const
 }
 
 bool MatchEngine::ballBehindReach(const MatchPlayer& player, float gapX,
-                                  float gapY, float gap) const
+                                  float gapY, float gap,
+                                  float turnSeconds) const
 {
   switch (bodyOf(player.isHomeTeam))
   {
     case BodyId::AARDVARK:
       break;
     case BodyId::BINTURONG:
-      return ballBehindReachBinturong(player, gapX, gapY, gap);
+      return ballBehindReachBinturong(player, gapX, gapY, gap, turnSeconds);
   }
-  return ballBehindReachAardvark(player, gapX, gapY, gap);
+  return ballBehindReachAardvark(player, gapX, gapY, gap, turnSeconds);
 }
 
 Vector2F MatchEngine::strikePoint(const MatchPlayer& striker) const
