@@ -519,6 +519,18 @@ struct MatchTuning final
     static constexpr float MEET_APEX_METRES = 0.3f;
     /** ...and swing out this far to widen a sharp turn. */
     static constexpr float MEET_OUTWARD_ROOM_METRES = 1.5f;
+    /** Deciding for his next meet (dribble meet plan 2a): where the others
+     * will be is read this share of the way from their current velocity to
+     * their planned target, times his Vision (design choice). */
+    static constexpr float MEET_READ_TARGET_SHARE = 0.6f;
+    /** He decides for a meet no further off than this (s)... */
+    static constexpr float MEET_DECISION_HORIZON_SECONDS = 1.0f;
+    /** ...and a strike so decided is dropped (he decides again) when still
+     * unplayed this long past that horizon (the meet's own time reads
+     * optimistic: he may still be turning or speeding up), or when the meet
+     * has moved this far. */
+    static constexpr float MEET_DECISION_LATE_SECONDS = 0.5f;
+    static constexpr float MEET_DECISION_DRIFT_METRES = 1.5f;
     /** A push rolls straight: on a route it goes no further into a turn
      * than where the line has curved this far off it. */
     static constexpr float PUSH_LINE_DEVIATION_METRES = 0.5f;

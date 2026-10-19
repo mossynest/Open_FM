@@ -1191,7 +1191,11 @@ void MatchEngine::simulateStepBody(float dt)
     if ((!ball.possessedBy || ball.inTouch) && state == MatchState::PLAYING)
       updateBall(dt);
     // A strike he never got to in the sweep is dropped: he decides again.
-    pendingStrike.reset();
+    // One decided for his next meet waits for it while it holds.
+    if (pendingStrike && pendingStrike->atMeet)
+      ageHeldStrike(dt);
+    else
+      pendingStrike.reset();
     // Possession belongs to the side in control, including its passes in
     // flight and the loose balls it last played.
     if (lastControlledTeamHome)
@@ -2229,9 +2233,22 @@ void MatchEngine::resolvePossessionAndActions(float dt)
   // The AI waits out its decision time after a touch; a controlled player
   // can play the ball as soon as it is under control.
   const bool controlled = isControlled(*carrier);
+  // A Binturong brain dribbling on a Binturong body decides for his next
+  // meet with the ball, as soon as his decision time is up (dribble meet
+  // plan 2a); a strike so decided waits for that meet.
+  const bool forMeet = !controlled && ball.inTouch &&
+                       ball.meetFor == carrier->player &&
+                       ball.meetSeconds <=
+                           MatchTuning::Dribble::MEET_DECISION_HORIZON_SECONDS &&
+                       brainOf(carrier->isHomeTeam) == BrainId::BINTURONG &&
+                       getBody(carrier->isHomeTeam) == BodyId::BINTURONG;
+  if (pendingStrike && pendingStrike->atMeet &&
+      pendingStrike->striker == carrier)
+    return;
   if ((carrier->actionCooldown <= 0.0f ||
        (controlled && carrier->trapTimer <= 0.0f)) &&
-      ball.dribbleExposure <= MatchTuning::Dribble::KICK_REACH_METRES)
+      (forMeet ||
+       ball.dribbleExposure <= MatchTuning::Dribble::KICK_REACH_METRES))
   {
     // A loose ball at his feet is struck where he next meets it in the
     // ball's sweep, not where it lies now.
@@ -2266,6 +2283,10 @@ void MatchEngine::resolvePossessionAndActions(float dt)
         if (pass.style == ForcedPassStyle::GROUND) option.lofted = false;
         passBall(*carrier, option, pass.style == ForcedPassStyle::LOFTED);
       }
+    }
+    else if (forMeet)
+    {
+      decideActionAtMeet(*carrier);
     }
     else
     {
@@ -3993,7 +4014,81 @@ bool MatchEngine::holdStrikeForSweep(const PendingStrike& strike)
       ball.possessedBy != strike.striker->player)
     return false;
   pendingStrike = strike;
+  if (decidingAtMeet)
+  {
+    pendingStrike->atMeet = true;
+    pendingStrike->meetPoint = ball.meetPoint;
+  }
   return true;
+}
+
+void MatchEngine::ageHeldStrike(float dt)
+{
+  if (!pendingStrike) return;
+  using R = MatchTuning::Dribble;
+  PendingStrike& strike = *pendingStrike;
+  strike.heldSeconds += dt;
+  const bool holds =
+      strike.atMeet && strike.striker && state == MatchState::PLAYING &&
+      ball.inTouch && ball.possessedBy == strike.striker->player &&
+      ball.meetFor == strike.striker->player &&
+      strike.heldSeconds <= R::MEET_DECISION_HORIZON_SECONDS + R::MEET_DECISION_LATE_SECONDS &&
+      distance(ball.meetPoint, strike.meetPoint) <= R::MEET_DECISION_DRIFT_METRES;
+  if (!holds) pendingStrike.reset();
+}
+
+void MatchEngine::decideActionAtMeet(MatchPlayer& carrier)
+{
+  // Read the play as it will be at the meet, then put everything back
+  // before acting on it: a read only, nobody moves.
+  struct Saved
+  {
+    Vector2F position;
+  };
+  std::array<Saved, 32> saved{};
+  const std::size_t count = std::min(players.size(), saved.size());
+  for (std::size_t slot = 0; slot < count; ++slot)
+    saved[slot] = {players[slot].position};
+  const Vector2F ballPosition = ball.position;
+  const float ballZ = ball.z;
+  const float seconds = std::max(0.0f, ball.meetSeconds);
+  const float readShare = MatchTuning::Dribble::MEET_READ_TARGET_SHARE *
+                          std::clamp(carrier.vision, 0.0f, 1.0f);
+  for (std::size_t slot = 0; slot < count; ++slot)
+  {
+    MatchPlayer& player = players[slot];
+    if (&player == &carrier || !active(player)) continue;
+    // On as he is going, and toward where he means to go (as far as he
+    // could get by then), blended.
+    const Vector2F rolled = toPitch(
+        {player.velocity.x * seconds, player.velocity.y * seconds});
+    const Vector2F toTarget = toMetres({player.tacticalTarget.x - player.position.x,
+                                        player.tacticalTarget.y - player.position.y});
+    const float targetMetres = length(toTarget);
+    const float reach =
+        std::min(targetMetres, currentTopSpeed(player) * seconds);
+    const Vector2F towards =
+        targetMetres > EPSILON
+            ? toPitch({toTarget.x / targetMetres * reach,
+                       toTarget.y / targetMetres * reach})
+            : Vector2F{0.0f, 0.0f};
+    player.position = {
+        std::clamp(player.position.x + rolled.x + (towards.x - rolled.x) * readShare,
+                   MatchTuning::Pitch::PLAYER_MIN_X, MatchTuning::Pitch::PLAYER_MAX_X),
+        std::clamp(player.position.y + rolled.y + (towards.y - rolled.y) * readShare,
+                   MatchTuning::Pitch::PLAYER_MIN_Y, MatchTuning::Pitch::PLAYER_MAX_Y)};
+  }
+  carrier.position = ball.meetPoint;
+  ball.position = ball.meetPoint;
+  ball.z = 0.0f;
+  const BallAction action = chooseBallAction(carrier);
+  for (std::size_t slot = 0; slot < count; ++slot)
+    players[slot].position = saved[slot].position;
+  ball.position = ballPosition;
+  ball.z = ballZ;
+  decidingAtMeet = true;
+  executeBallAction(carrier, action);
+  decidingAtMeet = false;
 }
 
 void MatchEngine::playPendingStrike(const TouchMoment& moment)

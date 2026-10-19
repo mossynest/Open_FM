@@ -2163,7 +2163,10 @@ class MatchEngine
   /** A strike decided at the step's start on a loose ball at his feet,
    * played where he next meets it in the ball's sweep (unified kick plan
    * step 3). Everything it does (offside, stats, the record) happens then;
-   * unplayed by the step's end, it is dropped and he decides again. */
+   * unplayed by the step's end, it is dropped and he decides again. One
+   * decided for his next meet with the ball (dribble meet plan 2a) waits
+   * for that meet, over steps, while it holds (`atMeet`: how long so far,
+   * and the meet it was decided for). */
   struct PendingStrike
   {
     enum class Kind : std::uint8_t
@@ -2177,11 +2180,26 @@ class MatchEngine
     PassOption pass;
     bool forceLofted = false;
     float forcedXG = -1.0f;
+    bool atMeet = false;
+    float heldSeconds = 0.0f;
+    Vector2F meetPoint{};
   };
   std::optional<PendingStrike> pendingStrike;
   /** True while the carrier decides what to do with a loose ball at his
    * feet: a pass, shot or clearance then waits for the sweep. */
   bool strikesWaitForSweep = false;
+  /** True while he decides for his next meet with the ball (a strike then
+   * waits for that meet). */
+  bool decidingAtMeet = false;
+  /** The carrier decides as at his next meet with the ball (dribble meet
+   * plan 2a): he put at the meet point, the others where he reads they will
+   * be by then (a blend of their current velocity and their planned target,
+   * more of the target for better Vision). */
+  void decideActionAtMeet(MatchPlayer& carrier);
+  /** A strike held for his meet that no longer holds (the ball lost, the
+   * meet moved, too long) is dropped, after each step; any other is dropped
+   * at the step's end. */
+  void ageHeldStrike(float dt);
   /** The sweep moment a strike is being played at, while it is. */
   std::optional<TouchMoment> strikeAt;
   /** Holds `strike` for the sweep when strikes wait for it; false if it is

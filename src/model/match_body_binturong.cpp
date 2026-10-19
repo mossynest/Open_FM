@@ -56,6 +56,9 @@ constexpr float STRAIGHT_ON_RADIUS = 1.0e6f;
 // it over the near-point time of steering (about 0.5 s ahead: Land & Lee
 // 1994, Salvucci & Gray 2004; a driving figure, none found for running).
 constexpr float NEAR_POINT_SECONDS = 0.5f;
+// Dribbling, he runs his corner to the meet only with the meet ahead of his
+// run (within about 60 degrees of it); beside or behind him, straight to it.
+constexpr float MEET_AHEAD_COSINE = 0.5f;
 // He is on the arc of a turn within this much of it (else joining it).
 constexpr float ON_ARC_METRES = 0.5f;
 
@@ -890,24 +893,34 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
       const Vector2F meet = toMetres(ball.meetPoint);
       const Vector2F out{meet.x + ball.meetOut.x * ball.meetPush,
                          meet.y + ball.meetOut.y * ball.meetPush};
-      if (ball.meetRecovering)
-      {
-        // His last touch went wrong: straight to where he can collect it,
-        // no corner; his next touch takes up the route again.
-        const float toMeet = length(offset);
-        turn = straightOn;
-        line.direction = toMeet > EPSILON
-                             ? Vector2F{offset.x / toMeet, offset.y / toMeet}
-                             : Vector2F{0.0f, 0.0f};
-        line.toTurn = toMeet;
-      }
-      else
+      // The corner, unless his last touch went wrong, the meet is not ahead
+      // of him (beside or behind: the corner would carry him past it), or
+      // his line has already left the turn without him meeting the ball.
+      const float toMeet = length(offset);
+      const bool ahead =
+          speedNow <= MatchTuning::Dribble::CLOSE_CONTROL_SPEED ||
+          (offset.x * player.velocity.x + offset.y * player.velocity.y) >
+              MEET_AHEAD_COSINE * toMeet * speedNow;
+      bool straight = ball.meetRecovering || !ahead;
+      if (!straight)
       {
         turn = turnThrough(toMetres(ball.meetLegStart), meet, out,
                            MatchTuning::Dribble::MEET_APEX_METRES,
                            MatchTuning::Dribble::MEET_OUTWARD_ROOM_METRES);
         line = aimThrough(turn, meet, toMetres(player.position), out, speedNow,
                           speedNow * dt);
+        straight = line.exited;
+      }
+      if (straight)
+      {
+        // Straight to where he can collect it, no corner; his next touch
+        // takes up the route again.
+        turn = straightOn;
+        line = LineAim{};
+        line.direction = toMeet > EPSILON
+                             ? Vector2F{offset.x / toMeet, offset.y / toMeet}
+                             : Vector2F{0.0f, 0.0f};
+        line.toTurn = toMeet;
       }
       nextTurn = straightOn;
       beyond = ball.meetPush;
