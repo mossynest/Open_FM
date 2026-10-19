@@ -552,6 +552,18 @@ struct MatchTuning final
     static constexpr float CARRY_SPACE_CLOSE_METRES = 3.0f;
     static constexpr float CARRY_SPACE_OPEN_METRES = 18.0f;
     static constexpr float CARRY_SPACE_CONE_COSINE = 0.64f;
+    /** Knock-on into space (2d, design choices): carrying at this urgency
+     * or more (a sprint), he may push it up to this far, as far as he gets
+     * to it this long before any opponent could (who reads it this long
+     * first), if at least this many times his usual touch. */
+    static constexpr float KNOCK_ON_URGENCY = 0.85f;
+    static constexpr float KNOCK_ON_MAX_METRES = 12.0f;
+    static constexpr float KNOCK_ON_MARGIN_SECONDS = 0.3f;
+    static constexpr float KNOCK_ON_READ_SECONDS = 0.2f;
+    static constexpr float KNOCK_ON_MIN_SHARE = 2.0f;
+    /** ...and short of where he is going by as far as he runs in this long
+     * (the ball rolls on past the spot). */
+    static constexpr float KNOCK_ON_ROLL_ON_SECONDS = 0.6f;
     /** A push rolls straight: on a route it goes no further into a turn
      * than where the line has curved this far off it. */
     static constexpr float PUSH_LINE_DEVIATION_METRES = 0.5f;

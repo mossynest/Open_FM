@@ -2436,10 +2436,12 @@ TouchResult MatchEngine::firstTouchBinturong(const MatchPlayer& player,
        std::sin(player.facingAngle) * MatchTuning::Pitch::WIDTH_METRES});
   const Vector2F aim =
       metres > EPSILON ? Vector2F{gap.x / metres, gap.y / metres} : facing;
+  // A knock-on into space is as hard as he means it.
   const float maxSpeed =
-      ownBall ? std::max(length(player.velocity), intent.arrivalSpeed) +
-                    MatchTuning::Dribble::LOOSE_MAX_SPEED_OVER_RUN
-              : knob[K::MAX_TOUCH_SPEED];
+      intent.knockOn ? std::numeric_limits<float>::max()
+      : ownBall      ? std::max(length(player.velocity), intent.arrivalSpeed) +
+                      MatchTuning::Dribble::LOOSE_MAX_SPEED_OVER_RUN
+                     : knob[K::MAX_TOUCH_SPEED];
   const float intendedSpeed =
       metres > EPSILON
           ? std::min(groundLaunchSpeed(metres, intent.arrivalSpeed), maxSpeed)
@@ -3313,8 +3315,10 @@ void MatchEngine::planDribbleMeetBinturong(MatchPlayer& owner)
   using F = MatchTuning::FirstTouch;
   using R = MatchTuning::Dribble;
   constexpr int SUBSTEPS = MatchTuning::Timing::BALL_SUBSTEPS;
-  const DribbleAim aim = dribbleAim(owner);
+  DribbleAim aim = dribbleAim(owner);
   const float topSpeed = std::max(currentTopSpeed(owner), EPSILON);
+  // Knocked on into space, he sprints after it: his full pace.
+  if (ball.knockedOn) aim.speed = topSpeed;
   const float pace = std::clamp(aim.speed, R::LOOSE_START_SPEED, topSpeed);
   const float speed = length(ball.velocity);
   const Vector2F heading =

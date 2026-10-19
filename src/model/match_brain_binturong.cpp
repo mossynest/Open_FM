@@ -4165,14 +4165,16 @@ MatchPlayer* MatchEngine::chooseTakeOnBinturong(MatchPlayer& carrier)
   return nullptr;
 }
 
-float MatchEngine::carryPaceBinturong(const MatchPlayer& player) const
+float MatchEngine::carryUrgencyBinturong(const MatchPlayer& player) const
 {
   // How urgently he carries it: open space along his way, a break on (an
   // attacking transition) and a side that takes risks push him on; with
   // nobody near he may stroll it out, with someone in front he slows to
-  // keep it. Walk at 0, jog at 1/3, run at 2/3, sprint at 1 (the tops of his
-  // bands, as fuel has left them), in straight lines between.
+  // keep it. A drill's dribbler goes as hard as the drill asks: flat out.
   using R = MatchTuning::Dribble;
+  if (player.player && std::ranges::find(ballKeepers, player.player->getId()) !=
+                           ballKeepers.end())
+    return 1.0f;
   const Vector2F at = toMetres(player.position);
   const Vector2F way = toMetres({ball.dribbleGoal.x - player.position.x,
                                  ball.dribbleGoal.y - player.position.y});
@@ -4196,16 +4198,19 @@ float MatchEngine::carryPaceBinturong(const MatchPlayer& player) const
                  0.0f, 1.0f);
   const TeamPhase phase = player.isHomeTeam ? homePhase : awayPhase;
   const StrategySliders sliders = getEffectiveSliders(player.isHomeTeam);
-  // A drill's dribbler goes as hard as the drill asks: flat out.
-  const bool drilled =
-      player.player && std::ranges::find(ballKeepers, player.player->getId()) !=
-                           ballKeepers.end();
-  const float urgency = drilled ? 1.0f : std::clamp(
+  return std::clamp(
       R::CARRY_URGENCY_BASE + R::CARRY_URGENCY_SPACE * space +
           (phase == TeamPhase::ATTACKING_TRANSITION ? R::CARRY_URGENCY_TRANSITION
                                                     : 0.0f) +
           R::CARRY_URGENCY_RISK * (sliders.riskTaking - 0.5f) * 2.0f,
       0.0f, 1.0f);
+}
+
+float MatchEngine::carryPaceBinturong(const MatchPlayer& player) const
+{
+  // Walk at urgency 0, jog at 1/3, run at 2/3, sprint at 1 (the tops of his
+  // bands, as fuel has left them), in straight lines between.
+  const float urgency = carryUrgencyBinturong(player);
   const std::array<float, 4> tops{speedBand(player, MovementMode::WALK).high,
                                   speedBand(player, MovementMode::JOG).high,
                                   speedBand(player, MovementMode::RUN).high,
@@ -4219,4 +4224,74 @@ float MatchEngine::carryPaceBinturong(const MatchPlayer& player) const
   const float cap = tops[2] + std::max(0.0f, tops[3] - tops[2]) *
                                   std::clamp(player.dribbling, 0.0f, 1.0f);
   return std::min(pace, cap);
+}
+
+std::optional<MatchEngine::KnockOn> MatchEngine::chooseKnockOnBinturong(
+    const MatchPlayer& player, const TouchMoment& moment, Vector2F direction,
+    float ordinaryMetres, std::optional<float> toGoal) const
+{
+  // Knocked on into open space (dribble meet plan 2d): carrying it at a
+  // sprint with room ahead, he pushes it as far as he still gets to it
+  // first, and sprints after it (no ball at his feet: his full pace). Never
+  // on a route, nor with a pass or shot decided; only worth it well beyond
+  // his usual touch.
+  using R = MatchTuning::Dribble;
+  if (player.routeWaypoints > 0) return std::nullopt;
+  if (pendingStrike && pendingStrike->striker == &player) return std::nullopt;
+  if (carryUrgencyBinturong(player) < R::KNOCK_ON_URGENCY) return std::nullopt;
+  const float top = std::max(currentTopSpeed(player), EPSILON);
+  const float startSpeed = std::max(
+      0.0f, player.velocity.x * direction.x + player.velocity.y * direction.y);
+  // How long his run to a point `metres` beyond the contact takes (from
+  // `moment.gap` behind it), speeding up as his legs allow.
+  const auto hisSeconds = [&](float metres)
+  {
+    const float run = metres + moment.gap;
+    float seconds = run / top;
+    for (int pass = 0; pass < 2; ++pass)
+      seconds = run / std::max(dribbleReachablePaceBinturong(player, startSpeed,
+                                                             top, seconds),
+                               EPSILON);
+    return seconds;
+  };
+  const Vector2F from = toMetres(moment.contactPoint);
+  float best = 0.0f;
+  constexpr float STEP_METRES = 0.5f;
+  // Never past where he is going, with room for it to roll on past the spot
+  // before he gets to it.
+  const float longest = std::min(
+      R::KNOCK_ON_MAX_METRES,
+      toGoal ? *toGoal - top * R::KNOCK_ON_ROLL_ON_SECONDS : R::KNOCK_ON_MAX_METRES);
+  for (float along = STEP_METRES; along <= longest + EPSILON;
+       along += STEP_METRES)
+  {
+    const Vector2F point{from.x + direction.x * along,
+                         from.y + direction.y * along};
+    const Vector2F pitch = toPitch(point);
+    if (pitch.x < 0.02f || pitch.x > 0.98f || pitch.y < 0.02f || pitch.y > 0.98f)
+      break;
+    const float his = hisSeconds(along);
+    bool hisFirst = true;
+    for (const MatchPlayer& opponent : players)
+    {
+      if (!active(opponent) || opponent.isHomeTeam == player.isHomeTeam) continue;
+      const float reach = opponent.isGoalkeeper
+                              ? MatchTuning::Ball::GOALKEEPER_CONTROL_RADIUS_METRES
+                              : feetReach(opponent);
+      const Vector2F at = toMetres(opponent.position);
+      const float theirs =
+          std::max(0.0f, length({point.x - at.x, point.y - at.y}) - reach) /
+              std::max(currentTopSpeed(opponent), EPSILON) +
+          R::KNOCK_ON_READ_SECONDS;
+      if (theirs <= his + R::KNOCK_ON_MARGIN_SECONDS)
+      {
+        hisFirst = false;
+        break;
+      }
+    }
+    if (!hisFirst) break;
+    best = along;
+  }
+  if (best < ordinaryMetres * R::KNOCK_ON_MIN_SHARE) return std::nullopt;
+  return KnockOn{best, (best + moment.gap) / hisSeconds(best)};
 }

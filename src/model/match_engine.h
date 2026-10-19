@@ -334,6 +334,9 @@ struct TouchIntent
   /** The vertical speed he means it to leave with (m/s, + up): 0 sends it
    * off level, cushioning any drop. */
   float liftSpeed = 0.0f;
+  /** A dribble touch knocked on into space (no cap on how hard he means
+   * it). */
+  bool knockOn = false;
 };
 
 /** A loose ball in a player's reach during one ball sub-step: where it is
@@ -701,6 +704,9 @@ struct MatchBall
   /** His last touch went wrong (angle or weight): he runs straight to it
    * to collect it, no corner, until his next touch. */
   bool meetRecovering = false;
+  /** His last touch knocked it on into space: he sprints after it at his
+   * full pace, until his next touch. */
+  bool knockedOn = false;
   float meetPace = 0.0f;
   Vector2F meetPoint{};
   float meetSeconds = 0.0f;
@@ -2185,6 +2191,13 @@ class MatchEngine
     Vector2F meetPoint{};
   };
   std::optional<PendingStrike> pendingStrike;
+  /** A dribble touch knocked on into space (dribble meet plan 2d): how far
+   * (m), and his average pace (m/s) sprinting after it. */
+  struct KnockOn
+  {
+    float metres = 0.0f;
+    float pace = 0.0f;
+  };
   /** True while the carrier decides what to do with a loose ball at his
    * feet: a pass, shot or clearance then waits for the sweep. */
   bool strikesWaitForSweep = false;

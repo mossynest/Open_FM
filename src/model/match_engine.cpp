@@ -4304,13 +4304,25 @@ TouchIntent MatchEngine::dribbleTouchIntent(const MatchPlayer& player,
     aim.speed *= std::max(R::LOOSE_TURN_MIN_PACE, std::cos(wanted));
   }
   TouchIntent intent;
+  float metres = std::min(
+      dribblePushMetres(player, aim.speed, aim.metres),
+      std::max(turnAhead.furthest, touchKnobs[TouchKnob::SET_OFFSET]));
+  // A Binturong brain may knock it on into open space instead and sprint
+  // after it (dribble meet plan 2d), weighted like a push into his stride
+  // at his pace chasing it, so he catches it about there.
+  if (meetPlanned && brainOf(player.isHomeTeam) == BrainId::BINTURONG)
+    if (const std::optional<KnockOn> knock = chooseKnockOnBinturong(
+            player, moment, aim.direction, metres, aim.metres))
+    {
+      intent.knockOn = true;
+      metres = knock->metres;
+      aim.speed = knock->pace;
+      speedingUp = false;
+    }
   // Into his stride at pace, arriving a little slower than him so he gains
   // on it; else a set touch.
   if (aim.speed >= R::CLOSE_CONTROL_SPEED)
     intent.kind = TouchIntent::Kind::INTO_STRIDE;
-  const float metres = std::min(
-      dribblePushMetres(player, aim.speed, aim.metres),
-      std::max(turnAhead.furthest, touchKnobs[TouchKnob::SET_OFFSET]));
   intent.arrivalSpeed = aim.speed * R::LOOSE_ARRIVAL_SHARE;
   if (intent.kind == TouchIntent::Kind::INTO_STRIDE)
   {
@@ -4365,6 +4377,7 @@ void MatchEngine::playDribbleTouch(MatchPlayer& player, const TouchMoment& momen
   // His run to the next meet starts here; gone wrong, he collects it first.
   ball.meetLegStart = player.position;
   ball.meetRecovering = touch.angleFailed || touch.weightFailed;
+  ball.knockedOn = intent.knockOn;
   noteTouchOnBall(player, intent, touch, moment);
   if (touch.angleFailed || touch.weightFailed) ++dribbleFailedTouches;
   const float speed = length(touch.velocity);
@@ -4418,6 +4431,7 @@ void MatchEngine::chaseTouchedBall()
     {
       ball.meetLegStart = owner->position;
       ball.meetRecovering = false;
+      ball.knockedOn = false;
     }
     planDribbleMeetBinturong(*owner);
     return;
