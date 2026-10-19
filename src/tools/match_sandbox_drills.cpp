@@ -1123,12 +1123,14 @@ class TurnDrill final : public CourseDrill
 // --- Slalom ----------------------------------------------------------------
 
 /**
- * Slalom: a line of cones with a one-way gate beside each, on alternate
- * sides, then the finish. A gate starts a body's width out from its cone
- * (he cannot run through the cone) and counts only when run through
- * forwards; going round a cone the wrong side (or too wide) misses its
- * gate, and he has to come back through it. The cones can be staggered,
- * each pushed out to the side it is passed on, for a wider weave.
+ * Slalom: a line of cones, each passed on alternate sides, then the finish.
+ * Each cone's gate is anywhere its correct side, from a body's width out
+ * (he cannot run through the cone), and counts only when run through
+ * forwards; going round a cone the wrong side misses it, and he has to come
+ * back through it. However wide he goes still counts: closer is just
+ * quicker. He aims to pass a set distance outside the cone (his line). The
+ * cones can be staggered, each pushed out to the side it is passed on, for
+ * a wider weave.
  */
 class SlalomDrill final : public CourseDrill
 {
@@ -1136,10 +1138,10 @@ class SlalomDrill final : public CourseDrill
   const char* name() const override { return "Slalom"; }
   const char* summary() const override
   {
-    return "Weave through a line of cones by the one-way gates beside them, "
-           "on alternate sides, then sprint through the finish. A gate "
-           "missed (round the wrong side of its cone, or too wide) has to be "
-           "gone back for. Time, splits, gates missed and the path run.";
+    return "Weave through a line of cones, round each on alternate sides, "
+           "then sprint through the finish. A cone passed the wrong side has "
+           "to be gone back for; wide is allowed, just slower. Time, splits, "
+           "gates missed and the path run.";
   }
 
   std::vector<DrillParameter> parameters() override
@@ -1147,9 +1149,10 @@ class SlalomDrill final : public CourseDrill
     std::vector<DrillParameter> list;
     list.push_back(setting("Cones", &cones, 2.0f, 12.0f, true));
     list.push_back(setting("Spacing (m)", &spacing, 2.0f, 15.0f, false));
-    list.push_back(setting("Gate width (m)", &gateWidth, 1.0f, 6.0f, false,
-                    "How wide each gate is. It starts a body's width out from "
-                    "its cone."));
+    list.push_back(setting("Line off the cone (m)", &lineOffset, 0.0f, 3.0f, false,
+                    "Where he aims to pass each cone: this far outside a body's "
+                    "width from it. The gate is the whole of the cone's correct "
+                    "side, so going wider still counts."));
     list.push_back(setting("Cone stagger (m)", &coneStagger, 0.0f, 6.0f, false,
                     "Each cone pushed this far off the line, to the side it "
                     "is passed on (alternate cones opposite ways): 0 is a "
@@ -1162,7 +1165,7 @@ class SlalomDrill final : public CourseDrill
   {
     const int count = static_cast<int>(cones);
     gap = spacing;
-    width = gateWidth;
+    line = lineOffset;
     stagger = coneStagger;
     const Vector2F start{0.2f, 0.5f};
     conePoints.clear();
@@ -1173,9 +1176,9 @@ class SlalomDrill final : public CourseDrill
           along(along(start, {1.0f, 0.0f}, gap * static_cast<float>(cone + 1)),
                 {0.0f, 1.0f}, sideOf(cone) * stagger);
       conePoints.push_back(at);
-      // He heads for the middle of the gate.
+      // He heads for his line round the cone.
       course.push_back(
-          along(at, {0.0f, 1.0f}, sideOf(cone) * (GATE_BUFFER_METRES + width * 0.5f)));
+          along(at, {0.0f, 1.0f}, sideOf(cone) * (GATE_BUFFER_METRES + line)));
     }
     course.push_back(along(start, {1.0f, 0.0f}, gap * static_cast<float>(count + 1)));
     missed = 0;
@@ -1203,14 +1206,16 @@ class SlalomDrill final : public CourseDrill
                       IM_COL32(90, 220, 120, 255), "start");
     for (std::size_t cone = 0; cone < conePoints.size(); ++cone)
     {
-      // The gate, a body's width out from its cone: the one due bright.
+      // The gate, from a body's width out from its cone (open beyond what
+      // is drawn), and the point he aims for: the one due bright.
       const bool passed = cone < reached.size();
       const bool due = cone == reached.size();
-      DrillDraw::line(renderer, draw, gateEdge(cone, 0.0f), gateEdge(cone, width),
-                      passed ? IM_COL32(120, 120, 120, 200)
-                      : due  ? IM_COL32(255, 255, 255, 240)
-                             : IM_COL32(255, 255, 255, 120),
-                      2.0f * scale);
+      const ImU32 colour = passed ? IM_COL32(120, 120, 120, 200)
+                           : due  ? IM_COL32(255, 255, 255, 240)
+                                  : IM_COL32(255, 255, 255, 120);
+      DrillDraw::line(renderer, draw, gateEdge(cone, 0.0f),
+                      gateEdge(cone, GATE_DRAWN_METRES), colour, 2.0f * scale);
+      DrillDraw::marker(renderer, draw, points[cone], 2.5f * scale, colour);
       DrillDraw::marker(renderer, draw, conePoints[cone], 5.0f * scale,
                         IM_COL32(255, 140, 30, 255));
     }
@@ -1222,8 +1227,8 @@ class SlalomDrill final : public CourseDrill
   std::vector<std::string> report() const override
   {
     std::vector<std::string> lines;
-    lines.push_back(std::format("{} cones, {:.1f} m apart, staggered {:.1f} m, gates {:.1f} m wide",
-                                conePoints.size(), gap, stagger, width));
+    lines.push_back(std::format("{} cones, {:.1f} m apart, staggered {:.1f} m, line {:.1f} m off the cone",
+                                conePoints.size(), gap, stagger, line));
     lines.push_back(runnerLine());
     std::string splits;
     for (std::size_t index = 0; index < reached.size(); ++index)
@@ -1256,7 +1261,7 @@ class SlalomDrill final : public CourseDrill
   }
 
  protected:
-  /** The middles of the gates still to pass, from the one due (after a
+  /** His line round each cone still to pass, from the one due (after a
    * point back behind it, when he is going back for it), less those his
    * body has moved on from. */
   [[nodiscard]] std::vector<Vector2F> waypointsAhead() const override
@@ -1271,10 +1276,10 @@ class SlalomDrill final : public CourseDrill
     return {list.begin() + static_cast<std::ptrdiff_t>(skip), list.end()};
   }
 
-  /** Through the middle of each gate, the line pushed out no further than
-   * the gate's outer edge. */
+  /** Through his point round each cone, the line pushed out no more than
+   * SWING_ROOM_METRES beyond it to widen the turn. */
   [[nodiscard]] float apexOffset() const override { return 0.0f; }
-  [[nodiscard]] float outwardRoom() const override { return width * 0.5f; }
+  [[nodiscard]] float outwardRoom() const override { return SWING_ROOM_METRES; }
 
  private:
   /** Side of the course cone `index` is passed on (-1 or 1). */
@@ -1296,9 +1301,14 @@ class SlalomDrill final : public CourseDrill
   /** A gate starts a body's width (his radius) out from its cone. */
   static constexpr float GATE_BUFFER_METRES =
       MatchTuning::Player::MINIMUM_BODY_SEPARATION_METRES * 0.5f;
+  /** How much of a gate is drawn (it is open beyond). */
+  static constexpr float GATE_DRAWN_METRES = 2.0f;
+  /** How far beyond his point round a cone his line may be pushed out to
+   * widen the turn (the old 2 m gate's half-width). */
+  static constexpr float SWING_ROOM_METRES = 1.0f;
 
-  /** Across the line of the gate due, forwards: through it (passed), or
-   * beside it (missed: he goes back for it). Then the finish line. */
+  /** Across the line of the cone due, forwards: on its side (passed), or
+   * the wrong side (missed: he goes back for it). Then the finish line. */
   void passGates(MatchEngine& engine, const MatchPlayer& player)
   {
     const std::size_t due = reached.size();
@@ -1312,7 +1322,7 @@ class SlalomDrill final : public CourseDrill
       // What his body had moved on from includes this gate (and the point
       // behind it, going back), now behind him either way.
       const std::size_t behind = goingBack ? 2 : 1;
-      if (out >= GATE_BUFFER_METRES && out <= GATE_BUFFER_METRES + width)
+      if (out >= GATE_BUFFER_METRES)
       {
         reached.push_back(secondsOf(engine) - STEP + STEP * static_cast<double>(*share));
         movedOn = movedOn > behind ? movedOn - behind : 0;
@@ -1337,11 +1347,11 @@ class SlalomDrill final : public CourseDrill
 
   float cones = 6.0f;
   float spacing = 5.0f;
-  float gateWidth = 2.0f;
+  float lineOffset = 0.5f;
   float coneStagger = 0.0f;
 
   float gap = 5.0f;
-  float width = 2.0f;
+  float line = 0.5f;
   float stagger = 0.0f;
   std::vector<Vector2F> conePoints;
   int missed = 0;
