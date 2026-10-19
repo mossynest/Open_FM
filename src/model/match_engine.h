@@ -714,6 +714,8 @@ struct MatchBall
   float touchTurn = 0.0f;
   bool touchOutward = false;
   float touchPaceChange = 0.0f;
+  /** The pace it left the current touch at, along the ground (m/s). */
+  float touchLaunchSpeed = 0.0f;
   const Player* lastPossessor = nullptr;
   const Player* intendedReceiver = nullptr;
   /** The player who last kicked or deflected the ball. */
@@ -1951,6 +1953,35 @@ class MatchEngine
    * the step's length: players move only between steps. */
   int substepsLeftInStep = 0;
   float ballStepSeconds = MatchTuning::Timing::FIXED_STEP_SECONDS;
+  /** What the ball physics moves: the ball at the start of the stretch of
+   * sub-step about to happen and where it would be by its end (the sweep
+   * reads who it meets on the way), and how long that stretch is (s). A
+   * contact is played where the ball reaches it, part way through. */
+  struct BallMotion
+  {
+    Vector2F position{};
+    float z = 0.0f;
+    Vector2F velocity{};
+    float velocityZ = 0.0f;
+    float curve = 0.0f;
+    bool isAerialDelivery = false;
+  };
+  BallMotion substepStartMotion;
+  BallMotion substepEndMotion;
+  float substepStretchSeconds = 0.0f;
+  /** Whether the ball is still on the path the physics read for the
+   * stretch (no parry or woodwork has turned it since). */
+  bool substepPathKnown = true;
+  /** Set by the sweep when a contact was played part way through the
+   * stretch: the share of it the ball had travelled. The ball goes on for
+   * the rest of it with what the contact gave it. */
+  std::optional<float> contactAlong;
+  [[nodiscard]] BallMotion ballMotion() const;
+  void setBallMotion(const BallMotion& motion);
+  /** Moves the ball through one stretch of a sub-step (the shot at the
+   * keeper's plane, out of play, the sweep); the share of it travelled
+   * when a contact was played part way, if one was. */
+  std::optional<float> moveBallStretch(float seconds);
   float homeFamiliarity = 1.0f;
   float awayFamiliarity = 1.0f;
   struct ShoutState
@@ -2667,8 +2698,12 @@ class MatchEngine
   /** A defender beaten by a take-on is wrong-footed: the momentum he loses
    * and how long before he can challenge again. */
   void recoverFromTakeOn(MatchPlayer& defender);
-  /** Swept first-touch resolution over the last ball sub-step. */
-  void resolveLooseBall();
+  /** Swept contact over the stretch of ball sub-step about to happen: who
+   * the ball meets on its way, in order. A Binturong body plays it where
+   * the ball reaches him (contactAlong says how far along). `beforeLine`:
+   * the ball is heading out of play, and only a Binturong body meeting it
+   * while it is still on the pitch can play it first. */
+  void resolveLooseBall(bool beforeLine);
   void attemptTackle(MatchPlayer& carrier, MatchPlayer& defender, bool sliding);
   /** The carrier's turn: the brain chooses, the body carries it out. */
   void decideAction(MatchPlayer& carrier);

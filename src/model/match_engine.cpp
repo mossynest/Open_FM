@@ -2990,43 +2990,111 @@ void MatchEngine::updateBall(float dt)
   const int substeps =
       MatchTuning::Timing::BALL_SUBSTEPS * static_cast<int>(stepTicks);
   const float substep = dt / static_cast<float>(substeps);
+  // A sub-step is run in stretches: a contact part way through one ends it
+  // there, and the ball goes on through the rest of the sub-step with what
+  // the contact gave it (a few at most: the toucher is then kept off it).
+  constexpr int MAX_STRETCHES = 4;
   for (int index = 0; index < substeps; ++index)
   {
-    // A touched ball (owned but rolling free) keeps moving like a loose one.
-    if ((ball.possessedBy && !ball.inTouch) || state != MatchState::PLAYING)
-      return;
-    substepBallPosition = ball.position;
-    substepBallZ = ball.z;
     substepsLeftInStep = substeps - 1 - index;
     ballStepSeconds = dt;
-    integrateBall(substep);
-
-    // A shot that has died (smothered, spent or trickling) is a loose ball.
-    if (ball.isShot && ball.shotElapsedSeconds > 0.3f &&
-        length(ball.velocity) < MatchTuning::Ball::DEAD_SHOT_SPEED)
+    float remaining = substep;
+    for (int stretch = 0; stretch < MAX_STRETCHES && remaining > EPSILON;
+         ++stretch)
     {
-      ball.isShot = false;
-      ball.shotOnTarget = false;
-      ball.touchAttempts = 0;
+      // A touched ball (owned but rolling free) keeps moving like a loose
+      // one.
+      if ((ball.possessedBy && !ball.inTouch) || state != MatchState::PLAYING)
+        return;
+      const std::optional<float> along = moveBallStretch(remaining);
+      if (!along) break;
+      remaining *= 1.0f - *along;
     }
-    if (ball.isShot)
-    {
-      ball.shotElapsedSeconds += substep;
-      MatchPlayer* keeper = findGoalkeeper(!ball.shotByHome);
-      if (!ball.shotSaveResolved && keeper)
-      {
-        // Resolve the save when the ball reaches the keeper's plane.
-        const float before = substepBallPosition.x - keeper->position.x;
-        const float after = ball.position.x - keeper->position.x;
-        if ((before > 0.0f) != (after > 0.0f) || std::abs(after) <= EPSILON)
-          resolveShotAtGoalkeeper(*keeper);
-        if (ball.possessedBy || state != MatchState::PLAYING) return;
-      }
-    }
-    checkOutOfBounds();
-    if (state != MatchState::PLAYING) return;
-    resolveLooseBall();
   }
+}
+
+MatchEngine::BallMotion MatchEngine::ballMotion() const
+{
+  return {ball.position, ball.z,     ball.velocity,
+          ball.velocityZ, ball.curve, ball.isAerialDelivery};
+}
+
+void MatchEngine::setBallMotion(const BallMotion& motion)
+{
+  ball.position = motion.position;
+  ball.z = motion.z;
+  ball.velocity = motion.velocity;
+  ball.velocityZ = motion.velocityZ;
+  ball.curve = motion.curve;
+  ball.isAerialDelivery = motion.isAerialDelivery;
+}
+
+std::optional<float> MatchEngine::moveBallStretch(float seconds)
+{
+  // Where the ball would be by the end of the stretch about to happen: the
+  // keeper's plane, the lines and the sweep read the path to there, and a
+  // contact on the way is played where the ball reaches it.
+  substepBallPosition = ball.position;
+  substepBallZ = ball.z;
+  substepStartMotion = ballMotion();
+  substepStretchSeconds = seconds;
+  integrateBall(seconds);
+  const BallMotion predicted = ballMotion();
+  contactAlong.reset();
+  // The sweep plays a contact where the ball reaches it on the path read
+  // here; if the keeper or the woodwork has sent it another way, it plays
+  // it where it now is (as an Aardvark body does).
+  const auto sweep = [&](bool beforeLine)
+  {
+    substepEndMotion = ballMotion();
+    const BallMotion& now = substepEndMotion;
+    substepPathKnown =
+        now.position.x == predicted.position.x &&
+        now.position.y == predicted.position.y && now.z == predicted.z &&
+        now.velocity.x == predicted.velocity.x &&
+        now.velocity.y == predicted.velocity.y &&
+        now.velocityZ == predicted.velocityZ && now.curve == predicted.curve;
+    resolveLooseBall(beforeLine);
+  };
+
+  // A shot that has died (smothered, spent or trickling) is a loose ball.
+  if (ball.isShot && ball.shotElapsedSeconds > 0.3f &&
+      length(ball.velocity) < MatchTuning::Ball::DEAD_SHOT_SPEED)
+  {
+    ball.isShot = false;
+    ball.shotOnTarget = false;
+    ball.touchAttempts = 0;
+  }
+  if (ball.isShot)
+  {
+    ball.shotElapsedSeconds += seconds;
+    MatchPlayer* keeper = findGoalkeeper(!ball.shotByHome);
+    if (!ball.shotSaveResolved && keeper)
+    {
+      // Resolve the save when the ball reaches the keeper's plane.
+      const float before = substepBallPosition.x - keeper->position.x;
+      const float after = ball.position.x - keeper->position.x;
+      if ((before > 0.0f) != (after > 0.0f) || std::abs(after) <= EPSILON)
+        resolveShotAtGoalkeeper(*keeper);
+      if (ball.possessedBy || state != MatchState::PLAYING) return std::nullopt;
+    }
+  }
+  // Heading out of play: a Binturong body that meets it before the line
+  // plays it there (the pitch is convex, so a contact point still on it
+  // comes before the line); otherwise it is out.
+  const bool headingOut = ball.position.x <= 0.0f || ball.position.x >= 1.0f ||
+                          ball.position.y <= 0.0f || ball.position.y >= 1.0f;
+  if (headingOut)
+  {
+    sweep(true);
+    if (contactAlong || state != MatchState::PLAYING ||
+        (ball.possessedBy && !ball.inTouch))
+      return contactAlong;
+  }
+  checkOutOfBounds();
+  if (state != MatchState::PLAYING) return std::nullopt;
+  sweep(false);
+  return contactAlong;
 }
 
 void MatchEngine::resolveShotAtGoalkeeper(MatchPlayer& keeper)
@@ -3120,7 +3188,7 @@ void MatchEngine::creditPassCompletion(MatchPlayer& receiver,
   }
 }
 
-void MatchEngine::resolveLooseBall()
+void MatchEngine::resolveLooseBall(bool beforeLine)
 {
   // A claimed ball rolls free: its owner plays it on once he has collected
   // it (until then updateTouch collects it), and opponents can play it.
@@ -3138,7 +3206,8 @@ void MatchEngine::resolveLooseBall()
   const float endHeight = ball.z * MatchTuning::Units::BALL_Z_METRES;
   if (!ball.isShot && endHeight > MatchTuning::Aerial::CONTROL_CEILING_METRES)
   {
-    resolveAerialContest();
+    // In the air it is contested at the line's far side, as ever.
+    if (!beforeLine) resolveAerialContest();
     return;
   }
 
@@ -3221,6 +3290,15 @@ void MatchEngine::resolveLooseBall()
                                              segmentSquared,
                                          0.0f, 1.0f)
                             : 0.0f;
+    // Before the line, only a Binturong body meeting it on the pitch.
+    if (beforeLine)
+    {
+      const Vector2F point = toPitch({start.x + segment.x * along,
+                                      start.y + segment.y * along});
+      if (getBody(player.isHomeTeam) != BodyId::BINTURONG || point.x <= 0.0f ||
+          point.x >= 1.0f || point.y <= 0.0f || point.y >= 1.0f)
+        continue;
+    }
     const float gapX = position.x - (start.x + segment.x * along);
     const float gapY = position.y - (start.y + segment.y * along);
     const float gapSquared = gapX * gapX + gapY * gapY;
@@ -3260,7 +3338,8 @@ void MatchEngine::resolveLooseBall()
   }
   // A player who let the ball come closer and now finds it out of his reach
   // waited too long (counted for the sandbox checks; should never happen).
-  if (ball.touchWaiting != 0U)
+  // Read once, after the line.
+  if (!beforeLine && ball.touchWaiting != 0U)
   {
     std::uint32_t inReach = 0;
     for (std::size_t index = 0; index < contactCount; ++index)
@@ -3284,11 +3363,32 @@ void MatchEngine::resolveLooseBall()
     const bool hands = handsAllowed(player);
     const int substepsPerStep =
         MatchTuning::Timing::BALL_SUBSTEPS * static_cast<int>(stepTicks);
-    const TouchMoment moment{toPitch({start.x + segment.x * contact.along,
-                                      start.y + segment.y * contact.along}),
+    // A Binturong body meets the ball where it reaches him: it travels
+    // under its physics that share of the stretch, he reads it and plays it
+    // there, and it goes on for the rest of the stretch with what his
+    // contact gave it. Anyone else plays it where the stretch ends.
+    const bool atContact =
+        substepPathKnown && getBody(player.isHomeTeam) == BodyId::BINTURONG;
+    if (atContact)
+    {
+      setBallMotion(substepStartMotion);
+      integrateBall(substepStretchSeconds * contact.along);
+      contactAlong = contact.along;
+    }
+    else
+    {
+      setBallMotion(substepEndMotion);
+      contactAlong.reset();
+    }
+    const TouchMoment moment{atContact
+                                 ? ball.position
+                                 : toPitch({start.x + segment.x * contact.along,
+                                            start.y + segment.y * contact.along}),
                              contact.gap,
                              contact.reach,
-                             contact.height,
+                             atContact
+                                 ? ball.z * MatchTuning::Units::BALL_Z_METRES
+                                 : contact.height,
                              substepsLeftInStep,
                              ballStepSeconds /
                                  static_cast<float>(substepsPerStep),
@@ -3443,6 +3543,9 @@ void MatchEngine::resolveLooseBall()
     settleOnBall(player, skill, hands);
     return;
   }
+  // Nobody played it: it ran the whole stretch.
+  setBallMotion(substepEndMotion);
+  contactAlong.reset();
 }
 
 bool MatchEngine::resolveAerialContest()
@@ -3895,11 +3998,9 @@ void MatchEngine::playPendingStrike(const TouchMoment& moment)
   const PendingStrike strike = *pendingStrike;
   pendingStrike.reset();
   MatchPlayer& striker = *strike.striker;
-  // He meets it where it is on its path, as a touch does: the strike is
-  // assessed at that moment and the ball leaves from there.
-  ball.position = {std::clamp(moment.contactPoint.x, 0.001f, 0.999f),
-                   std::clamp(moment.contactPoint.y, 0.001f, 0.999f)};
-  ball.z = moment.height / MatchTuning::Units::BALL_Z_METRES;
+  // He meets it where it has got to on its path (the sweep has moved it
+  // there), as a touch does: the strike is assessed at that moment and the
+  // ball leaves from there.
   strikeAt = moment;
   switch (strike.kind)
   {
@@ -3933,6 +4034,7 @@ void MatchEngine::noteTouchOnBall(const MatchPlayer& player,
   ball.touchTurn = touch.turn;
   ball.touchOutward = touch.outward;
   ball.touchPaceChange = touch.paceChange;
+  ball.touchLaunchSpeed = length(touch.velocity);
   const float gap = distance(player.position, ball.position);
   ball.touchGap = gap;
   ball.touchPeakGap = gap;

@@ -694,10 +694,16 @@ bool runFirstTouchChecks(const std::vector<const Team*>& clubs,
           // Left out: a step in which someone else played it and he won it
           // back (several touches in one step).
           // A touch during the step may have sent it faster than either
-          // end shows: rolling resistance takes up to this much off by the
-          // step's end.
+          // end shows (a hop off it then bounces pace away): the pace it
+          // left the touch at counts too. Rolling resistance takes up to
+          // this much off by the step's end.
           using B = MatchTuning::Ball;
-          const float fastest = std::max(lastSpeed, speedOf(ball.velocity));
+          const bool touchedThisStep =
+              ball.ownTouchCooldown >=
+              MatchTuning::Dribble::LOOSE_TOUCH_INTERVAL - 1e-4f;
+          const float fastest =
+              std::max({lastSpeed, speedOf(ball.velocity),
+                        touchedThisStep ? ball.touchLaunchSpeed : 0.0f});
           const float seconds = DT * stepCount;
           const float rollingLoss =
               (B::ROLLING_DECELERATION +
