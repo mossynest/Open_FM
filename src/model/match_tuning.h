@@ -531,6 +531,15 @@ struct MatchTuning final
      * has moved this far. */
     static constexpr float MEET_DECISION_LATE_SECONDS = 0.5f;
     static constexpr float MEET_DECISION_DRIFT_METRES = 1.5f;
+    /** Shaping his run in to a pass or shot at the meet (2b): with this much
+     * time to spare (s) before an opponent could get to the meet, he opens
+     * his body fully into it; with none, straight at the meet. An opponent
+     * reads it this long first. */
+    static constexpr float MEET_SHAPE_MARGIN_SECONDS = 0.8f;
+    static constexpr float MEET_SHAPE_READ_SECONDS = 0.2f;
+    /** After a strike at the meet he runs on this far along its line (the
+     * corner's way out). */
+    static constexpr float MEET_STRIKE_OUT_METRES = 2.0f;
     /** A push rolls straight: on a route it goes no further into a turn
      * than where the line has curved this far off it. */
     static constexpr float PUSH_LINE_DEVIATION_METRES = 0.5f;

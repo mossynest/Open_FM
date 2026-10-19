@@ -181,6 +181,10 @@
    * the earliest point of its roll he can reach at the pace he wants, and
    * where his touch there sends it. Sets his target to the meet point. */
   void planDribbleMeetBinturong(MatchPlayer& owner);
+  /** A pass or shot held for his meet bends the meet's way out toward its
+   * line, by the time he has to spare before an opponent could get there
+   * (dribble meet plan 2b). */
+  void shapeMeetForStrikeBinturong(const MatchPlayer& owner);
   /** His average speed (m/s) over `seconds` from `startSpeed`, speeding
    * up toward `target` as hard as his legs allow (the body's a(v)). */
   float dribbleReachablePaceBinturong(const MatchPlayer& player,

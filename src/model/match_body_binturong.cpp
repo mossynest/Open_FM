@@ -3398,6 +3398,8 @@ void MatchEngine::planDribbleMeetBinturong(MatchPlayer& owner)
                      std::max(turnAhead.furthest,
                               touchKnobs[TouchKnob::SET_OFFSET]))
           : 0.0f;
+  // A pass or shot decided for this meet bends his run toward its line.
+  shapeMeetForStrikeBinturong(owner);
   // His body runs there (integrateMovementsBinturong takes the corner).
   owner.tacticalTarget = meet;
   owner.targetVelocity = {0.0f, 0.0f};
@@ -3476,4 +3478,57 @@ float MatchEngine::dribbleMeetGapBinturong(const MatchPlayer& player) const
   return comfort + (std::max(MatchTuning::Dribble::KICK_REACH_METRES, comfort) -
                     comfort) *
                        (1.0f - std::clamp(player.dribbling, 0.0f, 1.0f));
+}
+
+void MatchEngine::shapeMeetForStrikeBinturong(const MatchPlayer& owner)
+{
+  // A pass or shot decided for his meet (dribble meet plan 2b): his run in
+  // bends toward its line, from straight at the meet (as fast as he can get
+  // there, and the strike from that angle: harder) to his run along it at
+  // the meet (his body opened into it: straight on). How far he bends it is
+  // the race to the meet: the more time to spare before an opponent could
+  // get there, the more he opens up.
+  using R = MatchTuning::Dribble;
+  if (!pendingStrike || !pendingStrike->atMeet || pendingStrike->striker != &owner)
+    return;
+  Vector2F target;
+  switch (pendingStrike->kind)
+  {
+    case PendingStrike::Kind::PASS:
+      target = pendingStrike->pass.targetPoint;
+      break;
+    case PendingStrike::Kind::SHOT:
+      target = {owner.isHomeTeam ? 1.0f : 0.0f, MatchTuning::Pitch::CENTRE};
+      break;
+    case PendingStrike::Kind::CLEAR:
+      return;
+  }
+  const Vector2F meet = toMetres(ball.meetPoint);
+  const Vector2F approach = unitOf(
+      {meet.x - toMetres(owner.position).x, meet.y - toMetres(owner.position).y});
+  const Vector2F action =
+      unitOf({toMetres(target).x - meet.x, toMetres(target).y - meet.y});
+  if (approach.x == 0.0f && approach.y == 0.0f) return;
+  if (action.x == 0.0f && action.y == 0.0f) return;
+  // When the first opponent could get to the meet, against when he will.
+  float theirs = std::numeric_limits<float>::max();
+  for (const MatchPlayer& opponent : players)
+  {
+    if (!active(opponent) || opponent.isHomeTeam == owner.isHomeTeam) continue;
+    const Vector2F at = toMetres(opponent.position);
+    const float reach = opponent.isGoalkeeper
+                            ? MatchTuning::Ball::GOALKEEPER_CONTROL_RADIUS_METRES
+                            : feetReach(opponent);
+    theirs = std::min(
+        theirs, std::max(0.0f, length({meet.x - at.x, meet.y - at.y}) - reach) /
+                        std::max(currentTopSpeed(opponent), EPSILON) +
+                    R::MEET_SHAPE_READ_SECONDS);
+  }
+  const float share = std::clamp(
+      (theirs - ball.meetSeconds) / R::MEET_SHAPE_MARGIN_SECONDS, 0.0f, 1.0f);
+  const float angle = std::atan2(approach.x * action.y - approach.y * action.x,
+                                 approach.x * action.x + approach.y * action.y);
+  ball.meetOut = rotatedBy(approach, share * angle);
+  // He runs on along it after the strike (the corner's way out).
+  ball.meetPush = std::max(ball.meetPush, R::MEET_STRIKE_OUT_METRES);
 }
