@@ -74,6 +74,10 @@
   /** Where the carrier heads with the ball: forward, away from the nearest
    * opponent, inside or down his lane. */
   Vector2F carryTargetBinturong(const MatchPlayer& player) const;
+  /** The pace (m/s) he carries the ball at (dribble meet plan 2c): from
+   * the space along his way, the team's phase and its risk-taking, walk to
+   * sprint; Dribbling caps how much of his pace he can use with it. */
+  float carryPaceBinturong(const MatchPlayer& player) const;
   /** Signed x shift of the role in the defensive block (normalised). */
   float defensiveRoleShiftBinturong(const MatchPlayer& player) const;
   /** Second presser's spot when doubling up on the carrier, if ordered. */

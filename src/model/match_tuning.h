@@ -540,6 +540,18 @@ struct MatchTuning final
     /** After a strike at the meet he runs on this far along its line (the
      * corner's way out). */
     static constexpr float MEET_STRIKE_OUT_METRES = 2.0f;
+    /** The carry's pace (2c, design choices): an urgency 0-1 (0 a walk, 1/3
+     * a jog, 2/3 a run, 1 a sprint, the tops of his bands) from a base, the
+     * space along his way (the nearest opponent within the cone ahead,
+     * open from SPACE_CLOSE to SPACE_OPEN metres), an attacking transition,
+     * and the side's risk-taking (from its middle). */
+    static constexpr float CARRY_URGENCY_BASE = 0.15f;
+    static constexpr float CARRY_URGENCY_SPACE = 0.55f;
+    static constexpr float CARRY_URGENCY_TRANSITION = 0.35f;
+    static constexpr float CARRY_URGENCY_RISK = 0.3f;
+    static constexpr float CARRY_SPACE_CLOSE_METRES = 3.0f;
+    static constexpr float CARRY_SPACE_OPEN_METRES = 18.0f;
+    static constexpr float CARRY_SPACE_CONE_COSINE = 0.64f;
     /** A push rolls straight: on a route it goes no further into a turn
      * than where the line has curved this far off it. */
     static constexpr float PUSH_LINE_DEVIATION_METRES = 0.5f;

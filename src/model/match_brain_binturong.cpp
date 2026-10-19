@@ -4164,3 +4164,59 @@ MatchPlayer* MatchEngine::chooseTakeOnBinturong(MatchPlayer& carrier)
     return blocker;
   return nullptr;
 }
+
+float MatchEngine::carryPaceBinturong(const MatchPlayer& player) const
+{
+  // How urgently he carries it: open space along his way, a break on (an
+  // attacking transition) and a side that takes risks push him on; with
+  // nobody near he may stroll it out, with someone in front he slows to
+  // keep it. Walk at 0, jog at 1/3, run at 2/3, sprint at 1 (the tops of his
+  // bands, as fuel has left them), in straight lines between.
+  using R = MatchTuning::Dribble;
+  const Vector2F at = toMetres(player.position);
+  const Vector2F way = toMetres({ball.dribbleGoal.x - player.position.x,
+                                 ball.dribbleGoal.y - player.position.y});
+  const float wayMetres = length(way);
+  float nearest = R::CARRY_SPACE_OPEN_METRES;
+  for (const MatchPlayer& opponent : players)
+  {
+    if (!active(opponent) || opponent.isHomeTeam == player.isHomeTeam) continue;
+    const Vector2F toThem = {toMetres(opponent.position).x - at.x,
+                             toMetres(opponent.position).y - at.y};
+    const float metres = length(toThem);
+    if (wayMetres > EPSILON && metres > EPSILON &&
+        (toThem.x * way.x + toThem.y * way.y) <
+            R::CARRY_SPACE_CONE_COSINE * metres * wayMetres)
+      continue;
+    nearest = std::min(nearest, metres);
+  }
+  const float space =
+      std::clamp((nearest - R::CARRY_SPACE_CLOSE_METRES) /
+                     (R::CARRY_SPACE_OPEN_METRES - R::CARRY_SPACE_CLOSE_METRES),
+                 0.0f, 1.0f);
+  const TeamPhase phase = player.isHomeTeam ? homePhase : awayPhase;
+  const StrategySliders sliders = getEffectiveSliders(player.isHomeTeam);
+  // A drill's dribbler goes as hard as the drill asks: flat out.
+  const bool drilled =
+      player.player && std::ranges::find(ballKeepers, player.player->getId()) !=
+                           ballKeepers.end();
+  const float urgency = drilled ? 1.0f : std::clamp(
+      R::CARRY_URGENCY_BASE + R::CARRY_URGENCY_SPACE * space +
+          (phase == TeamPhase::ATTACKING_TRANSITION ? R::CARRY_URGENCY_TRANSITION
+                                                    : 0.0f) +
+          R::CARRY_URGENCY_RISK * (sliders.riskTaking - 0.5f) * 2.0f,
+      0.0f, 1.0f);
+  const std::array<float, 4> tops{speedBand(player, MovementMode::WALK).high,
+                                  speedBand(player, MovementMode::JOG).high,
+                                  speedBand(player, MovementMode::RUN).high,
+                                  currentTopSpeed(player)};
+  const float scaled = urgency * 3.0f;
+  const auto band = std::min(static_cast<std::size_t>(scaled), std::size_t{2});
+  const float pace =
+      tops[band] + (tops[band + 1] - tops[band]) * (scaled - static_cast<float>(band));
+  // Dribbling caps how much of his pace he can use with the ball: his run
+  // band's top with none, his top speed with the best.
+  const float cap = tops[2] + std::max(0.0f, tops[3] - tops[2]) *
+                                  std::clamp(player.dribbling, 0.0f, 1.0f);
+  return std::min(pace, cap);
+}

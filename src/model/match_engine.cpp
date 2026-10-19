@@ -4185,15 +4185,20 @@ MatchEngine::DribbleAim MatchEngine::dribbleAim(const MatchPlayer& player,
   const MovementStyle& style = movementStyle(player.isHomeTeam);
   if (style.usesModes)
   {
-    // A carry's mode, at the top of its band. On a Binturong body a better
-    // dribbler uses more of his pace above it: up to his top speed with
-    // perfect Dribbling (dribble meet plan).
+    // A carry's mode, at the top of its band. A Binturong brain on a
+    // Binturong body picks the pace from the situation (dribble meet plan
+    // 2c), Dribbling capping how much of his pace he can use.
     aim.speed = speedBand(player, style.intentModes[static_cast<std::size_t>(
                                       PlayerIntent::CARRY_BALL)])
                     .high;
     if (getBody(player.isHomeTeam) == BodyId::BINTURONG)
-      aim.speed += std::max(0.0f, currentTopSpeed(player) - aim.speed) *
-                   std::clamp(player.dribbling, 0.0f, 1.0f);
+    {
+      if (brainOf(player.isHomeTeam) == BrainId::BINTURONG)
+        aim.speed = carryPaceBinturong(player);
+      else
+        aim.speed += std::max(0.0f, currentTopSpeed(player) - aim.speed) *
+                     std::clamp(player.dribbling, 0.0f, 1.0f);
+    }
     return aim;
   }
   const float share = std::max(
