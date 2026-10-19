@@ -725,6 +725,15 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
   alignas(16) std::array<float, LANES> nextCornerRadius;
   alignas(16) std::array<float, LANES> nextCornerLead;
   alignas(16) std::array<float, LANES> nextLeg;
+  // Dribbling to a planned meet: the most he may run toward it so as not
+  // to get there before the ball (dribble meet plan).
+  alignas(16) std::array<float, LANES> onTimeSpeed;
+  // Dribbling a route: its turn beyond the second (radius, and metres from
+  // the point he heads for to its start), and the pace he carries it at as
+  // a share of his top speed (0: not dribbling).
+  alignas(16) std::array<float, LANES> thirdCornerRadius;
+  alignas(16) std::array<float, LANES> thirdCornerLead;
+  alignas(16) std::array<float, LANES> meetPaceShare;
   // Movement modes (when his brain uses them): his mode and its style.
   std::array<std::int8_t, LANES> modeOf;
   std::array<const MovementStyle*, LANES> styleOf;
@@ -779,15 +788,21 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
       ++player.routeAdvances;
       if (player.routeWaypoints == 1) player.nextTarget = target;
     }
-    // Dribbling, his body chases the ball (its target): his touches follow
-    // the route, which stays.
+    // Dribbling with a planned meet (dribble meet plan), his run is a
+    // corner at the meet point, on the way his touch there sends the ball;
+    // a route he has stays, for his touches. Without one, his body chases
+    // the ball (its target).
     const bool hasRoute = player.routeWaypoints > 0;
-    const bool chasingBall =
-        hasRoute && ball.inTouch && ball.possessedBy == player.player;
-    const bool routed = hasRoute && !chasingBall;
+    const bool meeting = !walking && ball.inTouch &&
+                         ball.possessedBy == player.player &&
+                         ball.meetFor == player.player;
+    const bool chasingBall = !meeting && hasRoute && ball.inTouch &&
+                             ball.possessedBy == player.player;
+    const bool routed = meeting || (hasRoute && !chasingBall);
     Turn turn;
     turn.straight = true;
     turn.radius = STRAIGHT_ON_RADIUS;
+    const Turn straightOn = turn;
     Turn nextTurn = turn;
     LineAim line;
     if (hasRoute)
@@ -822,7 +837,8 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     // The end of his run: the tactical target (lagged, for a brain with a
     // target lag), whatever waypoints lie before it.
     const Vector2F end = hasRoute ? target : player.movementTarget;
-    const Vector2F heading = chasingBall ? target : player.movementTarget;
+    const Vector2F heading =
+        chasingBall || meeting ? target : player.movementTarget;
     const Vector2F offset = toMetres(
         {heading.x - player.position.x, heading.y - player.position.y});
     // The rest of the route beyond the waypoint he heads for.
@@ -831,7 +847,86 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
                   player.nextTarget.y - player.movementTarget.y});
     const Vector2F last = toMetres(
         {end.x - player.nextTarget.x, end.y - player.nextTarget.y});
-    const float beyond = routed ? length(onward) + length(last) : 0.0f;
+    float beyond = routed ? length(onward) + length(last) : 0.0f;
+    float onTime = std::numeric_limits<float>::max();
+    // Dribbling, the corners beyond the meet, as (radius, metres from the
+    // meet to where the turn starts); none by default.
+    std::pair<float, float> secondCorner{STRAIGHT_ON_RADIUS, 0.0f};
+    std::pair<float, float> thirdCorner{STRAIGHT_ON_RADIUS, 0.0f};
+    if (meeting)
+    {
+      // Dribbling a route, he also slows ahead for its turns beyond the
+      // meet: the one at his waypoint and the one after (seen from the
+      // meet point; past the first's exit, only the second).
+      const Turn routeTurn = turn;
+      const Turn routeNext = nextTurn;
+      if (hasRoute)
+      {
+        const Vector2F meet = toMetres(ball.meetPoint);
+        const Vector2F waypoint = toMetres(player.movementTarget);
+        const Vector2F next = toMetres(player.nextTarget);
+        const LineAim fromMeet =
+            aimThrough(routeTurn, waypoint, meet, next, speedNow, 0.0f);
+        const float toNext =
+            length({waypoint.x - meet.x, waypoint.y - meet.y}) +
+            length(onward) - routeNext.lead;
+        if (fromMeet.exited)
+          secondCorner = {routeNext.radius,
+                          length({next.x - meet.x, next.y - meet.y}) -
+                              routeNext.lead};
+        else
+        {
+          secondCorner = {routeTurn.radius, fromMeet.toTurn};
+          thirdCorner = {routeNext.radius, toNext};
+        }
+      }
+    }
+    if (meeting)
+    {
+      // The corner at the meet: in from where his last touch left him, out
+      // along his next touch, as far as it pushes the ball (he runs on
+      // through it). He gets there no sooner than the ball, within his
+      // comfortable reach of it.
+      const Vector2F meet = toMetres(ball.meetPoint);
+      const Vector2F out{meet.x + ball.meetOut.x * ball.meetPush,
+                         meet.y + ball.meetOut.y * ball.meetPush};
+      if (ball.meetRecovering)
+      {
+        // His last touch went wrong: straight to where he can collect it,
+        // no corner; his next touch takes up the route again.
+        const float toMeet = length(offset);
+        turn = straightOn;
+        line.direction = toMeet > EPSILON
+                             ? Vector2F{offset.x / toMeet, offset.y / toMeet}
+                             : Vector2F{0.0f, 0.0f};
+        line.toTurn = toMeet;
+      }
+      else
+      {
+        turn = turnThrough(toMetres(ball.meetLegStart), meet, out,
+                           MatchTuning::Dribble::MEET_APEX_METRES,
+                           MatchTuning::Dribble::MEET_OUTWARD_ROOM_METRES);
+        line = aimThrough(turn, meet, toMetres(player.position), out, speedNow,
+                          speedNow * dt);
+      }
+      nextTurn = straightOn;
+      beyond = ball.meetPush;
+      // Due within the step (the ball in his reach, a touch not yet
+      // allowed): he may run up level with it, never past it (how far it is
+      // ahead of him along its roll, beyond its own pace).
+      const float ballSpeed = length(ball.velocity);
+      const Vector2F toBall = toMetres({ball.position.x - player.position.x,
+                                        ball.position.y - player.position.y});
+      const float level =
+          ballSpeed > EPSILON
+              ? (toBall.x * ball.velocity.x + toBall.y * ball.velocity.y) / ballSpeed
+              : length(toBall);
+      onTime = ball.meetSeconds > dt
+                   ? std::max(0.0f, length(offset) -
+                                        dribbleMeetGapBinturong(player)) /
+                         ball.meetSeconds
+                   : ballSpeed + std::max(0.0f, level) / std::max(dt, EPSILON);
+    }
     // A moving end (the brain says how fast) is followed only on the last
     // leg: waypoints stand still.
     const Vector2F movingTarget =
@@ -855,9 +950,16 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     aimY[lane] = line.direction.y;
     cornerRadius[lane] = turn.radius;
     toTurn[lane] = line.toTurn;
-    nextCornerRadius[lane] = nextTurn.radius;
-    nextCornerLead[lane] = nextTurn.lead;
-    nextLeg[lane] = routed ? length(onward) : 0.0f;
+    nextCornerRadius[lane] = meeting ? secondCorner.first : nextTurn.radius;
+    nextCornerLead[lane] = meeting ? 0.0f : nextTurn.lead;
+    nextLeg[lane] = meeting ? secondCorner.second : routed ? length(onward) : 0.0f;
+    thirdCornerRadius[lane] = thirdCorner.first;
+    thirdCornerLead[lane] = thirdCorner.second;
+    onTimeSpeed[lane] = onTime;
+    // Dribbling, his legs run at the pace he carries it (above his run band
+    // for a better dribbler): a sprint job, held to that pace.
+    meetPaceShare[lane] =
+        meeting ? ball.meetPace / std::max(player.maxSpeed, EPSILON) : 0.0f;
     velocityX[lane] = player.velocity.x;
     velocityY[lane] = player.velocity.y;
     positionX[lane] = player.position.x;
@@ -892,6 +994,9 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
                   walking ? MovementMode::WALK
                           : style.intentModes[static_cast<std::size_t>(
                                 player.intent)]);
+    // Dribbling above his run band spends his burst reserve, as a sprint.
+    if (meeting && modeOf[lane] >= 0)
+      modeOf[lane] = static_cast<std::int8_t>(MovementMode::SPRINT);
     criticalSpeed[lane] = derivedPhysicalValue(
         DerivedStat::ENDURANCE, player.derivedStat(DerivedStat::ENDURANCE));
     transition[lane] = MatchRules::walkRunTransitionSpeed(player.heightMetres);
@@ -941,11 +1046,13 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
             .high,
         topSpeed};
     const float modeShare =
-        moded ? modeTargetSpeed(static_cast<MovementMode>(modeOf[lane]),
-                                remaining, styleOf[lane]->jogRampMetres,
-                                tops) /
-                    std::max(maxSpeed[lane], EPSILON)
-              : 0.0f;
+        !moded                    ? 0.0f
+        : meetPaceShare[lane] > 0 ? meetPaceShare[lane]
+                                  : modeTargetSpeed(
+                                        static_cast<MovementMode>(modeOf[lane]),
+                                        remaining, styleOf[lane]->jogRampMetres,
+                                        tops) /
+                                        std::max(maxSpeed[lane], EPSILON);
     const float effort =
         moded ? modeShare
               : (1.0f - pacing[lane] * fatigue + talk[lane] + shout[lane]) *
@@ -1069,10 +1176,17 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
         2.0f * arrivalDeceleration *
             std::max(targetDistance + nextLeg[lane] - nextCornerLead[lane],
                      0.0f));
-    const float closing =
+    const float thirdTurn = turnSpeed(thirdCornerRadius[lane]);
+    const float thirdCornering = std::sqrt(
+        thirdTurn * thirdTurn +
+        2.0f * arrivalDeceleration *
+            std::max(targetDistance + thirdCornerLead[lane], 0.0f));
+    const float closing = std::min(
+        onTimeSpeed[lane],
         onRoute[lane] != 0
-            ? std::min(stopping, std::min(cornering, nextCornering))
-            : stopping;
+            ? std::min(std::min(stopping, thirdCornering),
+                       std::min(cornering, nextCornering))
+            : stopping);
     // With movement modes he follows a moving target: its velocity plus a
     // closing speed that falls to nothing as he reaches it (a still target:
     // arrive and stop), within his mode's speed. Otherwise he heads for it,
@@ -3146,4 +3260,207 @@ bool MatchEngine::followsRoutesBinturong(const MatchPlayer& /*player*/) const
 {
   // Routes (waypoints on the way) are this body's.
   return true;
+}
+
+std::optional<Vector2F> MatchEngine::dribbleOutFromBinturong(
+    const MatchPlayer& player, Vector2F from) const
+{
+  // Along his route's line from there (past its turn, on toward the point
+  // after), else toward where he means to carry it.
+  const Vector2F at = toMetres(from);
+  Vector2F towards = toMetres(ball.dribbleGoal);
+  if (player.routeWaypoints > 0)
+  {
+    const Vector2F waypoint = toMetres(player.movementTarget);
+    const Vector2F next = toMetres(player.nextTarget);
+    const Turn turn =
+        turnThrough(toMetres(player.routeLegStart), waypoint, next,
+                    player.routeApexOffset, player.routeOutwardRoom);
+    const LineAim line = aimThrough(turn, waypoint, at, next, length(player.velocity), 0.0f);
+    if (!line.exited &&
+        line.direction.x * line.direction.x + line.direction.y * line.direction.y >
+            0.5f)
+      return line.direction;
+    towards = next;
+  }
+  const Vector2F offset{towards.x - at.x, towards.y - at.y};
+  const float metres = length(offset);
+  if (metres <= MatchTuning::Player::ARRIVAL_DEAD_ZONE_METRES)
+    return std::nullopt;
+  return Vector2F{offset.x / metres, offset.y / metres};
+}
+
+void MatchEngine::planDribbleMeetBinturong(MatchPlayer& owner)
+{
+  // He runs onto it at the pace he wants: the earliest point of its roll
+  // (read with the rolling physics the ball obeys) he can have as close as
+  // he means to play it at that pace; failing that, at his top speed;
+  // failing that, the last point read. Then his touch there: where it
+  // sends the ball, and how far.
+  using F = MatchTuning::FirstTouch;
+  using R = MatchTuning::Dribble;
+  constexpr int SUBSTEPS = MatchTuning::Timing::BALL_SUBSTEPS;
+  const DribbleAim aim = dribbleAim(owner);
+  const float topSpeed = std::max(currentTopSpeed(owner), EPSILON);
+  const float pace = std::clamp(aim.speed, R::LOOSE_START_SPEED, topSpeed);
+  const float speed = length(ball.velocity);
+  const Vector2F heading =
+      speed > EPSILON ? Vector2F{ball.velocity.x / speed, ball.velocity.y / speed}
+                      : Vector2F{0.0f, 0.0f};
+  FlightState flight{speed, 0.0f, 0.0f, false};
+  float travelled = 0.0f;
+  Vector2F meet = ball.position;
+  float seconds = 0.0f;
+  // How far short he would be at `runSpeed` of having the last point read
+  // as close as he means to play it (a better dribbler closer): where that
+  // crosses zero, between two points read, is the meet.
+  const float meetGap = dribbleMeetGapBinturong(owner);
+  const auto lateBy = [&](float runSpeed, float elapsed)
+  {
+    return distance(owner.position, meet) - meetGap -
+           runSpeed * elapsed;
+  };
+  const auto between = [](Vector2F a, Vector2F b, float share)
+  { return Vector2F{a.x + (b.x - a.x) * share, a.y + (b.y - a.y) * share}; };
+  float lateAtPace = lateBy(pace, 0.0f);
+  float lateAtTop = lateBy(topSpeed, 0.0f);
+  bool atPace = lateAtPace <= 0.0f;
+  std::optional<std::pair<Vector2F, float>> atTop;
+  if (!atPace && lateAtTop <= 0.0f) atTop = std::pair{meet, 0.0f};
+  for (float elapsed = F::CHASE_STEP_SECONDS;
+       !atPace && elapsed <= F::CHASE_HORIZON_SECONDS + EPSILON;
+       elapsed += F::CHASE_STEP_SECONDS)
+  {
+    for (int step = 0; step < SUBSTEPS && flight.horizontalSpeed > 0.0f; ++step)
+      travelled +=
+          stepFlight(flight, F::CHASE_STEP_SECONDS / static_cast<float>(SUBSTEPS));
+    const Vector2F before = meet;
+    const Vector2F rolled =
+        toPitch({heading.x * travelled, heading.y * travelled});
+    meet = {ball.position.x + rolled.x, ball.position.y + rolled.y};
+    const float earlier = elapsed - F::CHASE_STEP_SECONDS;
+    seconds = elapsed;
+    const float pacedLate = lateBy(pace, elapsed);
+    const float topLate = lateBy(topSpeed, elapsed);
+    if (pacedLate <= 0.0f)
+    {
+      const float share = lateAtPace / std::max(lateAtPace - pacedLate, EPSILON);
+      meet = between(before, meet, share);
+      seconds = earlier + F::CHASE_STEP_SECONDS * share;
+      atPace = true;
+    }
+    else if (!atTop && topLate <= 0.0f)
+    {
+      const float share = lateAtTop / std::max(lateAtTop - topLate, EPSILON);
+      atTop = std::pair{between(before, meet, share),
+                        earlier + F::CHASE_STEP_SECONDS * share};
+    }
+    lateAtPace = pacedLate;
+    lateAtTop = topLate;
+  }
+  if (!atPace && atTop) std::tie(meet, seconds) = *atTop;
+
+  // His touch there: along his way from that point, as far as the pace he
+  // wants puts it. With nowhere to go he stops on it.
+  const std::optional<Vector2F> out = dribbleOutFromBinturong(owner, meet);
+  const Vector2F approach =
+      toMetres({meet.x - owner.position.x, meet.y - owner.position.y});
+  const float approachMetres = length(approach);
+  ball.meetFor = owner.player;
+  ball.meetPace = aim.speed;
+  ball.meetPoint = meet;
+  ball.meetSeconds = seconds;
+  ball.meetOut = out ? *out
+                 : approachMetres > EPSILON
+                     ? Vector2F{approach.x / approachMetres,
+                                approach.y / approachMetres}
+                     : ball.dribbleDirection;
+  const float toGoal = length(toMetres({ball.dribbleGoal.x - meet.x,
+                                        ball.dribbleGoal.y - meet.y}));
+  // On a route, no further than its next turn allows (as the touch).
+  const DribbleTurnAhead turnAhead = dribbleTurnAheadBinturong(owner, meet);
+  ball.meetPush =
+      out && aim.speed >= R::LOOSE_START_SPEED
+          ? std::min(dribblePushMetres(owner, aim.speed, toGoal),
+                     std::max(turnAhead.furthest,
+                              touchKnobs[TouchKnob::SET_OFFSET]))
+          : 0.0f;
+  // His body runs there (integrateMovementsBinturong takes the corner).
+  owner.tacticalTarget = meet;
+  owner.targetVelocity = {0.0f, 0.0f};
+  owner.intent = PlayerIntent::RECEIVE_PASS;
+  owner.urgentMovement = true;
+}
+
+float MatchEngine::dribbleReachablePaceBinturong(const MatchPlayer& player,
+                                                 float startSpeed, float target,
+                                                 float seconds) const
+{
+  // His push as the body gives it, a(v) = A0 (1 - v / top) on tired legs,
+  // held at the target once there; the mean over the time.
+  constexpr int STEPS = 10;
+  if (seconds <= EPSILON || startSpeed >= target) return target;
+  const float top = std::max(currentTopSpeedBinturong(player), EPSILON);
+  const float push = playerAcceleration(player) * tieredMovement(player.stamina);
+  const float dt = seconds / static_cast<float>(STEPS);
+  float speed = startSpeed;
+  float covered = 0.0f;
+  for (int step = 0; step < STEPS; ++step)
+  {
+    const float next = std::min(
+        target, speed + push * std::max(0.05f, 1.0f - speed / top) * dt);
+    covered += 0.5f * (speed + next) * dt;
+    speed = next;
+  }
+  return covered / seconds;
+}
+
+MatchEngine::DribbleTurnAhead MatchEngine::dribbleTurnAheadBinturong(
+    const MatchPlayer& player, Vector2F from) const
+{
+  // The route's next turn from that point: the one at his waypoint, or once
+  // past it, the one after. The ball can't brake: it must roll into the
+  // turn no faster than he can take it (his lateral limit, as his body
+  // has it), and as it rolls straight while his line curves, a push goes
+  // no further into the turn than where the line has curved off it by the
+  // allowed deviation.
+  DribbleTurnAhead ahead;
+  if (player.routeWaypoints == 0) return ahead;
+  using P = MatchTuning::Player;
+  const Vector2F at = toMetres(from);
+  const Vector2F waypoint = toMetres(player.movementTarget);
+  const Vector2F next = toMetres(player.nextTarget);
+  Turn turn = turnThrough(toMetres(player.routeLegStart), waypoint, next,
+                          player.routeApexOffset, player.routeOutwardRoom);
+  LineAim line = aimThrough(turn, waypoint, at, next, length(player.velocity), 0.0f);
+  if (line.exited)
+  {
+    if (player.routeWaypoints < 2) return ahead;
+    const Vector2F end = toMetres(player.tacticalTarget);
+    turn = turnThrough(waypoint, next, end, player.routeApexOffset,
+                       player.routeOutwardRoom);
+    line = aimThrough(turn, next, at, end, length(player.velocity), 0.0f);
+    if (line.exited) return ahead;
+  }
+  if (turn.straight) return ahead;
+  const float grip = playerGrip(player) * tieredMovement(player.stamina);
+  const float radius = std::max(turn.radius, 0.0f);
+  const float b = (P::LATERAL_ACCELERATION_SLOW - P::LATERAL_ACCELERATION_FAST) *
+                  grip * radius / std::max(player.maxSpeed, EPSILON);
+  const float c = P::LATERAL_ACCELERATION_SLOW * grip * radius;
+  ahead.toTurn = std::max(line.toTurn, 0.0f);
+  ahead.turnSpeed = 0.5f * (std::sqrt(b * b + 4.0f * c) - b);
+  ahead.furthest =
+      ahead.toTurn +
+      std::sqrt(2.0f * radius * MatchTuning::Dribble::PUSH_LINE_DEVIATION_METRES);
+  return ahead;
+}
+
+float MatchEngine::dribbleMeetGapBinturong(const MatchPlayer& player) const
+{
+  // A better dribbler keeps it close; a poor one plays it at a stretch.
+  const float comfort = touchKnobs[TouchKnob::COMFORT_GAP];
+  return comfort + (std::max(MatchTuning::Dribble::KICK_REACH_METRES, comfort) -
+                    comfort) *
+                       (1.0f - std::clamp(player.dribbling, 0.0f, 1.0f));
 }

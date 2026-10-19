@@ -692,6 +692,21 @@ struct MatchBall
    * the time until he may touch it again (s). */
   Vector2F dribbleGoal{MatchTuning::Pitch::CENTRE, MatchTuning::Pitch::CENTRE};
   float ownTouchCooldown = 0.0f;
+  /** His next meet with his ball (dribble meet plan, Binturong body),
+   * replanned every step: whose plan it is (none: he chases it), where on
+   * its roll he plays it and how long until it is there (s), where that
+   * touch sends it (metric unit) and how far (m), where his run to it
+   * began (his last touch), and the pace he carries it at (m/s). */
+  const Player* meetFor = nullptr;
+  /** His last touch went wrong (angle or weight): he runs straight to it
+   * to collect it, no corner, until his next touch. */
+  bool meetRecovering = false;
+  float meetPace = 0.0f;
+  Vector2F meetPoint{};
+  float meetSeconds = 0.0f;
+  Vector2F meetOut{1.0f, 0.0f};
+  float meetPush = 0.0f;
+  Vector2F meetLegStart{};
   /** While in a touch: the team-mate whose pass he is receiving, credited
    * with the completion only once the ball is collected. */
   const Player* touchPasser = nullptr;
@@ -2783,7 +2798,25 @@ class MatchEngine
     /** How far his target is (m); none for the stick. */
     std::optional<float> metres;
   };
-  DribbleAim dribbleAim(const MatchPlayer& player) const;
+  /** A dribbler's route turn ahead of a touch (dribble meet plan): how far
+   * it starts (m), the fastest the ball may be rolling there for him to
+   * take it with the ball (m/s), and the furthest a push may go (a little
+   * into the turn). All unlimited off a route. */
+  struct DribbleTurnAhead
+  {
+    float toTurn = std::numeric_limits<float>::max();
+    float turnSpeed = std::numeric_limits<float>::max();
+    float furthest = std::numeric_limits<float>::max();
+  };
+  /** `from`: where he plays it (normalised pitch). A Binturong body then
+   * aims from there (dribbleOutFromBinturong). */
+  DribbleAim dribbleAim(const MatchPlayer& player,
+                        std::optional<Vector2F> from = std::nullopt) const;
+  /** How far a dribble touch at `pace` (m/s) puts the ball ahead of where
+   * he meets it: into his stride at pace, else the set offset; never past
+   * his goal `toGoal` (m) away. */
+  float dribblePushMetres(const MatchPlayer& player, float pace,
+                          std::optional<float> toGoal) const;
   /** The owner of a collected ball meets it in the sweep: whether it is due
    * a touch (he is catching it up, it is off his way, or it lies still and
    * he wants to go) or can run on. */
@@ -2798,7 +2831,8 @@ class MatchEngine
    * it is from him (for tackles). */
   void updateTouch(MatchPlayer& carrier, float dt);
   /** The owner of a touched ball runs to meet it (every step, after the
-   * brains plan, so the plan never sends him elsewhere). */
+   * brains plan, so the plan never sends him elsewhere). A collected ball
+   * on a Binturong body: he plans the meet (planDribbleMeetBinturong). */
   void chaseTouchedBall();
   // Feeds the tracker (match_engine_tracking.cpp); no effect when it is off.
   void trackTouch(const MatchPlayer& player);

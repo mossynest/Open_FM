@@ -2219,9 +2219,13 @@ bool MatchEngine::touchNowBinturong(const MatchPlayer& player,
 bool MatchEngine::dribbleTouchNowBinturong(const MatchPlayer& player,
                                            const TouchMoment& moment) const
 {
-  // His own ball, due a touch: the same timing as a first touch, so he
-  // plays it in his close-control zone rather than at full stretch.
-  if (moment.gap <= touchKnobs[TouchKnob::COMFORT_GAP]) return true;
+  // His own ball, due a touch: the same timing as a first touch, played at
+  // once inside the gap he means to play it at (close for a better
+  // dribbler, out to the strike reach for a poor one), else let closer.
+  if (moment.gap <= (getBody(player.isHomeTeam) == BodyId::BINTURONG
+                         ? dribbleMeetGapBinturong(player)
+                         : touchKnobs[TouchKnob::COMFORT_GAP]))
+    return true;
   return !waitsForCloserBinturong(player, moment);
 }
 

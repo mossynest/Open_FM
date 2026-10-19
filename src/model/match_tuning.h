@@ -513,6 +513,15 @@ struct MatchTuning final
     static constexpr float LOOSE_START_SPEED = 0.5f;
     /** A dribble touch is no pass: at most this much faster than his pace. */
     static constexpr float LOOSE_MAX_SPEED_OVER_RUN = 4.0f;
+    /** His run to the next meet is a corner there (dribble meet plan): his
+     * line may pass this far inside the meet point (the ball within
+     * reach)... */
+    static constexpr float MEET_APEX_METRES = 0.3f;
+    /** ...and swing out this far to widen a sharp turn. */
+    static constexpr float MEET_OUTWARD_ROOM_METRES = 1.5f;
+    /** A push rolls straight: on a route it goes no further into a turn
+     * than where the line has curved this far off it. */
+    static constexpr float PUSH_LINE_DEVIATION_METRES = 0.5f;
   };
 
   /** Physical load statistics thresholds (m/s). */

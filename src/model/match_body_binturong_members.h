@@ -172,4 +172,26 @@
   BallRelease releaseFromBinturong(const MatchPlayer& kicker, ReleaseKind kind) const;
   void meetWithHeadBinturong(const MatchPlayer& header);
   bool followsRoutesBinturong(const MatchPlayer& player) const;
+  /** Where a dribble touch at `from` (normalised pitch) sends his ball
+   * (dribble meet plan): along his route's line from there, else toward
+   * ball.dribbleGoal. Metric unit; none when he is at his goal. */
+  std::optional<Vector2F> dribbleOutFromBinturong(const MatchPlayer& player,
+                                                  Vector2F from) const;
+  /** Plans the dribbler's next meet with his collected ball (ball.meet*):
+   * the earliest point of its roll he can reach at the pace he wants, and
+   * where his touch there sends it. Sets his target to the meet point. */
+  void planDribbleMeetBinturong(MatchPlayer& owner);
+  /** His average speed (m/s) over `seconds` from `startSpeed`, speeding
+   * up toward `target` as hard as his legs allow (the body's a(v)). */
+  float dribbleReachablePaceBinturong(const MatchPlayer& player,
+                                      float startSpeed, float target,
+                                      float seconds) const;
+  /** How close (m) he means to have his own ball when he plays it: the
+   * comfort gap with perfect Dribbling, out to the strike reach with
+   * none. */
+  float dribbleMeetGapBinturong(const MatchPlayer& player) const;
+  /** His route's next turn seen from a dribble touch at `from`
+   * (normalised pitch). */
+  DribbleTurnAhead dribbleTurnAheadBinturong(const MatchPlayer& player,
+                                             Vector2F from) const;
 // clang-format on
