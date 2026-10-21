@@ -905,9 +905,11 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
       // The corner, unless his last touch went wrong, the meet is not ahead
       // of him (beside or behind: the corner would carry him past it), or
       // his line has already left the turn without him meeting the ball.
+      // Slow (below close-control pace), he simply goes to it: a corner
+      // only matters at pace, and from a standstill its arc can trap him.
       const float toMeet = length(offset);
       const bool ahead =
-          speedNow <= MatchTuning::Dribble::CLOSE_CONTROL_SPEED ||
+          speedNow > MatchTuning::Dribble::CLOSE_CONTROL_SPEED &&
           (offset.x * player.velocity.x + offset.y * player.velocity.y) >
               MEET_AHEAD_COSINE * toMeet * speedNow;
       bool straight = ball.meetRecovering || !ahead;
@@ -3577,4 +3579,38 @@ float MatchEngine::dribbleTouchIntervalBinturong(const MatchPlayer& player) cons
           std::clamp(player.dribbling, 0.0f, 1.0f);
   const float step = MatchTuning::Timing::FIXED_STEP_SECONDS;
   return std::max(step, std::round(seconds / step) * step);
+}
+
+bool MatchEngine::dribbleTouchNeededEarlyBinturong(const MatchPlayer& player,
+                                                   const TouchMoment& moment,
+                                                   float pace) const
+{
+  // He lets it run until he meant to play it again, unless it needs playing
+  // now: judged against the way he pushed it, not where he now wants to go.
+  using R = MatchTuning::Dribble;
+  const float ballSpeed = length(ball.velocity);
+  // Stopped, and he wants to go on.
+  if (ballSpeed <= MatchTuning::Ball::STOP_SPEED)
+    return pace >= R::LOOSE_START_SPEED;
+  // Running well off the way he pushed it (a deflection, a bounce).
+  const float along = (ball.velocity.x * ball.pushDirection.x +
+                       ball.velocity.y * ball.pushDirection.y) /
+                      ballSpeed;
+  if (along < std::cos(R::LOOSE_REDIRECT_RADIANS)) return true;
+  // Caught: level with him (holding back for it would slow him to its pace).
+  const Vector2F toBall = toMetres({moment.contactPoint.x - player.position.x,
+                                    moment.contactPoint.y - player.position.y});
+  if ((toBall.x * ball.velocity.x + toBall.y * ball.velocity.y) / ballSpeed <=
+      R::EARLY_TOUCH_CAUGHT_METRES)
+    return true;
+  // An opponent close enough to it to take it.
+  const Vector2F at = toMetres(moment.contactPoint);
+  for (const MatchPlayer& opponent : players)
+  {
+    if (!active(opponent) || opponent.isHomeTeam == player.isHomeTeam) continue;
+    const Vector2F them = toMetres(opponent.position);
+    if (length({them.x - at.x, them.y - at.y}) <= R::EARLY_TOUCH_THREAT_METRES)
+      return true;
+  }
+  return false;
 }

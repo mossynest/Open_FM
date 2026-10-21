@@ -4230,18 +4230,26 @@ float MatchEngine::chooseTouchSecondsBinturong(const MatchPlayer& player,
                                                float pace, float toEnd) const
 {
   // How long until he wants the ball again (dribble meet plan 3c): his
-  // intent, not his ability. Close control, as soon as he can play it
-  // again, with an opponent near him. A turn on his route or the end of his
-  // run coming up within the push: as far as there, to turn or stop it.
-  // Otherwise longer the more urgently he carries it, slowly at a jog and
-  // quickly toward a sprint (a few strides when running, knocked on into
-  // space at a sprint).
+  // intent, not his ability. In open space, longer the more urgently he
+  // carries it: about every stride at a walk, every two or three at a jog,
+  // knocked on into space at a sprint. Closed down, as soon as he can play
+  // it again, easing back to that as the nearest opponent is further off.
+  // A turn on his route or the end of his run coming up within the push: as
+  // far as there, to turn or stop it.
   using R = MatchTuning::Dribble;
   const float soonest = dribbleTouchIntervalBinturong(player);
-  if (nearestOpponentDistance(player) <= R::PUSH_CLOSE_METRES) return soonest;
   const float urgency = carryUrgencyBinturong(player);
-  const float wanted = soonest + (R::PUSH_SPRINT_SECONDS - soonest) *
-                                     std::pow(urgency, R::PUSH_TIME_CURVE);
+  constexpr float JOG = 1.0f / 3.0f;
+  const float open =
+      urgency <= JOG
+          ? soonest + (R::PUSH_JOG_SECONDS - soonest) * urgency / JOG
+          : R::PUSH_JOG_SECONDS + (R::PUSH_SPRINT_SECONDS - R::PUSH_JOG_SECONDS) *
+                                      (urgency - JOG) / (1.0f - JOG);
+  const float closeness = std::clamp(
+      (R::PUSH_CLOSE_FAR_METRES - nearestOpponentDistance(player)) /
+          (R::PUSH_CLOSE_FAR_METRES - R::PUSH_CLOSE_NEAR_METRES),
+      0.0f, 1.0f);
+  const float wanted = std::max(soonest, open + (soonest - open) * closeness);
   // A turn or the end coming within it: as far as there, to play it again
   // where he turns or stops it.
   if (toEnd < pace * wanted)

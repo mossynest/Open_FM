@@ -197,6 +197,13 @@
   /** The quickest he can play his own ball again after a touch (s): longer
    * for a poorer dribbler, in whole 0.1 s steps. */
   float dribbleTouchIntervalBinturong(const MatchPlayer& player) const;
+  /** Before he means to play his ball again (dribble meet plan 3d):
+   * whether it needs a touch now anyway: an opponent close enough to take
+   * it, stopped while he wants to go (at `pace`), running well off the way
+   * he pushed it, or caught (level with him). */
+  bool dribbleTouchNeededEarlyBinturong(const MatchPlayer& player,
+                                        const TouchMoment& moment,
+                                        float pace) const;
   /** His route's next turn seen from a dribble touch at `from`
    * (normalised pitch). */
   DribbleTurnAhead dribbleTurnAheadBinturong(const MatchPlayer& player,

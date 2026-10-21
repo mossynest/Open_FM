@@ -558,13 +558,15 @@ struct MatchTuning final
     static constexpr float CARRY_SPACE_OPEN_METRES = 18.0f;
     static constexpr float CARRY_SPACE_CONE_COSINE = 0.64f;
     /** The push by intent (3c, design choices). How long until he wants it
-     * again: as soon as he can (his touch interval) with an opponent within
-     * PUSH_CLOSE metres of him; else rising with his urgency to the power
-     * PUSH_TIME_CURVE (slow at a jog, quick toward a sprint), up to
-     * PUSH_SPRINT seconds at a sprint. */
-    static constexpr float PUSH_CLOSE_METRES = 4.0f;
+     * again, in open space: his touch interval at a walk (urgency 0),
+     * PUSH_JOG seconds at a jog (1/3), PUSH_SPRINT at a sprint (1), in
+     * straight lines between. Closed down: with the nearest opponent within
+     * PUSH_CLOSE_NEAR metres of him, as soon as he can (his touch interval);
+     * from there out to PUSH_CLOSE_FAR, blended back to the open-space time. */
+    static constexpr float PUSH_JOG_SECONDS = 0.7f;
     static constexpr float PUSH_SPRINT_SECONDS = 1.5f;
-    static constexpr float PUSH_TIME_CURVE = 2.5f;
+    static constexpr float PUSH_CLOSE_NEAR_METRES = 2.0f;
+    static constexpr float PUSH_CLOSE_FAR_METRES = 4.0f;
     /** The push goes at most this far, as far as he still gets to it this
      * long before any opponent could (who reads it this long first, then
      * speeds up from his own run as his legs allow), and short of where he
@@ -576,6 +578,11 @@ struct MatchTuning final
     /** A push this long is a knock into space: he runs after it at his full
      * pace, not the dribble's, and means it as hard as it needs. */
     static constexpr float PUSH_CHASE_METRES = 6.0f;
+    /** Before he means to play it again (3d, design choices), he plays it
+     * early with an opponent this close to it (m), or once it is no more
+     * than this far ahead of him along its roll (caught). */
+    static constexpr float EARLY_TOUCH_THREAT_METRES = 2.5f;
+    static constexpr float EARLY_TOUCH_CAUGHT_METRES = 0.2f;
     /** A push rolls straight: on a route it goes no further into a turn
      * than where the line has curved this far off it. */
     static constexpr float PUSH_LINE_DEVIATION_METRES = 0.5f;

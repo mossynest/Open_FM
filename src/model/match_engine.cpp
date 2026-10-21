@@ -4234,6 +4234,11 @@ bool MatchEngine::dribbleTouchDue(const MatchPlayer& player,
       moment.height > MatchTuning::Ball::LOW_BALL_METRES)
     return false;
   const DribbleAim aim = dribbleAim(player, moment.contactPoint);
+  // Before he means to play it again (dribble meet plan 3d), only if it
+  // needs it now.
+  if (ball.plannedTouchIn > 1e-4f &&
+      getBody(player.isHomeTeam) == BodyId::BINTURONG)
+    return dribbleTouchNeededEarlyBinturong(player, moment, aim.speed);
   const Vector2F offset = toMetres({ball.position.x - player.position.x,
                                     ball.position.y - player.position.y});
   const Vector2F relative{ball.velocity.x - player.velocity.x,
@@ -4357,6 +4362,7 @@ TouchIntent MatchEngine::dribbleTouchIntent(const MatchPlayer& player,
                  : dribblePushMetres(player, aim.speed, aim.metres),
       std::max(turnAhead.furthest, touchKnobs[TouchKnob::SET_OFFSET]));
   intent.knockOn = intentPush && metres >= R::PUSH_CHASE_METRES;
+  intent.plannedSeconds = intentPush ? touchSeconds : 0.0f;
   // Into his stride at pace, arriving a little slower than him so he gains
   // on it; else a set touch.
   if (aim.speed >= R::CLOSE_CONTROL_SPEED)
@@ -4426,6 +4432,16 @@ void MatchEngine::playDribbleTouch(MatchPlayer& player, const TouchMoment& momen
   ball.meetLegStart = player.position;
   ball.meetRecovering = touch.angleFailed || touch.weightFailed;
   ball.knockedOn = intent.knockOn;
+  // When he means to play it again, and the way he sent it (dribble meet
+  // plan 3d).
+  ball.plannedTouchIn = intent.plannedSeconds;
+  {
+    const Vector2F sent = toMetres({intent.targetSpot.x - moment.contactPoint.x,
+                                    intent.targetSpot.y - moment.contactPoint.y});
+    const float sentMetres = length(sent);
+    if (sentMetres > EPSILON)
+      ball.pushDirection = {sent.x / sentMetres, sent.y / sentMetres};
+  }
   noteTouchOnBall(player, intent, touch, moment);
   if (touch.angleFailed || touch.weightFailed) ++dribbleFailedTouches;
   const float speed = length(touch.velocity);
@@ -4440,6 +4456,7 @@ void MatchEngine::updateTouch(MatchPlayer& carrier, float dt)
   const Vector2F relative{ball.velocity.x - carrier.velocity.x,
                           ball.velocity.y - carrier.velocity.y};
   ball.ownTouchCooldown = std::max(0.0f, ball.ownTouchCooldown - dt);
+  ball.plannedTouchIn = std::max(0.0f, ball.plannedTouchIn - dt);
 
   if (!ball.touchCollected && gap <= R::KICK_REACH_METRES &&
       length(relative) <= touchKnobs[TouchKnob::COLLECT_RELATIVE_SPEED])
@@ -4480,6 +4497,7 @@ void MatchEngine::chaseTouchedBall()
       ball.meetLegStart = owner->position;
       ball.meetRecovering = false;
       ball.knockedOn = false;
+      ball.plannedTouchIn = 0.0f;
     }
     planDribbleMeetBinturong(*owner);
     return;

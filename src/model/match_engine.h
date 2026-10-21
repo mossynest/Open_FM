@@ -337,6 +337,9 @@ struct TouchIntent
   /** A dribble touch knocked on into space (no cap on how hard he means
    * it). */
   bool knockOn = false;
+  /** A dribble touch: how long until he means to play it again (s; 0,
+   * none: the next touch is due as soon as it is needed). */
+  float plannedSeconds = 0.0f;
 };
 
 /** A loose ball in a player's reach during one ball sub-step: where it is
@@ -707,6 +710,11 @@ struct MatchBall
   /** His last touch knocked it on into space: he sprints after it at his
    * full pace, until his next touch. */
   bool knockedOn = false;
+  /** Until he means to play it again (s, counting down; dribble meet plan
+   * 3d), and the way his last touch sent it (metric unit): before then he
+   * plays it only if it needs it. */
+  float plannedTouchIn = 0.0f;
+  Vector2F pushDirection{1.0f, 0.0f};
   float meetPace = 0.0f;
   Vector2F meetPoint{};
   float meetSeconds = 0.0f;
