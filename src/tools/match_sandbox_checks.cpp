@@ -661,6 +661,7 @@ bool runFirstTouchChecks(const std::vector<const Team*>& clubs,
       Vector2F lastPosition = engine->getBall().position;
       Vector2F lastOffset{0.0f, 0.0f};
       float lastSpeed = 0.0f;
+      float lastCooldown = 0.0f;
       std::uint64_t lastSteps = engine->getSimulatedSteps();
       while (engine->getState() != MatchState::FULL_TIME)
       {
@@ -698,9 +699,11 @@ bool runFirstTouchChecks(const std::vector<const Team*>& clubs,
           // left the touch at counts too. Rolling resistance takes up to
           // this much off by the step's end.
           using B = MatchTuning::Ball;
+          // A touch resets his cooldown (its length is by his Dribbling): it
+          // is above where counting down would have left it.
           const bool touchedThisStep =
-              ball.ownTouchCooldown >=
-              MatchTuning::Dribble::LOOSE_TOUCH_INTERVAL - 1e-4f;
+              ball.ownTouchCooldown >
+              std::max(0.0f, lastCooldown - DT * stepCount) + 1e-4f;
           const float fastest =
               std::max({lastSpeed, speedOf(ball.velocity),
                         touchedThisStep ? ball.touchLaunchSpeed : 0.0f});
@@ -775,6 +778,7 @@ bool runFirstTouchChecks(const std::vector<const Team*>& clubs,
         lastPeakGap = inTouch ? ball.touchPeakGap : 0.0f;
         lastPosition = ball.position;
         lastSpeed = speedOf(ball.velocity);
+        lastCooldown = ball.ownTouchCooldown;
         if (const MatchPlayer* holder = inTouch ? ownerOf(owner) : nullptr)
           lastOffset = {ball.position.x - holder->position.x,
                         ball.position.y - holder->position.y};

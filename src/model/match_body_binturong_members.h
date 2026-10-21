@@ -194,6 +194,9 @@
    * comfort gap with perfect Dribbling, out to the strike reach with
    * none. */
   float dribbleMeetGapBinturong(const MatchPlayer& player) const;
+  /** The quickest he can play his own ball again after a touch (s): longer
+   * for a poorer dribbler, in whole 0.1 s steps. */
+  float dribbleTouchIntervalBinturong(const MatchPlayer& player) const;
   /** His route's next turn seen from a dribble touch at `from`
    * (normalised pitch). */
   DribbleTurnAhead dribbleTurnAheadBinturong(const MatchPlayer& player,

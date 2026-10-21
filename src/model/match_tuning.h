@@ -502,6 +502,11 @@ struct MatchTuning final
     static constexpr float LOOSE_ARRIVAL_SHARE = 0.85f;
     /** At least this long between two of his own touches. */
     static constexpr float LOOSE_TOUCH_INTERVAL = 0.25f;
+    /** On a Binturong body the quickest he can play it again is by his
+     * Dribbling (dribble meet plan 3b): this long with none, down to this
+     * with the best, in whole 0.1 s steps (the ball's ticks). */
+    static constexpr float TOUCH_INTERVAL_POOR_SECONDS = 0.5f;
+    static constexpr float TOUCH_INTERVAL_BEST_SECONDS = 0.2f;
     /** He touches a ball heading this far off the way he wants to go... */
     static constexpr float LOOSE_REDIRECT_RADIANS = 0.5f;
     /** ...but at pace turns it at most this far off his run per touch, and

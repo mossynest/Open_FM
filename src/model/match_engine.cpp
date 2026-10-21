@@ -4229,7 +4229,8 @@ bool MatchEngine::dribbleTouchDue(const MatchPlayer& player,
                                   const TouchMoment& moment) const
 {
   using R = MatchTuning::Dribble;
-  if (ball.ownTouchCooldown > 0.0f ||
+  // (A cooldown in whole steps counts down to a hair above zero.)
+  if (ball.ownTouchCooldown > 1e-4f ||
       moment.height > MatchTuning::Ball::LOW_BALL_METRES)
     return false;
   const DribbleAim aim = dribbleAim(player, moment.contactPoint);
@@ -4282,7 +4283,7 @@ TouchIntent MatchEngine::dribbleTouchIntent(const MatchPlayer& player,
                                                 player.velocity.y * aim.direction.y);
     const float reachable = dribbleReachablePaceBinturong(
         player, startSpeed, aim.speed,
-        std::max(R::LOOSE_TOUCH_INTERVAL,
+        std::max(dribbleTouchIntervalBinturong(player),
                  R::LOOSE_LEAD_SECONDS * (1.3f - player.dribbling)));
     speedingUp = reachable < aim.speed;
     aim.speed = std::min(aim.speed, reachable);
@@ -4373,7 +4374,11 @@ void MatchEngine::playDribbleTouch(MatchPlayer& player, const TouchMoment& momen
                std::clamp(moment.contactPoint.y, 0.001f, 0.999f)},
               moment.height / MatchTuning::Units::BALL_Z_METRES, touch.velocity,
               touch.verticalSpeed, 0.0f, 0.0f);
-  ball.ownTouchCooldown = MatchTuning::Dribble::LOOSE_TOUCH_INTERVAL;
+  // The quickest he can play it again: a Binturong body's by his
+  // Dribbling (dribble meet plan 3b).
+  ball.ownTouchCooldown = getBody(player.isHomeTeam) == BodyId::BINTURONG
+                              ? dribbleTouchIntervalBinturong(player)
+                              : MatchTuning::Dribble::LOOSE_TOUCH_INTERVAL;
   // His run to the next meet starts here; gone wrong, he collects it first.
   ball.meetLegStart = player.position;
   ball.meetRecovering = touch.angleFailed || touch.weightFailed;

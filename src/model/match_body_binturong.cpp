@@ -3540,3 +3540,16 @@ void MatchEngine::shapeMeetForStrikeBinturong(const MatchPlayer& owner)
   // He runs on along it after the strike (the corner's way out).
   ball.meetPush = std::max(ball.meetPush, R::MEET_STRIKE_OUT_METRES);
 }
+
+float MatchEngine::dribbleTouchIntervalBinturong(const MatchPlayer& player) const
+{
+  // A better dribbler can play it again sooner: his feet are quicker to
+  // the ball. In whole steps, as the cooldown counts down.
+  using R = MatchTuning::Dribble;
+  const float seconds =
+      R::TOUCH_INTERVAL_POOR_SECONDS +
+      (R::TOUCH_INTERVAL_BEST_SECONDS - R::TOUCH_INTERVAL_POOR_SECONDS) *
+          std::clamp(player.dribbling, 0.0f, 1.0f);
+  const float step = MatchTuning::Timing::FIXED_STEP_SECONDS;
+  return std::max(step, std::round(seconds / step) * step);
+}
