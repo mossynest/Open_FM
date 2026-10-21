@@ -4226,72 +4226,98 @@ float MatchEngine::carryPaceBinturong(const MatchPlayer& player) const
   return std::min(pace, cap);
 }
 
-std::optional<MatchEngine::KnockOn> MatchEngine::chooseKnockOnBinturong(
-    const MatchPlayer& player, const TouchMoment& moment, Vector2F direction,
-    float ordinaryMetres, std::optional<float> toGoal) const
+float MatchEngine::chooseTouchSecondsBinturong(const MatchPlayer& player,
+                                               float pace, float toEnd) const
 {
-  // Knocked on into open space (dribble meet plan 2d): carrying it at a
-  // sprint with room ahead, he pushes it as far as he still gets to it
-  // first, and sprints after it (no ball at his feet: his full pace). Never
-  // on a route, nor with a pass or shot decided; only worth it well beyond
-  // his usual touch.
+  // How long until he wants the ball again (dribble meet plan 3c): his
+  // intent, not his ability. Close control, as soon as he can play it
+  // again, with an opponent near him. A turn on his route or the end of his
+  // run coming up within the push: as far as there, to turn or stop it.
+  // Otherwise longer the more urgently he carries it, slowly at a jog and
+  // quickly toward a sprint (a few strides when running, knocked on into
+  // space at a sprint).
   using R = MatchTuning::Dribble;
-  if (player.routeWaypoints > 0) return std::nullopt;
-  if (pendingStrike && pendingStrike->striker == &player) return std::nullopt;
-  if (carryUrgencyBinturong(player) < R::KNOCK_ON_URGENCY) return std::nullopt;
-  const float top = std::max(currentTopSpeed(player), EPSILON);
+  const float soonest = dribbleTouchIntervalBinturong(player);
+  if (nearestOpponentDistance(player) <= R::PUSH_CLOSE_METRES) return soonest;
+  const float urgency = carryUrgencyBinturong(player);
+  const float wanted = soonest + (R::PUSH_SPRINT_SECONDS - soonest) *
+                                     std::pow(urgency, R::PUSH_TIME_CURVE);
+  // A turn or the end coming within it: as far as there, to play it again
+  // where he turns or stops it.
+  if (toEnd < pace * wanted)
+    return std::max(soonest, toEnd / std::max(pace, R::LOOSE_START_SPEED));
+  return wanted;
+}
+
+float MatchEngine::pushMetresBinturong(const MatchPlayer& player, Vector2F from,
+                                       Vector2F direction, float startGap,
+                                       float pace, float seconds,
+                                       std::optional<float> toGoal) const
+{
+  // As far as he runs at `pace` in `seconds` (from `startGap` behind it),
+  // so he gets to it about then; never past where he is going, with room
+  // for it to roll on past the spot; and no further than he still gets to
+  // it first: an opponent who could reach a point of it (after reading
+  // it) no later than he does, less a margin, holds it short of there.
+  using R = MatchTuning::Dribble;
+  const float shortest = touchKnobs[TouchKnob::SET_OFFSET];
+  float longest = std::min(R::PUSH_MAX_METRES, pace * seconds - startGap);
+  if (toGoal)
+    longest = std::min(longest, *toGoal - pace * R::PUSH_ROLL_ON_SECONDS);
+  if (longest <= shortest) return shortest;
   const float startSpeed = std::max(
       0.0f, player.velocity.x * direction.x + player.velocity.y * direction.y);
-  // How long his run to a point `metres` beyond the contact takes (from
-  // `moment.gap` behind it), speeding up as his legs allow.
+  const float run = std::max(pace, R::LOOSE_START_SPEED);
+  // How long his run to a point `metres` beyond the contact takes, speeding
+  // up toward his pace as his legs allow.
   const auto hisSeconds = [&](float metres)
   {
-    const float run = metres + moment.gap;
-    float seconds = run / top;
+    const float distanceRun = metres + startGap;
+    float time = distanceRun / run;
     for (int pass = 0; pass < 2; ++pass)
-      seconds = run / std::max(dribbleReachablePaceBinturong(player, startSpeed,
-                                                             top, seconds),
-                               EPSILON);
-    return seconds;
+      time = distanceRun /
+             std::max(dribbleReachablePaceBinturong(player, startSpeed, run, time),
+                      EPSILON);
+    return time;
   };
-  const Vector2F from = toMetres(moment.contactPoint);
-  float best = 0.0f;
+  const Vector2F start = toMetres(from);
   constexpr float STEP_METRES = 0.5f;
-  // Never past where he is going, with room for it to roll on past the spot
-  // before he gets to it.
-  const float longest = std::min(
-      R::KNOCK_ON_MAX_METRES,
-      toGoal ? *toGoal - top * R::KNOCK_ON_ROLL_ON_SECONDS : R::KNOCK_ON_MAX_METRES);
-  for (float along = STEP_METRES; along <= longest + EPSILON;
-       along += STEP_METRES)
+  for (float along = shortest; along <= longest + EPSILON; along += STEP_METRES)
   {
-    const Vector2F point{from.x + direction.x * along,
-                         from.y + direction.y * along};
+    const Vector2F point{start.x + direction.x * along,
+                         start.y + direction.y * along};
     const Vector2F pitch = toPitch(point);
-    if (pitch.x < 0.02f || pitch.x > 0.98f || pitch.y < 0.02f || pitch.y > 0.98f)
-      break;
+    if (pitch.x < 0.01f || pitch.x > 0.99f || pitch.y < 0.01f || pitch.y > 0.99f)
+      return std::max(shortest, along - STEP_METRES);
     const float his = hisSeconds(along);
-    bool hisFirst = true;
     for (const MatchPlayer& opponent : players)
     {
       if (!active(opponent) || opponent.isHomeTeam == player.isHomeTeam) continue;
       const float reach = opponent.isGoalkeeper
                               ? MatchTuning::Ball::GOALKEEPER_CONTROL_RADIUS_METRES
                               : feetReach(opponent);
+      // His run there, after reading it: from his speed toward it now,
+      // speeding up as his legs allow.
       const Vector2F at = toMetres(opponent.position);
-      const float theirs =
-          std::max(0.0f, length({point.x - at.x, point.y - at.y}) - reach) /
-              std::max(currentTopSpeed(opponent), EPSILON) +
-          R::KNOCK_ON_READ_SECONDS;
-      if (theirs <= his + R::KNOCK_ON_MARGIN_SECONDS)
-      {
-        hisFirst = false;
-        break;
-      }
+      const Vector2F toPoint{point.x - at.x, point.y - at.y};
+      const float apart = length(toPoint);
+      const float gap = std::max(0.0f, apart - reach);
+      const float top = std::max(currentTopSpeed(opponent), EPSILON);
+      if (gap / top + R::PUSH_READ_SECONDS > his + R::PUSH_MARGIN_SECONDS)
+        continue;
+      const float theirStart =
+          apart > EPSILON ? std::max(0.0f, (opponent.velocity.x * toPoint.x +
+                                            opponent.velocity.y * toPoint.y) /
+                                               apart)
+                          : 0.0f;
+      float theirRun = gap / top;
+      for (int pass = 0; pass < 2; ++pass)
+        theirRun = gap / std::max(dribbleReachablePaceBinturong(
+                                      opponent, theirStart, top, theirRun),
+                                  EPSILON);
+      if (theirRun + R::PUSH_READ_SECONDS <= his + R::PUSH_MARGIN_SECONDS)
+        return std::max(shortest, along - STEP_METRES);
     }
-    if (!hisFirst) break;
-    best = along;
   }
-  if (best < ordinaryMetres * R::KNOCK_ON_MIN_SHARE) return std::nullopt;
-  return KnockOn{best, (best + moment.gap) / hisSeconds(best)};
+  return longest;
 }

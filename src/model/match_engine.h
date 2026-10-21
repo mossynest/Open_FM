@@ -2191,13 +2191,6 @@ class MatchEngine
     Vector2F meetPoint{};
   };
   std::optional<PendingStrike> pendingStrike;
-  /** A dribble touch knocked on into space (dribble meet plan 2d): how far
-   * (m), and his average pace (m/s) sprinting after it. */
-  struct KnockOn
-  {
-    float metres = 0.0f;
-    float pace = 0.0f;
-  };
   /** True while the carrier decides what to do with a loose ball at his
    * feet: a pass, shot or clearance then waits for the sweep. */
   bool strikesWaitForSweep = false;
@@ -2838,6 +2831,8 @@ class MatchEngine
     float toTurn = std::numeric_limits<float>::max();
     float turnSpeed = std::numeric_limits<float>::max();
     float furthest = std::numeric_limits<float>::max();
+    /** How hard he brakes toward it (m/s^2), as his body would. */
+    float braking = 0.0f;
   };
   /** `from`: where he plays it (normalised pitch). A Binturong body then
    * aims from there (dribbleOutFromBinturong). */

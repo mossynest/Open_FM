@@ -81,15 +81,20 @@
   /** How urgently he carries it (0-1): what carryPaceBinturong maps onto
    * his bands. */
   float carryUrgencyBinturong(const MatchPlayer& player) const;
-  /** A dribble touch at `moment` along `direction` (metric unit) knocked on
-   * into open space (dribble meet plan 2d): carrying at a sprint, as far as
-   * he still gets to it first, if well beyond his usual touch
-   * (`ordinaryMetres`). */
-  std::optional<KnockOn> chooseKnockOnBinturong(const MatchPlayer& player,
-                                                const TouchMoment& moment,
-                                                Vector2F direction,
-                                                float ordinaryMetres,
-                                                std::optional<float> toGoal) const;
+  /** How long until he wants his ball again after a touch (s), the push's
+   * intent (dribble meet plan 3c): as soon as he can with an opponent near;
+   * with a turn on his route or the end of his run (`toEnd` metres ahead)
+   * coming within the push at `pace`, as far as there; else longer the more
+   * urgently he carries it. */
+  float chooseTouchSecondsBinturong(const MatchPlayer& player, float pace,
+                                    float toEnd) const;
+  /** How far a push from `from` (normalised pitch) along `direction`
+   * (metric unit) goes (m): as far as he runs at `pace` in `seconds` from
+   * `startGap` behind it, never past `toGoal` (less room to roll on), and
+   * no further than he still gets to it first. */
+  float pushMetresBinturong(const MatchPlayer& player, Vector2F from,
+                            Vector2F direction, float startGap, float pace,
+                            float seconds, std::optional<float> toGoal) const;
   /** Signed x shift of the role in the defensive block (normalised). */
   float defensiveRoleShiftBinturong(const MatchPlayer& player) const;
   /** Second presser's spot when doubling up on the carrier, if ordered. */

@@ -4253,6 +4253,34 @@ bool MatchEngine::dribbleTouchDue(const MatchPlayer& player,
   return along < std::cos(R::LOOSE_REDIRECT_RADIANS);
 }
 
+namespace
+{
+/** His run along a push of `metres` at `pace`, braking as his body will for
+ * a turn ahead (the cornering cap, sqrt(turn speed^2 + 2 x braking x the
+ * distance still to it)): his average speed over it, and his speed at its
+ * end. */
+std::pair<float, float> carriedPace(float toTurn, float turnSpeed, float braking,
+                                    float pace, float metres)
+{
+  const auto speedAt = [&](float along)
+  {
+    if (toTurn >= std::numeric_limits<float>::max()) return pace;
+    const float left = std::max(0.0f, toTurn - along);
+    return std::min(pace, std::sqrt(turnSpeed * turnSpeed +
+                                    2.0f * braking * left));
+  };
+  if (metres <= EPSILON) return {pace, speedAt(0.0f)};
+  constexpr int STEPS = 12;
+  float seconds = 0.0f;
+  for (int step = 0; step < STEPS; ++step)
+  {
+    const float along = metres * (static_cast<float>(step) + 0.5f) / STEPS;
+    seconds += metres / STEPS / std::max(speedAt(along), 0.1f);
+  }
+  return {metres / seconds, speedAt(metres)};
+}
+}  // namespace
+
 TouchIntent MatchEngine::dribbleTouchIntent(const MatchPlayer& player,
                                             const TouchMoment& moment) const
 {
@@ -4262,6 +4290,9 @@ TouchIntent MatchEngine::dribbleTouchIntent(const MatchPlayer& player,
   const bool meetPlanned = getBody(player.isHomeTeam) == BodyId::BINTURONG;
   DribbleTurnAhead turnAhead;
   bool speedingUp = false;
+  const bool intentPush =
+      meetPlanned && brainOf(player.isHomeTeam) == BrainId::BINTURONG;
+  float touchSeconds = 0.0f;
   if (meetPlanned)
   {
     // He turns it as far as he means to: his run in was planned for it
@@ -4275,20 +4306,31 @@ TouchIntent MatchEngine::dribbleTouchIntent(const MatchPlayer& player,
                           running;
       aim.speed *= std::max(R::LOOSE_TURN_MIN_PACE, along);
     }
+    // How long until he wants it again: a Binturong brain's intent (dribble
+    // meet plan 3c); otherwise the lead it pushes it by.
+    // The end of his run: a turn on his route, or a drill's goal (a
+    // match's carry target moves on with him; it is a way, not an end).
+    turnAhead = dribbleTurnAheadBinturong(player, moment.contactPoint);
+    const bool drilled =
+        player.player && std::ranges::find(ballKeepers, player.player->getId()) !=
+                             ballKeepers.end();
+    const float toEnd = std::min(
+        turnAhead.toTurn, drilled && aim.metres ? *aim.metres
+                                                : std::numeric_limits<float>::max());
+    touchSeconds =
+        intentPush ? chooseTouchSecondsBinturong(player, aim.speed, toEnd)
+                   : std::max(dribbleTouchIntervalBinturong(player),
+                              R::LOOSE_LEAD_SECONDS * (1.3f - player.dribbling));
     // No faster than he can be running on average over the push: from his
-    // speed its new way now, accelerating as his legs allow, over the time
-    // it leads him by (at least until he may touch it again). Speeding up,
-    // it rolls at that average: running onto it, he meets it.
+    // speed its new way now, accelerating as his legs allow, until he wants
+    // it again. Speeding up, it rolls at that average: running onto it, he
+    // meets it.
     const float startSpeed = std::max(0.0f, player.velocity.x * aim.direction.x +
                                                 player.velocity.y * aim.direction.y);
     const float reachable = dribbleReachablePaceBinturong(
-        player, startSpeed, aim.speed,
-        std::max(dribbleTouchIntervalBinturong(player),
-                 R::LOOSE_LEAD_SECONDS * (1.3f - player.dribbling)));
+        player, startSpeed, aim.speed, touchSeconds);
     speedingUp = reachable < aim.speed;
     aim.speed = std::min(aim.speed, reachable);
-    // On a route, its next turn (below).
-    turnAhead = dribbleTurnAheadBinturong(player, moment.contactPoint);
   }
   else if (running >= R::CLOSE_CONTROL_SPEED)
   {
@@ -4305,21 +4347,16 @@ TouchIntent MatchEngine::dribbleTouchIntent(const MatchPlayer& player,
     aim.speed *= std::max(R::LOOSE_TURN_MIN_PACE, std::cos(wanted));
   }
   TouchIntent intent;
-  float metres = std::min(
-      dribblePushMetres(player, aim.speed, aim.metres),
+  // A Binturong brain pushes it as far as he runs until he wants it again,
+  // held short where he wouldn't get there first (dribble meet plan 3c); a
+  // long one is a knock into space, chased at his full pace.
+  const float metres = std::min(
+      intentPush ? pushMetresBinturong(player, moment.contactPoint,
+                                       aim.direction, moment.gap, aim.speed,
+                                       touchSeconds, aim.metres)
+                 : dribblePushMetres(player, aim.speed, aim.metres),
       std::max(turnAhead.furthest, touchKnobs[TouchKnob::SET_OFFSET]));
-  // A Binturong brain may knock it on into open space instead and sprint
-  // after it (dribble meet plan 2d), weighted like a push into his stride
-  // at his pace chasing it, so he catches it about there.
-  if (meetPlanned && brainOf(player.isHomeTeam) == BrainId::BINTURONG)
-    if (const std::optional<KnockOn> knock = chooseKnockOnBinturong(
-            player, moment, aim.direction, metres, aim.metres))
-    {
-      intent.knockOn = true;
-      metres = knock->metres;
-      aim.speed = knock->pace;
-      speedingUp = false;
-    }
+  intent.knockOn = intentPush && metres >= R::PUSH_CHASE_METRES;
   // Into his stride at pace, arriving a little slower than him so he gains
   // on it; else a set touch.
   if (aim.speed >= R::CLOSE_CONTROL_SPEED)
@@ -4328,10 +4365,16 @@ TouchIntent MatchEngine::dribbleTouchIntent(const MatchPlayer& player,
   if (intent.kind == TouchIntent::Kind::INTO_STRIDE)
   {
     // He runs at the ball's pace, so it is weighted to roll at about the
-    // pace he wants over the push, however long (a little slower, so he
+    // pace he will run over the push, however long (a little slower, so he
     // gains on it): the arrival speed at which launch and arrival average
-    // that pace, under the real rolling physics.
-    const float mean = aim.speed * (speedingUp ? 1.0f : R::LOOSE_MEAN_PACE_SHARE);
+    // that pace, under the real rolling physics. A Binturong body's pace
+    // over it allows for his braking for a turn ahead on his route, and it
+    // gets there no faster than he will then be running.
+    const auto [carried, atEnd] =
+        meetPlanned ? carriedPace(turnAhead.toTurn, turnAhead.turnSpeed,
+                                  turnAhead.braking, aim.speed, metres)
+                    : std::pair{aim.speed, aim.speed};
+    const float mean = carried * (speedingUp ? 1.0f : R::LOOSE_MEAN_PACE_SHARE);
     float low = 0.0f;
     float high = mean;
     for (int iteration = 0; iteration < 16; ++iteration)
@@ -4342,7 +4385,7 @@ TouchIntent MatchEngine::dribbleTouchIntent(const MatchPlayer& player,
       else
         low = arrival;
     }
-    intent.arrivalSpeed = low;
+    intent.arrivalSpeed = std::min(low, atEnd);
   }
   // Pushed as far as a turn on his route, it gets there rolling no faster
   // than he can take the turn with it: a softer touch ahead of a cone.

@@ -748,6 +748,15 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     Vector2F target = walking ? player.movementTarget : player.tacticalTarget;
     target.x = std::clamp(target.x, Pitch::PLAYER_MIN_X, Pitch::PLAYER_MAX_X);
     target.y = std::clamp(target.y, Pitch::PLAYER_MIN_Y, Pitch::PLAYER_MAX_Y);
+    // The end of a route: his target; dribbling it, where he is taking the
+    // ball (his target is then his next meet with it, beside his waypoint).
+    Vector2F routeEnd = !walking && ball.inTouch &&
+                                ball.possessedBy == player.player &&
+                                ball.meetFor == player.player
+                            ? ball.dribbleGoal
+                            : target;
+    routeEnd.x = std::clamp(routeEnd.x, Pitch::PLAYER_MIN_X, Pitch::PLAYER_MAX_X);
+    routeEnd.y = std::clamp(routeEnd.y, Pitch::PLAYER_MIN_Y, Pitch::PLAYER_MAX_Y);
     // A brain with a target lag has its players absorb a new target
     // gradually (a side unfamiliar with its tactics more slowly); without one
     // they head straight for it.
@@ -758,7 +767,7 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     // waypoints in turn, moving on to the next as he reaches each one. A
     // restart walk has none.
     if (walking) player.routeWaypoints = 0;
-    if (player.routeWaypoints == 1) player.nextTarget = target;
+    if (player.routeWaypoints == 1) player.nextTarget = routeEnd;
     // A waypoint given him (not one he moved on to): its leg starts here.
     if (player.routeWaypoints > 0 &&
         (player.movementTarget.x != player.routeLegEnd.x ||
@@ -789,7 +798,7 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
       player.routeLegEnd = player.movementTarget;
       --player.routeWaypoints;
       ++player.routeAdvances;
-      if (player.routeWaypoints == 1) player.nextTarget = target;
+      if (player.routeWaypoints == 1) player.nextTarget = routeEnd;
     }
     // Dribbling with a planned meet (dribble meet plan), his run is a
     // corner at the meet point, on the way his touch there sends the ball;
@@ -821,7 +830,7 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
       // With a second waypoint, the turn there too (into the end).
       if (player.routeWaypoints > 1)
         nextTurn = turnThrough(toMetres(player.movementTarget),
-                               toMetres(player.nextTarget), toMetres(target),
+                               toMetres(player.nextTarget), toMetres(routeEnd),
                                player.routeApexOffset,
                                player.routeOutwardRoom);
     }
@@ -3400,9 +3409,22 @@ void MatchEngine::planDribbleMeetBinturong(MatchPlayer& owner)
                                         ball.dribbleGoal.y - meet.y}));
   // On a route, no further than its next turn allows (as the touch).
   const DribbleTurnAhead turnAhead = dribbleTurnAheadBinturong(owner, meet);
+  // A Binturong brain pushes it by its intent (dribble meet plan 3c), as
+  // the touch will.
+  const bool intentPush = brainOf(owner.isHomeTeam) == BrainId::BINTURONG;
+  const bool drilled =
+      owner.player && std::ranges::find(ballKeepers, owner.player->getId()) !=
+                          ballKeepers.end();
+  const float toEnd =
+      std::min(turnAhead.toTurn, drilled ? toGoal : std::numeric_limits<float>::max());
   ball.meetPush =
       out && aim.speed >= R::LOOSE_START_SPEED
-          ? std::min(dribblePushMetres(owner, aim.speed, toGoal),
+          ? std::min(intentPush
+                         ? pushMetresBinturong(
+                               owner, meet, *out, 0.0f, aim.speed,
+                               chooseTouchSecondsBinturong(owner, aim.speed, toEnd),
+                               toGoal)
+                         : dribblePushMetres(owner, aim.speed, toGoal),
                      std::max(turnAhead.furthest,
                               touchKnobs[TouchKnob::SET_OFFSET]))
           : 0.0f;
@@ -3459,7 +3481,7 @@ MatchEngine::DribbleTurnAhead MatchEngine::dribbleTurnAheadBinturong(
   if (line.exited)
   {
     if (player.routeWaypoints < 2) return ahead;
-    const Vector2F end = toMetres(player.tacticalTarget);
+    const Vector2F end = toMetres(ball.dribbleGoal);
     turn = turnThrough(waypoint, next, end, player.routeApexOffset,
                        player.routeOutwardRoom);
     line = aimThrough(turn, next, at, end, length(player.velocity), 0.0f);
@@ -3476,6 +3498,9 @@ MatchEngine::DribbleTurnAhead MatchEngine::dribbleTurnAheadBinturong(
   ahead.furthest =
       ahead.toTurn +
       std::sqrt(2.0f * radius * MatchTuning::Dribble::PUSH_LINE_DEVIATION_METRES);
+  // As his body brakes for a turn ahead (integrateMovementsBinturong).
+  ahead.braking = ARRIVAL_BRAKING_SHARE * playerBraking(player) *
+                  tieredMovement(player.stamina);
   return ahead;
 }
 
