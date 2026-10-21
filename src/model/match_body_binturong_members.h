@@ -99,7 +99,7 @@
                               const TouchIntent& intent,
                               const TouchMoment& moment, bool ownBall = false);
   /** His dribble touch, carrying out `intent` where he meets his own ball:
-   * the first touch's two jobs, with First Touch. */
+   * the first touch's two jobs, with his Dribbling. */
   TouchResult dribbleTouchBinturong(const MatchPlayer& player,
                                 const TouchIntent& intent,
                                 const TouchMoment& moment);

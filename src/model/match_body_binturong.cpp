@@ -1652,7 +1652,7 @@ TouchResult MatchEngine::dribbleTouchBinturong(const MatchPlayer& player,
                                                const TouchMoment& moment)
 {
   // A dribble touch is a first touch on a ball he already has: the same two
-  // jobs, the same skill (First Touch).
+  // jobs, carried out with his Dribbling (contactBinturong).
   return firstTouchBinturong(player, intent, moment, true);
 }
 ContactProfile MatchEngine::touchProfileBinturong() const
@@ -1808,8 +1808,12 @@ ContactResult MatchEngine::contactBinturong(const MatchPlayer& player,
   result.contact =
       assessContactBinturong(player, profile, request.aim, request.speed,
                              request.lift, moment, request.surprise, pressure);
+  // A touch on receiving the ball is his First Touch; a touch on his own
+  // ball, dribbling it, is his Dribbling.
   result.skill = strike ? strikeSkillBinturong(player, request.strike)
-                        : player.derivedStat(DerivedStat::FIRST_TOUCH);
+                 : request.kind == ContactRequest::Kind::DRIBBLE_TOUCH
+                     ? player.dribbling
+                     : player.derivedStat(DerivedStat::FIRST_TOUCH);
   result.outcome =
       carryOutContactBinturong(player, profile, result.contact, result.skill);
   reportContactBinturong(player, request, result);
@@ -2448,7 +2452,7 @@ TouchResult MatchEngine::firstTouchBinturong(const MatchPlayer& player,
           : 0.0f;
 
   // The touch is a contact with the touch profile, carried out with his
-  // First Touch.
+  // First Touch (his Dribbling for his own ball).
   ContactRequest request;
   request.kind = ownBall ? ContactRequest::Kind::DRIBBLE_TOUCH
                          : ContactRequest::Kind::FIRST_TOUCH;
