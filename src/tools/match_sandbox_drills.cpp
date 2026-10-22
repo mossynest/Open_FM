@@ -416,7 +416,7 @@ class MovementDrill : public Drill
   void steerTo(MatchEngine& engine, Vector2F at, bool urgent,
                std::vector<Vector2F> route = {}, float apexOffset = 0.0f,
                float outwardRoom = 0.0f,
-               std::optional<float> facing = std::nullopt)
+               std::optional<float> facing = std::nullopt, bool atSpeed = false)
   {
     if (path != AI) return;
     const auto same = [](Vector2F a, Vector2F b)
@@ -424,9 +424,10 @@ class MovementDrill : public Drill
     if (aiGoal && same(aiGoal->at, at) && aiGoal->urgent == urgent &&
         std::ranges::equal(aiGoal->route, route, same) &&
         aiGoal->apexOffset == apexOffset && aiGoal->outwardRoom == outwardRoom &&
-        aiGoal->facing == facing)
+        aiGoal->facing == facing && aiGoal->atSpeed == atSpeed)
       return;
-    aiGoal = Goal{at, urgent, std::move(route), apexOffset, outwardRoom, facing};
+    aiGoal = Goal{at, urgent, std::move(route), apexOffset, outwardRoom, facing,
+                  atSpeed};
     sendPlan(engine);
   }
 
@@ -435,7 +436,7 @@ class MovementDrill : public Drill
     if (aiGoal && !looseBall)
       engine.setDrillTarget(id, aiGoal->at, aiGoal->urgent, aiGoal->route,
                             aiGoal->apexOffset, aiGoal->outwardRoom,
-                            aiGoal->facing);
+                            aiGoal->facing, aiGoal->atSpeed);
   }
 
   /** The runner after a step (nullptr if gone, or the ball he dribbles went
@@ -542,6 +543,8 @@ class MovementDrill : public Drill
     float apexOffset = 0.0f;
     float outwardRoom = 0.0f;
     std::optional<float> facing;
+    /** Reached at full speed (a run through a finish). */
+    bool atSpeed = false;
   };
   struct TrailPoint
   {
@@ -624,7 +627,8 @@ class SprintDrill final : public MovementDrill
             0.0f, 0.0f,
             runs == 0 ? std::nullopt
                       : std::optional<float>(facingAngleOf(
-                            FACINGS[static_cast<std::size_t>(runs)])));
+                            FACINGS[static_cast<std::size_t>(runs)])),
+            true);
     lastX = from;
     crossings.assign(static_cast<std::size_t>(metres / 10) + 1, std::nullopt);
     if (runUpMetres == 0) crossings[0] = 0.0;
@@ -796,9 +800,10 @@ class CourseDrill : public MovementDrill
     if (ahead.size() > 2) ahead.resize(2);
     const Vector2F end =
         runThroughLast
-            ? along(points.back(), finishDirection(), RUN_THROUGH_METRES)
+            ? along(finishAim(), finishDirection(), RUN_THROUGH_METRES)
             : points.back();
-    steerTo(engine, end, true, std::move(ahead), apexOffset(), outwardRoom());
+    steerTo(engine, end, true, std::move(ahead), apexOffset(), outwardRoom(),
+            std::nullopt, runThroughLast);
   }
 
   /** The waypoints still ahead of him: the course's points before its
@@ -846,6 +851,10 @@ class CourseDrill : public MovementDrill
 
   /** Direction across which the finish line lies (and the run goes on
    * through it): along the last leg. */
+  /** Where on the finish line he aims to cross it (it counts anywhere
+   * along it): its middle, by default. */
+  [[nodiscard]] virtual Vector2F finishAim() const { return points.back(); }
+
   [[nodiscard]] virtual Vector2F finishDirection() const
   {
     if (points.empty()) return {1.0f, 0.0f};
@@ -1005,9 +1014,8 @@ class TurnDrill final : public CourseDrill
     drawTrail(renderer, draw);
     DrillDraw::marker(renderer, draw, startPoint, 4.0f * scale,
                       IM_COL32(90, 220, 120, 255), "start");
-    DrillDraw::marker(renderer, draw, cone, 6.0f * scale,
-                      IM_COL32(255, 140, 30, 255),
-                      std::format("{:.0f}°", degrees).c_str());
+    DrillDraw::cone(renderer, draw, cone, IM_COL32(255, 140, 30, 255),
+                    std::format("{:.0f}°", degrees).c_str());
     drawFinish(renderer, draw);
     DrillDraw::label(renderer, draw, finishPoint, "finish",
                      IM_COL32(240, 80, 80, 255));
@@ -1128,9 +1136,12 @@ class TurnDrill final : public CourseDrill
  * (he cannot run through the cone), and counts only when run through
  * forwards; going round a cone the wrong side misses it, and he has to come
  * back through it. However wide he goes still counts: closer is just
- * quicker. He aims to pass a set distance outside the cone (his line). The
- * cones can be staggered, each pushed out to the side it is passed on, for
- * a wider weave.
+ * quicker. With the ball, the ball has to go through each gate as well (a
+ * gate is passed once both have). He aims to pass a set distance outside
+ * the cone (his line): through a point there, or, where the course turns
+ * back on itself, to a stop just past the gate, turning there. The cones
+ * can be staggered, each pushed out to the side it is passed on, for a
+ * wider weave.
  */
 class SlalomDrill final : public CourseDrill
 {
@@ -1140,19 +1151,31 @@ class SlalomDrill final : public CourseDrill
   {
     return "Weave through a line of cones, round each on alternate sides, "
            "then sprint through the finish. A cone passed the wrong side has "
-           "to be gone back for; wide is allowed, just slower. Time, splits, "
-           "gates missed and the path run.";
+           "to be gone back for; wide is allowed, just slower. With the ball, "
+           "the ball has to go through each gate too. Time, splits, gates "
+           "missed and the path run.";
   }
 
   std::vector<DrillParameter> parameters() override
   {
     std::vector<DrillParameter> list;
-    list.push_back(setting("Cones", &cones, 2.0f, 12.0f, true));
+    list.push_back(setting("Cones", &cones, 2.0f, 12.0f, true,
+                    "How many cones, as many as fit: the course runs up the "
+                    "pitch from 5 m in from one end to 5 m from the other, so "
+                    "wide spacing takes fewer."));
     list.push_back(setting("Spacing (m)", &spacing, 2.0f, 15.0f, false));
-    list.push_back(setting("Line off the cone (m)", &lineOffset, 0.0f, 3.0f, false,
-                    "Where he aims to pass each cone: this far outside a body's "
-                    "width from it. The gate is the whole of the cone's correct "
-                    "side, so going wider still counts."));
+    DrillParameter lineSetting = setting("Line off the cone (m)", &lineOffset, 0.0f, 3.0f, false,
+                    "Where he aims to pass each cone: his centre this far "
+                    "outside the cone's edge (at least 0.2 m, so his body "
+                    "clears it). Orange: set by the course, 0.6 m on a "
+                    "straight line of cones, out to 0.8 m as the weave gets "
+                    "sharper (stagger up to the spacing), room for the ball, "
+                    "which cuts the corner a little. Move it to set your own; "
+                    "back to 0 to have it set by the course again. The gate is the whole of the "
+                    "cone's correct side, from its edge, so going wider "
+                    "still counts.");
+    lineSetting.automatic = [this] { return courseLine(spacing, coneStagger); };
+    list.push_back(lineSetting);
     list.push_back(setting("Cone stagger (m)", &coneStagger, 0.0f, 6.0f, false,
                     "Each cone pushed this far off the line, to the side it "
                     "is passed on (alternate cones opposite ways): 0 is a "
@@ -1163,11 +1186,16 @@ class SlalomDrill final : public CourseDrill
 
   void begin(MatchEngine& engine, const std::vector<PlayerID>& ids) override
   {
-    const int count = static_cast<int>(cones);
     gap = spacing;
-    line = lineOffset;
+    // As many cones as fit: the finish (a gap past the last cone) as far
+    // in from the far end as the start is from this one.
+    const int fit = static_cast<int>((LENGTH - 2.0f * END_ROOM_METRES) / gap) - 1;
+    const int count = std::clamp(fit, 1, static_cast<int>(cones));
+    conesSet = static_cast<int>(cones);
     stagger = coneStagger;
-    const Vector2F start{0.2f, 0.5f};
+    line = lineOffset > 0.0f ? std::max(lineOffset, MIN_LINE_METRES)
+                             : courseLine(gap, stagger);
+    const Vector2F start{END_ROOM_METRES / LENGTH, 0.5f};
     conePoints.clear();
     std::vector<Vector2F> course;
     for (int cone = 0; cone < count; ++cone)
@@ -1181,10 +1209,20 @@ class SlalomDrill final : public CourseDrill
           along(at, {0.0f, 1.0f}, sideOf(cone) * (GATE_BUFFER_METRES + line)));
     }
     course.push_back(along(start, {1.0f, 0.0f}, gap * static_cast<float>(count + 1)));
+    planAims(start, course);
     missed = 0;
     goingBack = false;
+    backPending = false;
     previous = start;
+    bodyThrough.reset();
+    ballThrough.reset();
     beginCourse(engine, ids, start, std::move(course));
+    // The cones are obstacles: he keeps the ball off them.
+    std::vector<MatchEngine::Obstacle> obstacles;
+    for (const Vector2F& cone : conePoints)
+      obstacles.push_back({cone, DrillDraw::CONE_RADIUS_METRES});
+    engine.setObstacles(std::move(obstacles));
+    previousBall = engine.getBall().position;
   }
 
   bool afterStep(MatchEngine& engine) override
@@ -1192,8 +1230,10 @@ class SlalomDrill final : public CourseDrill
     const MatchPlayer* player = track(engine);
     if (!player) return false;
     followPlan(engine, *player);
+    holdBackPoint(engine, *player);
     if (!finished) passGates(engine, *player);
     previous = player->position;
+    previousBall = engine.getBall().position;
     const double now = secondsOf(engine);
     return !(finished && now > reached.back() + 0.5) && now < 120.0;
   }
@@ -1207,16 +1247,21 @@ class SlalomDrill final : public CourseDrill
     for (std::size_t cone = 0; cone < conePoints.size(); ++cone)
     {
       // The gate, from a body's width out from its cone (open beyond what
-      // is drawn), and the point he aims for: the one due bright.
+      // is drawn), and the point he aims for: the one due bright, red while
+      // he goes back for it (missed), with the point behind it he goes to.
       const bool passed = cone < reached.size();
       const bool due = cone == reached.size();
-      const ImU32 colour = passed ? IM_COL32(120, 120, 120, 200)
-                           : due  ? IM_COL32(255, 255, 255, 240)
-                                  : IM_COL32(255, 255, 255, 120);
+      const ImU32 colour = passed            ? IM_COL32(120, 120, 120, 200)
+                           : due && goingBack ? IM_COL32(240, 80, 80, 255)
+                           : due              ? IM_COL32(255, 255, 255, 240)
+                                              : IM_COL32(255, 255, 255, 120);
       DrillDraw::line(renderer, draw, gateEdge(cone, 0.0f),
                       gateEdge(cone, GATE_DRAWN_METRES), colour, 2.0f * scale);
-      DrillDraw::marker(renderer, draw, points[cone], 2.5f * scale, colour);
-      DrillDraw::marker(renderer, draw, conePoints[cone], 5.0f * scale,
+      DrillDraw::marker(renderer, draw, aims[cone], 2.5f * scale, colour);
+      if (due && goingBack && backPending)
+        DrillDraw::marker(renderer, draw, backPoint(cone), 2.5f * scale, colour,
+                          "back");
+      DrillDraw::cone(renderer, draw, conePoints[cone],
                         IM_COL32(255, 140, 30, 255));
     }
     drawFinish(renderer, draw);
@@ -1229,6 +1274,9 @@ class SlalomDrill final : public CourseDrill
     std::vector<std::string> lines;
     lines.push_back(std::format("{} cones, {:.1f} m apart, staggered {:.1f} m, line {:.1f} m off the cone",
                                 conePoints.size(), gap, stagger, line));
+    if (static_cast<int>(conePoints.size()) < conesSet)
+      lines.push_back(std::format("({} set: only {} fit on the pitch {:.0f} m apart)",
+                                  conesSet, conePoints.size(), gap));
     lines.push_back(runnerLine());
     std::string splits;
     for (std::size_t index = 0; index < reached.size(); ++index)
@@ -1261,17 +1309,17 @@ class SlalomDrill final : public CourseDrill
   }
 
  protected:
-  /** His line round each cone still to pass, from the one due (after a
-   * point back behind it, when he is going back for it), less those his
-   * body has moved on from. */
+  /** His line round each cone still to pass, from the next point due (after
+   * a point back behind the gate, when he is going back for it), less those
+   * his body has moved on from. */
   [[nodiscard]] std::vector<Vector2F> waypointsAhead() const override
   {
     std::vector<Vector2F> list;
     const std::size_t due = reached.size();
-    if (goingBack && due < conePoints.size())
-      list.push_back(along(points[due], {1.0f, 0.0f}, -gap * 0.5f));
-    for (std::size_t gate = due; gate < conePoints.size(); ++gate)
-      list.push_back(points[gate]);
+    if (goingBack && backPending && due < conePoints.size())
+      list.push_back(backPoint(due));
+    list.insert(list.end(), aims.begin() + static_cast<std::ptrdiff_t>(nextAim),
+                aims.end());
     const std::size_t skip = std::min(movedOn, list.size());
     return {list.begin() + static_cast<std::ptrdiff_t>(skip), list.end()};
   }
@@ -1288,6 +1336,22 @@ class SlalomDrill final : public CourseDrill
     return index % 2 == 0 ? -1.0f : 1.0f;
   }
 
+  /** Where he goes back to for a missed gate `cone`: halfway back along the
+   * leg he ran in to it on (half a spacing behind its line), so he comes at
+   * it again as the course does. */
+  [[nodiscard]] Vector2F backPoint(std::size_t cone) const
+  {
+    const Vector2F before = cone == 0 ? startPoint : points[cone - 1];
+    return {(before.x + points[cone].x) * 0.5f, (before.y + points[cone].y) * 0.5f};
+  }
+
+  /** Whether `at` is behind gate `cone`'s line (the side he comes at it
+   * from). */
+  [[nodiscard]] bool behindGate(std::size_t cone, Vector2F at) const
+  {
+    return at.x < conePoints[cone].x;
+  }
+
   /** A point across gate `cone`, `metres` from its inner edge. */
   [[nodiscard]] Vector2F gateEdge(std::size_t cone, float metres) const
   {
@@ -1298,42 +1362,141 @@ class SlalomDrill final : public CourseDrill
   /** The course runs straight down the pitch: its finish is square to it. */
   [[nodiscard]] Vector2F finishDirection() const override { return {1.0f, 0.0f}; }
 
-  /** A gate starts a body's width (his radius) out from its cone. */
-  static constexpr float GATE_BUFFER_METRES =
-      MatchTuning::Player::MINIMUM_BODY_SEPARATION_METRES * 0.5f;
+  /** Straight across the finish from his line round the last cone (the
+   * line counts anywhere along it): level with that, within the line as
+   * drawn. No curving back to its middle. */
+  [[nodiscard]] Vector2F finishAim() const override
+  {
+    if (points.size() < 2) return points.back();
+    const float across =
+        std::clamp((points[points.size() - 2].y - points.back().y) * WIDTH,
+                   -FINISH_AIM_METRES, FINISH_AIM_METRES);
+    return along(points.back(), {0.0f, 1.0f}, across);
+  }
+  /** How far either side of the finish line's middle he may aim (its drawn
+   * half-width, 4 m, less a margin). */
+  static constexpr float FINISH_AIM_METRES = 3.5f;
+
+  /** How far in from each end of the pitch the course starts and finishes
+   * (the run through the finish goes on past it). */
+  static constexpr float END_ROOM_METRES = 5.0f;
+
+  /** A gate starts at its cone's edge (a cone is 20 cm across). */
+  static constexpr float GATE_BUFFER_METRES = DrillDraw::CONE_RADIUS_METRES;
+  /** The least his line may pass outside a cone's edge: his centre a
+   * body's half-width out (a body 40 cm across), so he clears it. */
+  static constexpr float MIN_LINE_METRES = 0.2f;
+  /** His line by the course (the setting at 0): LINE_STRAIGHT_METRES on a
+   * straight line of cones, out to LINE_WEAVE_METRES as the weave sharpens
+   * (stagger up to the spacing), since the ball cuts the corner a little
+   * inside his line and has to go through the gate too. */
+  [[nodiscard]] static float courseLine(float spacing, float stagger)
+  {
+    const float sharpness = std::clamp(stagger / std::max(spacing, 0.1f), 0.0f, 1.0f);
+    return LINE_STRAIGHT_METRES +
+           (LINE_WEAVE_METRES - LINE_STRAIGHT_METRES) * sharpness;
+  }
+  static constexpr float LINE_STRAIGHT_METRES = 0.6f;
+  static constexpr float LINE_WEAVE_METRES = 0.8f;
   /** How much of a gate is drawn (it is open beyond). */
   static constexpr float GATE_DRAWN_METRES = 2.0f;
   /** How far beyond his point round a cone his line may be pushed out to
    * widen the turn (the old 2 m gate's half-width). */
   static constexpr float SWING_ROOM_METRES = 1.0f;
 
+  /** The point he aims for round each cone: his line round it (its point on
+   * the gate), or, where the course turns back on itself there (a sharp
+   * reversal: he stops on the point and turns), STOP_PAST_METRES on past
+   * it the way he comes in, so his run in goes through the gate at his line
+   * and he has been through it when he stops. */
+  void planAims(Vector2F start, const std::vector<Vector2F>& course)
+  {
+    aims.clear();
+    stops.clear();
+    for (std::size_t cone = 0; cone < conePoints.size(); ++cone)
+    {
+      const Vector2F at = course[cone];
+      const Vector2F before = cone == 0 ? start : course[cone - 1];
+      const float reversalDegrees = MatchTuning::Player::SHARP_REVERSAL_DEGREES;
+      const bool reversal =
+          turnDegrees(directionBetween(before, at),
+                      directionBetween(at, course[cone + 1])) >= reversalDegrees;
+      aims.push_back(reversal ? along(at, directionBetween(before, at), STOP_PAST_METRES)
+                              : at);
+      stops.push_back(reversal);
+    }
+    nextAim = 0;
+  }
+  /** How far past the gate a sharp reversal's stop is. */
+  static constexpr float STOP_PAST_METRES = 0.5f;
+
+  /** Going back for a missed gate, he is done with the point behind it only
+   * once he, and the ball, are behind the gate's line: moved on from it
+   * before, it is his point again (he brings the ball back to it). */
+  void holdBackPoint(MatchEngine& engine, const MatchPlayer& player)
+  {
+    const std::size_t due = reached.size();
+    if (!goingBack || !backPending || movedOn == 0 || due >= conePoints.size()) return;
+    if (behindGate(due, player.position) &&
+        (!withBall || behindGate(due, engine.getBall().position)))
+      return;
+    movedOn = 0;
+    planRun(engine);
+  }
+
   /** Across the line of the cone due, forwards: on its side (passed), or
-   * the wrong side (missed: he goes back for it). Then the finish line. */
+   * the wrong side (missed: he goes back for it). With the ball, the ball
+   * has to go through it too: the gate is passed once both have, missed if
+   * either goes the wrong side. Then the finish line. */
   void passGates(MatchEngine& engine, const MatchPlayer& player)
   {
     const std::size_t due = reached.size();
     if (due < conePoints.size())
     {
       const Vector2F cone = conePoints[due];
-      const auto share = crossingShare(previous, player.position, cone, {1.0f, 0.0f});
-      if (!share) return;
-      const float y = previous.y + (player.position.y - previous.y) * *share;
-      const float out = (y - cone.y) * WIDTH * sideOf(due);
-      // What his body had moved on from includes this gate (and the point
-      // behind it, going back), now behind him either way.
-      const std::size_t behind = goingBack ? 2 : 1;
-      if (out >= GATE_BUFFER_METRES)
+      // Across the line, forwards: whether on the gate's side, and when.
+      const auto through = [&](Vector2F from, Vector2F to)
+          -> std::optional<std::pair<bool, double>>
       {
-        reached.push_back(secondsOf(engine) - STEP + STEP * static_cast<double>(*share));
-        movedOn = movedOn > behind ? movedOn - behind : 0;
-        goingBack = false;
-      }
-      else
+        const auto share = crossingShare(from, to, cone, {1.0f, 0.0f});
+        if (!share) return std::nullopt;
+        const float y = from.y + (to.y - from.y) * *share;
+        const float out = (y - cone.y) * WIDTH * sideOf(due);
+        return std::pair{out >= GATE_BUFFER_METRES,
+                         secondsOf(engine) - STEP + STEP * static_cast<double>(*share)};
+      };
+      const auto body = through(previous, player.position);
+      const auto ball =
+          withBall ? through(previousBall, engine.getBall().position) : std::nullopt;
+      if (!body && !ball) return;
+      if ((body && !body->first) || (ball && !ball->first))
       {
         ++missed;
         goingBack = true;
+        backPending = true;
+        nextAim = due;
         movedOn = 0;
+        bodyThrough.reset();
+        ballThrough.reset();
+        planRun(engine);
+        return;
       }
+      if (body) bodyThrough = body->second;
+      if (ball) ballThrough = ball->second;
+      if (!bodyThrough || (withBall && !ballThrough)) return;
+      reached.push_back(withBall ? std::max(*bodyThrough, *ballThrough) : *bodyThrough);
+      // The points his body has moved on from are behind him, and so are
+      // the point behind the gate (going back) and his point round it (a
+      // stop past it is still ahead until he moves on from it).
+      std::size_t skip = movedOn;
+      if (skip > 0 && goingBack && backPending) --skip;
+      nextAim = std::max(std::min(nextAim + skip, aims.size()),
+                         stops[due] ? due : due + 1);
+      movedOn = 0;
+      goingBack = false;
+      backPending = false;
+      bodyThrough.reset();
+      ballThrough.reset();
       planRun(engine);
       return;
     }
@@ -1347,17 +1510,32 @@ class SlalomDrill final : public CourseDrill
 
   float cones = 6.0f;
   float spacing = 5.0f;
-  float lineOffset = 0.5f;
+  float lineOffset = 0.0f;
   float coneStagger = 0.0f;
 
   float gap = 5.0f;
   float line = 0.5f;
+  /** The cones set, of which only as many as fit are laid out. */
+  int conesSet = 6;
   float stagger = 0.0f;
   std::vector<Vector2F> conePoints;
   int missed = 0;
   /** Going back for a missed gate (through the point behind it first). */
   bool goingBack = false;
   Vector2F previous{};
+  Vector2F previousBall{};
+  /** When he, and the ball, went through the gate due (each waits for the
+   * other). */
+  std::optional<double> bodyThrough;
+  /** The point he aims for round each cone (see planAims), and the next
+   * still to aim for. */
+  std::vector<Vector2F> aims;
+  /** Whether each cone's point is a stop past its gate. */
+  std::vector<bool> stops;
+  std::size_t nextAim = 0;
+  /** Going back, and not yet moved on from the point behind the gate. */
+  bool backPending = false;
+  std::optional<double> ballThrough;
 };
 
 // --- Repeated sprints ------------------------------------------------------
@@ -1532,7 +1710,7 @@ class RepeatedSprintsDrill final : public MovementDrill
     crossedAt.reset();
     sentSignal = true;
     steerTo(engine, along(to, directionBetween(from, to), RUN_THROUGH_METRES),
-            true);
+            true, {}, 0.0f, 0.0f, std::nullopt, true);
   }
 
   float reps = 6.0f;
@@ -1899,7 +2077,7 @@ class TurnAndRunDrill final : public MovementDrill
     finishPoint = along(linePoint, secondDirection, secondMetres);
     startRunner(engine, ids, start);
     steerTo(engine, along(linePoint, {1.0f, 0.0f}, RUN_THROUGH_METRES), true, {},
-            0.0f, 0.0f, facingAngleOf(firstBody));
+            0.0f, 0.0f, facingAngleOf(firstBody), true);
     previous = start;
     switchedAt.reset();
     switchSpeed = 0.0f;
@@ -1927,7 +2105,7 @@ class TurnAndRunDrill final : public MovementDrill
         switchSpeed = speed;
         switchFrom = player->position;
         steerTo(engine, along(finishPoint, secondDirection, RUN_THROUGH_METRES),
-                true, {}, 0.0f, 0.0f, facingAngleOf(secondBody));
+                true, {}, 0.0f, 0.0f, facingAngleOf(secondBody), true);
       }
     }
     else if (!settledAt)

@@ -197,6 +197,28 @@ struct MatchTuning final
     /** Lateral acceleration a runner sustains at a standstill / top speed. */
     static constexpr float LATERAL_ACCELERATION_SLOW = 9.0f;
     static constexpr float LATERAL_ACCELERATION_FAST = 5.5f;
+    /** A turn through a waypoint of more than this (degrees) is a sharp
+     * reversal: no corner, he stops on the waypoint (braking as late as he
+     * can) and turns there, as athletes plant and turn rather than curve
+     * round (the angle-velocity trade-off of change-of-direction work, e.g.
+     * Dos'Santos et al. 2018; the threshold a design choice). */
+    static constexpr float SHARP_REVERSAL_DEGREES = 135.0f;
+    /** The plant (sharp reversal): his last PLANT_METRES into the stop are
+     * a planted leg's braking, harder than his run's by a share set by
+     * Agility (low at 1, high at 99), and he brakes later for it; as he
+     * plants, his body twists toward the way out, this far (degrees, by
+     * Agility) off his run. Pushing off out of it, his acceleration is up by
+     * the same kind of share (by Agility) for PUSH_OFF_SECONDS. All design
+     * choices: change-of-direction work has the plant's braking spike and
+     * push-off, not these sizes for a body model like this. */
+    static constexpr float PLANT_METRES = 1.5f;
+    static constexpr float PLANT_BRAKING_GAIN_LOW = 0.25f;
+    static constexpr float PLANT_BRAKING_GAIN_HIGH = 0.75f;
+    static constexpr float PLANT_TWIST_DEGREES_LOW = 45.0f;
+    static constexpr float PLANT_TWIST_DEGREES_HIGH = 90.0f;
+    static constexpr float PUSH_OFF_SECONDS = 0.3f;
+    static constexpr float PUSH_OFF_GAIN_LOW = 0.25f;
+    static constexpr float PUSH_OFF_GAIN_HIGH = 0.75f;
     /** Desired-speed approach to a target (comfortable deceleration). */
     static constexpr float ARRIVAL_DECELERATION = 2.0f;
     static constexpr float ARRIVAL_DEAD_ZONE_METRES = 0.35f;
@@ -499,6 +521,9 @@ struct MatchTuning final
      * he gains on it (a set touch arrives at the arrival share). */
     static constexpr float LOOSE_LEAD_EXTRA_METRES = 0.4f;
     static constexpr float LOOSE_MEAN_PACE_SHARE = 0.95f;
+    /** ...on a push this long or more (Binturong body); a shorter one is
+     * weighted nearer his own pace, all of it at no length. */
+    static constexpr float LOOSE_MEAN_PACE_FULL_METRES = 2.0f;
     static constexpr float LOOSE_ARRIVAL_SHARE = 0.85f;
     /** At least this long between two of his own touches. */
     static constexpr float LOOSE_TOUCH_INTERVAL = 0.25f;
@@ -578,6 +603,14 @@ struct MatchTuning final
     /** A push this long is a knock into space: he runs after it at his full
      * pace, not the dribble's, and means it as hard as it needs. */
     static constexpr float PUSH_CHASE_METRES = 6.0f;
+    /** On a route, a push is aimed where his line will be when it gets there,
+     * but no further along it than a straight roll stays within this much
+     * of the line (m): round a tight turn, it would cut across the inside.
+     * A better dribbler cuts more (his touch true enough to collect it
+     * there), so turns it further per touch: this much with no Dribbling,
+     * up to this with the best. */
+    static constexpr float PUSH_LINE_CUT_POOR_METRES = 0.1f;
+    static constexpr float PUSH_LINE_CUT_BEST_METRES = 0.5f;
     /** Before he means to play it again (3d, design choices), he plays it
      * early with an opponent this close to it (m), or once it is no more
      * than this far ahead of him along its roll (caught). */
@@ -586,6 +619,19 @@ struct MatchTuning final
     /** A push rolls straight: on a route it goes no further into a turn
      * than where the line has curved this far off it. */
     static constexpr float PUSH_LINE_DEVIATION_METRES = 0.5f;
+    /** Into a stop (a sharp reversal) he does not wait for the ball to roll
+     * dead: it gets there with this much pace (m/s) for his touch to stop,
+     * by his Dribbling (poor to best), and a touch within STOP_TOUCH_METRES
+     * of the stop takes all its pace off. Out of the stop he plays the
+     * still ball on once facing within this much (degrees) of the way he
+     * sends it, by Dribbling (a better one before he has turned to it),
+     * or after REVERSAL_HOLD_SECONDS whatever. Design choices. */
+    static constexpr float STOP_MEET_PACE_POOR = 0.5f;
+    static constexpr float STOP_MEET_PACE_BEST = 3.0f;
+    static constexpr float STOP_TOUCH_METRES = 0.5f;
+    static constexpr float REVERSAL_TOUCH_DEGREES_POOR = 30.0f;
+    static constexpr float REVERSAL_TOUCH_DEGREES_BEST = 90.0f;
+    static constexpr float REVERSAL_HOLD_SECONDS = 1.0f;
   };
 
   /** Physical load statistics thresholds (m/s). */

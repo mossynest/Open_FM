@@ -84,6 +84,7 @@ json toJson(const MatchCommandRecord& command)
           {"apex_offset", command.apexOffset},
           {"outward_room", command.outwardRoom},
           {"facing", command.facing ? json(*command.facing) : json(nullptr)},
+          {"at_speed", command.atSpeed},
           {"feed_velocity", json{command.feedVelocity.x, command.feedVelocity.y}},
           {"feed_lift", command.feedLift},
           {"pass_style", static_cast<int>(command.passStyle)}};
@@ -119,6 +120,7 @@ MatchCommandRecord commandFromJson(const json& value)
   if (const auto facing = value.find("facing");
       facing != value.end() && !facing->is_null())
     command.facing = facing->get<float>();
+  command.atSpeed = value.value("at_speed", false);
   if (const auto feed = value.find("feed_velocity"); feed != value.end())
     command.feedVelocity = {feed->at(0).get<float>(), feed->at(1).get<float>()};
   command.feedLift = value.value("feed_lift", 0.0f);

@@ -196,7 +196,7 @@ class AcrossAndBackDrill final : public TrainingDrill
     {
       const float x = FIRST_X + laneWidth * static_cast<float>(edge);
       for (const float y : {NEAR_Y, 0.5f, FAR_Y})
-        DrillDraw::marker(renderer, draw, {x, y}, 3.0f * scale, CONE);
+        DrillDraw::cone(renderer, draw, {x, y}, CONE);
     }
     for (const Lane& lane : lanes)
       if (lane.finish)
@@ -324,8 +324,8 @@ std::optional<float> crossingShare(Vector2F from, Vector2F to, Vector2F point,
  * Pace, Physicality and Acceleration held, Agility 1 to 100 took about 30%
  * off the time; Pace 40 to 95 under 4%; measured with 2 m gates, aimed
  * through their middles). Each gate is the whole of its cone's correct
- * side, from a body's width out: wide still counts, just slower. Runners
- * aim to pass LINE_METRES outside that.
+ * side, from the cone's edge: wide still counts, just slower. Runners
+ * aim to pass LINE_METRES outside that edge.
  */
 class SlalomDrill final : public TrainingDrill
 {
@@ -454,7 +454,7 @@ class SlalomDrill final : public TrainingDrill
       // The gate, open beyond what is drawn.
       DrillDraw::line(renderer, draw, gateEdge(cone, 0.0f),
                       gateEdge(cone, GATE_DRAWN_METRES), LINE, 2.0f * scale);
-      DrillDraw::marker(renderer, draw, cones[cone], 4.0f * scale, CONE);
+      DrillDraw::cone(renderer, draw, cones[cone], CONE);
     }
     DrillDraw::line(renderer, draw, {finish.x, finish.y - half},
                     {finish.x, finish.y + half}, IM_COL32(240, 80, 80, 255),
@@ -532,9 +532,8 @@ class SlalomDrill final : public TrainingDrill
   static constexpr std::size_t CONES = 8;
   static constexpr float SPACING_METRES = 5.0f;
   static constexpr float STAGGER_METRES = 1.0f;
-  /** A gate starts a body's width (his radius) out from its cone. */
-  static constexpr float GATE_BUFFER_METRES =
-      MatchTuning::Player::MINIMUM_BODY_SEPARATION_METRES * 0.5f;
+  /** A gate starts at its cone's edge (a cone is 20 cm across). */
+  static constexpr float GATE_BUFFER_METRES = DrillDraw::CONE_RADIUS_METRES;
   /** Where he aims to pass a cone: this far outside the gate's start. */
   static constexpr float LINE_METRES = 0.5f;
   /** How much of a gate is drawn (it is open beyond). */
@@ -549,6 +548,8 @@ class SlalomDrill final : public TrainingDrill
   static constexpr float ON_THE_START_METRES = 0.5f;
   /** Past the finish he runs on through it (as the Slalom drill's runner). */
   static constexpr float RUN_THROUGH_METRES = 8.0f;
+  /** How far either side of the finish line's middle he may aim. */
+  static constexpr float FINISH_AIM_METRES = 3.5f;
   /** Where the finished stand: beside the course past the finish, out of
    * the way of those still running through it. */
   static constexpr float DONE_BEYOND_METRES = 3.0f;
@@ -674,7 +675,14 @@ class SlalomDrill final : public TrainingDrill
   void plan(MatchEngine& engine, Runner& runner, bool force = false)
   {
     std::vector<Vector2F> ahead = waypointsAhead(runner);
-    const Vector2F end = along(finish, {1.0f, 0.0f}, RUN_THROUGH_METRES);
+    // Straight across the finish from his line round the last cone (the
+    // line counts anywhere along it), within the line as drawn.
+    const float across = gates.empty()
+                             ? 0.0f
+                             : std::clamp((gates.back().y - finish.y) * WIDTH,
+                                          -FINISH_AIM_METRES, FINISH_AIM_METRES);
+    const Vector2F end = along(along(finish, {0.0f, 1.0f}, across), {1.0f, 0.0f},
+                               RUN_THROUGH_METRES);
     const MatchPlayer* player = slotOf(engine, runner.id);
     if (!player) return;
     const auto same = [](Vector2F a, Vector2F b) { return a.x == b.x && a.y == b.y; };
@@ -687,14 +695,15 @@ class SlalomDrill final : public TrainingDrill
       runner.sentTarget = end;
       runner.sentRoute = ahead;
       engine.setDrillTarget(runner.id, end, true, ahead, 0.0f,
-                            SWING_ROOM_METRES);
+                            SWING_ROOM_METRES, std::nullopt, true);
       return;
     }
     const Vector2F target = ahead.empty() ? end : ahead.front();
     if (!force && runner.sentTarget && same(*runner.sentTarget, target)) return;
     runner.sentTarget = target;
     runner.sentRoute.clear();
-    engine.setDrillTarget(runner.id, target, true);
+    engine.setDrillTarget(runner.id, target, true, {}, 0.0f, 0.0f, std::nullopt,
+                          ahead.empty());
   }
 
   /** Moves his plan on as his body moves on from each waypoint. */
@@ -945,7 +954,7 @@ class LapsDrill final : public TrainingDrill
       DrillDraw::line(renderer, draw, corners[corner], corners[(corner + 1) % 4],
                       LINE, 1.5f * scale);
     for (const Vector2F cone : cones)
-      DrillDraw::marker(renderer, draw, cone, 4.0f * scale, CONE);
+      DrillDraw::cone(renderer, draw, cone, CONE);
   }
 
   std::vector<std::string> report() const override

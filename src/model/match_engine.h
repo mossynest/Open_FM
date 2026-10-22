@@ -199,6 +199,10 @@ struct MatchPlayer
    * marked tight, or (Binturong brain) the target's own move since the last
    * plan on the same job; zero on a new job. */
   Vector2F targetVelocity{0.0f, 0.0f};
+  /** He means to reach his tactical target at full speed (running through
+   * it), not to stop on it (a drill's finish; the brain, later). Cleared by
+   * every plan refresh. */
+  bool arriveAtSpeed = false;
   /** A route to the tactical target (Binturong body): movementTarget is the
    * point he heads for now and nextTarget the one after. routeWaypoints is
    * how many of the two are waypoints short of the tactical target (0: both
@@ -230,10 +234,24 @@ struct MatchPlayer
   /** Waypoints reached so far (counts up; the planner reads it to move its
    * plan on). */
   std::uint32_t routeAdvances = 0;
+  /** Seconds since he last made a stop on his route (a sharp reversal:
+   * planted and turned there), counting up; large when none lately. */
+  float sinceStopSeconds = 1.0e6f;
   /** Where the leg to his waypoint began (the waypoint before, or where he
    * was when given it), and that waypoint (body's own bookkeeping). */
   Vector2F routeLegStart{};
   Vector2F routeLegEnd{};
+  /** The point after his waypoint, as his line last had it. */
+  Vector2F routeLegNext{};
+  /** His route moved on before the curve he was on ended, and finishing it
+   * was the quicker way on: his line holds that curve (its leg in, its
+   * waypoint and the way out) to its end, then takes up his route. */
+  bool holdingTurn = false;
+  Vector2F heldLegStart{};
+  Vector2F heldWaypoint{};
+  Vector2F heldNext{};
+  /** Where on the held curve he hands over to his route's line. */
+  Vector2F heldUntil{};
 
   float facingAngle = 0.0f;
   float targetAngle = 0.0f;
@@ -956,6 +974,9 @@ struct MatchCommandRecord
   /** DRILL_TARGET: a body orientation asked of him (MatchPlayer::
    * facingRequest), if any. */
   std::optional<float> facing;
+  /** DRILL_TARGET: he means to reach the target at full speed (running
+   * through it), not to stop on it. */
+  bool atSpeed = false;
   /** FEED_BALL: played from `target` with this velocity along the ground
    * (m/s) and this upward speed (m/s), to `player` (0: loose). */
   Vector2F feedVelocity{0.0f, 0.0f};
@@ -1668,6 +1689,22 @@ class MatchEngine
    */
   void setRecorder(MatchRecorder* recorder) { recorderLink.target = recorder; }
 
+  // --- Obstacles ------------------------------------------------------------
+
+  /** Something on the pitch a dribbler keeps his ball clear of: a drill's
+   * cone now; an opponent's reach, later. */
+  struct Obstacle
+  {
+    /** Normalised pitch. */
+    Vector2F position{0.0f, 0.0f};
+    /** How far round it (m) the ball must not touch. */
+    float radiusMetres = 0.0f;
+  };
+  /** The obstacles on the pitch (none in a match yet; cleared when a
+   * scenario or drill is placed). */
+  void setObstacles(std::vector<Obstacle> list) { obstacles = std::move(list); }
+  const std::vector<Obstacle>& getObstacles() const { return obstacles; }
+
   // --- Drills (the match sandbox's minigames) ------------------------------
   // All opt-in: an engine none of these are called on plays by the Laws.
 
@@ -1721,14 +1758,17 @@ class MatchEngine
    * far inside each the turn's apex may pass (`apexOffsetMetres`; negative
    * is outside) and how far out the line may be pushed to widen it
    * (`outwardRoomMetres`). `facing` asks his body to face that way (an
-   * angle like facingAngle) whichever way he moves. No target releases him
-   * to the planner. Logged and replayed like any manager change.
+   * angle like facingAngle) whichever way he moves. `atSpeed`: he means to
+   * reach it at full speed (running through it), not stop on it. No target
+   * releases him to the planner. Logged and replayed like any manager
+   * change.
    */
   void setDrillTarget(PlayerID playerId, std::optional<Vector2F> target,
                       bool urgent, const std::vector<Vector2F>& route = {},
                       float apexOffsetMetres = 0.0f,
                       float outwardRoomMetres = 0.0f,
-                      std::optional<float> facing = std::nullopt);
+                      std::optional<float> facing = std::nullopt,
+                      bool atSpeed = false);
   /** The target a drill holds for a player, if any. */
   std::optional<Vector2F> getDrillTarget(PlayerID playerId) const;
 
@@ -1785,6 +1825,8 @@ class MatchEngine
   };
   RecorderLink recorderLink;
 
+  std::vector<Obstacle> obstacles;
+
   // Drills (see the public drill section).
   DrillRules drillRules;
   struct DrillTarget
@@ -1798,6 +1840,8 @@ class MatchEngine
     float outwardRoom = 0.0f;
     /** A body orientation asked of him, if any. */
     std::optional<float> facing;
+    /** Reached at full speed, not stopped on. */
+    bool atSpeed = false;
   };
   std::vector<DrillTarget> drillTargets;
   /** Puts a player on a held drill target (and its route). */
@@ -2841,6 +2885,9 @@ class MatchEngine
     float furthest = std::numeric_limits<float>::max();
     /** How hard he brakes toward it (m/s^2), as his body would. */
     float braking = 0.0f;
+    /** The turn is a stop (a sharp reversal): the ball is to get there
+     * with `turnSpeed` left for him to stop it with a touch. */
+    bool stop = false;
   };
   /** `from`: where he plays it (normalised pitch). A Binturong body then
    * aims from there (dribbleOutFromBinturong). */

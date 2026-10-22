@@ -1541,6 +1541,7 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
     // orientation asked: he heads straight for it, his body following.
     player.routeWaypoints = 0;
     player.facingRequested = false;
+    player.arriveAtSpeed = false;
   }
 }
 

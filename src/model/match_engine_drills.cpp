@@ -29,6 +29,7 @@ std::optional<MatchPlayer*> MatchEngine::placeScenario(
     bool resetCondition)
 {
   ball = MatchBall{};
+  obstacles.clear();
   state = scenarioState;
   transitionSecondsRemaining = 0.0f;
   matchTimeMinutes = scenarioMatchTime;
@@ -161,6 +162,7 @@ bool MatchEngine::removeBeforeKickOff(PlayerID playerId)
   player->movementTarget = player->position;
   player->tacticalTarget = player->position;
   player->targetVelocity = {0.0f, 0.0f};
+  player->arriveAtSpeed = false;
   player->routeWaypoints = 0;
   if (ball.possessedBy == player->player) clearPossession();
   return true;
@@ -171,7 +173,7 @@ void MatchEngine::setDrillTarget(PlayerID playerId,
                                  const std::vector<Vector2F>& route,
                                  float apexOffsetMetres,
                                  float outwardRoomMetres,
-                                 std::optional<float> facing)
+                                 std::optional<float> facing, bool atSpeed)
 {
   MatchCommandRecord command;
   command.type = MatchCommandType::DRILL_TARGET;
@@ -184,6 +186,7 @@ void MatchEngine::setDrillTarget(PlayerID playerId,
   command.apexOffset = apexOffsetMetres;
   command.outwardRoom = outwardRoomMetres;
   command.facing = facing;
+  command.atSpeed = atSpeed;
   recordCommand(command);
 }
 
@@ -260,6 +263,7 @@ void MatchEngine::holdDrillTarget(MatchPlayer& player, const DrillTarget& held)
   player.tacticalTarget = held.target;
   player.targetVelocity = {0.0f, 0.0f};
   player.urgentMovement = held.urgent;
+  player.arriveAtSpeed = held.atSpeed;
   // His route: the waypoints in order, then the target.
   player.routeWaypoints = static_cast<std::uint8_t>(held.route.size());
   player.routeApexOffset = held.apexOffset;

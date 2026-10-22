@@ -8,11 +8,13 @@
 
 #include "tools/match_sandbox_drill.h"
 
+#include <algorithm>
 #include <cmath>
 #include <format>
 
 #include "gui/render/imatch_renderer.h"
 #include "gui/view_models/formation.h"
+#include "gui/widgets/theme.h"
 #include "model/lineup.h"
 #include "model/player.h"
 #include "model/strategy.h"
@@ -187,9 +189,22 @@ void Drill::renderSettings()
     }
     else
     {
-      // Small ranges (tuning knobs) need more decimals.
-      ImGui::SliderFloat(parameter.name, &value, parameter.min, parameter.max,
-                         parameter.max - parameter.min < 2.5f ? "%.3f" : "%.1f");
+      // Small ranges (tuning knobs) need more decimals. An automatic
+      // setting shows the value it is set to, in the warning colour, until
+      // moved.
+      const bool automatic = parameter.automatic && value == 0.0f;
+      float shown = automatic ? parameter.automatic() : value;
+      if (automatic)
+      {
+        const ImVec4 warning = Theme::palette().warning;
+        ImGui::PushStyleColor(ImGuiCol_SliderGrab, warning);
+        ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, warning);
+        ImGui::PushStyleColor(ImGuiCol_Text, warning);
+      }
+      if (ImGui::SliderFloat(parameter.name, &shown, parameter.min, parameter.max,
+                             parameter.max - parameter.min < 2.5f ? "%.3f" : "%.1f"))
+        value = shown;
+      if (automatic) ImGui::PopStyleColor(3);
     }
     if (parameter.tooltip && ImGui::IsItemHovered())
       ImGui::SetTooltip("%s", parameter.tooltip);
@@ -232,6 +247,26 @@ void DrillDraw::area(const IMatchRenderer& renderer, ImDrawList& draw,
   line(renderer, draw, {max.x, min.y}, {max.x, max.y}, color, thickness);
   line(renderer, draw, {max.x, max.y}, {min.x, max.y}, color, thickness);
   line(renderer, draw, {min.x, max.y}, {min.x, min.y}, color, thickness);
+}
+
+void DrillDraw::cone(const IMatchRenderer& renderer, ImDrawList& draw,
+                     Vector2F at, ImU32 color, const char* text)
+{
+  // To scale: its radius across the pitch as drawn (at least a pixel).
+  ImVec2 centre;
+  ImVec2 edge;
+  if (!project(renderer, at, centre) ||
+      !project(renderer,
+               {at.x + CONE_RADIUS_METRES / MatchTuning::Pitch::LENGTH_METRES, at.y},
+               edge))
+    return;
+  const float radius =
+      std::max(1.0f, std::hypot(edge.x - centre.x, edge.y - centre.y));
+  // Outlined in its own colour: drawn this small, a dark outline would
+  // swamp the fill.
+  draw.AddCircleFilled(centre, radius, color);
+  draw.AddCircle(centre, radius, color, 0, 1.5f);
+  if (text) label(renderer, draw, at, text, color);
 }
 
 void DrillDraw::marker(const IMatchRenderer& renderer, ImDrawList& draw,

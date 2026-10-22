@@ -177,6 +177,22 @@
    * ball.dribbleGoal. Metric unit; none when he is at his goal. */
   std::optional<Vector2F> dribbleOutFromBinturong(const MatchPlayer& player,
                                                   Vector2F from) const;
+  /** On a route, the way from `from` (normalised pitch) to where his line
+   * will be `metres` on, traced along it (into a bend, a push angled into
+   * it lands back on his line), clear of obstacles (`metres` shortened when
+   * it is turned round one). Metric unit; none off a route. */
+  std::optional<Vector2F> dribbleOutAlongBinturong(const MatchPlayer& player,
+                                                   Vector2F from,
+                                                   float& metres) const;
+  /** A push from `start` (metres) along `direction` (metric unit) for
+   * `metres`, turned round any obstacle it would touch or pass the other
+   * side of from him, to just clear it on his side (the side the leg he is
+   * on goes round it by, else the side the ball is already passing it), and
+   * then no longer than takes it past it.
+   * `player` is whose push it is (whose opponents, when they are
+   * obstacles). Metric unit. */
+  Vector2F clearOfObstaclesBinturong(const MatchPlayer& player, Vector2F start,
+                                     Vector2F direction, float& metres) const;
   /** Plans the dribbler's next meet with his collected ball (ball.meet*):
    * the earliest point of its roll he can reach at the pace he wants, and
    * where his touch there sends it. Sets his target to the meet point. */
@@ -186,10 +202,12 @@
    * (dribble meet plan 2b). */
   void shapeMeetForStrikeBinturong(const MatchPlayer& owner);
   /** His average speed (m/s) over `seconds` from `startSpeed`, speeding
-   * up toward `target` as hard as his legs allow (the body's a(v)). */
+   * up toward `target` as hard as his legs allow (the body's a(v)); and,
+   * into `speedingUpShare`, the share of the time before he gets there. */
   float dribbleReachablePaceBinturong(const MatchPlayer& player,
                                       float startSpeed, float target,
-                                      float seconds) const;
+                                      float seconds,
+                                      float* speedingUpShare = nullptr) const;
   /** How close (m) he means to have his own ball when he plays it: the
    * comfort gap with perfect Dribbling, out to the strike reach with
    * none. */

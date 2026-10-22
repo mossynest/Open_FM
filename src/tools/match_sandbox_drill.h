@@ -11,6 +11,7 @@
 #include <imgui.h>
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -66,6 +67,10 @@ struct DrillParameter
   std::vector<const char*> choices;
   /** A heading shown above this setting (and the ones after it). */
   const char* section = nullptr;
+  /** When set, a value of 0 means set automatically: the slider shows what
+   * this returns, in the warning colour, and moving it gives the setting
+   * its own value (back to 0 is automatic again). */
+  std::function<float()> automatic;
 };
 
 /** A named set of a drill's settings (a situation to start from); settings
@@ -178,9 +183,15 @@ void label(const IMatchRenderer& renderer, ImDrawList& draw, Vector2F at,
 /** An area of the pitch (a cordon), as a rectangle. */
 void area(const IMatchRenderer& renderer, ImDrawList& draw, Vector2F min,
           Vector2F max, ImU32 color, float thickness);
-/** A round marker (cone, flag, spot) with an optional label beside it. */
+/** A round marker (flag, spot) with an optional label beside it. */
 void marker(const IMatchRenderer& renderer, ImDrawList& draw, Vector2F at,
             float radius, ImU32 color, const char* text = nullptr);
+/** A training cone's radius (m): 20 cm across. */
+inline constexpr float CONE_RADIUS_METRES = 0.1f;
+/** A training cone, drawn to scale (CONE_RADIUS_METRES), with an optional
+ * label beside it. */
+void cone(const IMatchRenderer& renderer, ImDrawList& draw, Vector2F at,
+          ImU32 color, const char* text = nullptr);
 /** A path through pitch points. */
 void path(const IMatchRenderer& renderer, ImDrawList& draw,
           const std::vector<Vector2F>& points, ImU32 color, float thickness);

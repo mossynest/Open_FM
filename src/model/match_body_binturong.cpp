@@ -26,6 +26,8 @@
 #include <cmath>
 #include <limits>
 #include <numbers>
+#include <optional>
+#include <vector>
 #include <tuple>
 #include <utility>
 
@@ -59,8 +61,28 @@ constexpr float NEAR_POINT_SECONDS = 0.5f;
 // Dribbling, he runs his corner to the meet only with the meet ahead of his
 // run (within about 60 degrees of it); beside or behind him, straight to it.
 constexpr float MEET_AHEAD_COSINE = 0.5f;
+// On a route, his run coming round onto his line is capped like a turn once
+// it is this far off it (about 5 degrees; less is steering), with at least
+// this much room (m) to make it in.
+constexpr float HEADING_TURN_MIN_RADIANS = 0.09f;
+constexpr float HEADING_ROOM_MIN_METRES = 1.0f;
+// Below this speed (m/s) a curve his route has moved on from is not held:
+// he simply takes up his new line.
+constexpr float HOLD_TURN_MIN_SPEED = 1.0f;
+// Holding a curve is timed round it in steps of this length (m), at most
+// this many.
+constexpr float HOLD_TRACE_METRES = 0.25f;
+constexpr int HOLD_TRACE_STEPS = 64;
+// His route aim (the point his dribble aim reads) is at least this far on
+// (seconds at his speed) along his line.
+constexpr float ROUTE_AIM_LEAD_SECONDS = 0.5f;
 // He is on the arc of a turn within this much of it (else joining it).
 constexpr float ON_ARC_METRES = 0.5f;
+// Pivoting: from a standstill he can push off in any direction; on the move
+// he speeds up or brakes along his run and turns within a lateral limit.
+// The second takes over gradually, fully from this speed (no cliff). A stop
+// on his route is made once he is this slow on it: he can turn there.
+constexpr float PIVOT_BLEND_SPEED = 1.2f;
 
 Vector2F rotatedBy(Vector2F vector, float angle)
 {
@@ -81,19 +103,33 @@ Vector2F unitOf(Vector2F vector)
 // passes `apexOffset` inside the waypoint (negative: outside), and the line
 // may be pushed out up to `outwardRoom` at the corner to widen it; the turn
 // starts no more than half the shorter leg before the corner. Straight on
-// is no turn; a turn straight back (or a leg of no length) is a stop on the
-// spot.
+// is no turn; a sharp reversal (or a leg of no length) is a stop on the
+// spot. Where its curve would run the length of a leg's half (no straight
+// before the next turn's), it is joined: two arcs meeting at the apex, each
+// from the middle of a leg, where the curve before or after it takes over.
 struct Turn
 {
   bool straight = false;
-  /** 0: a stop at `spot`. */
+  /** 0: a stop at `spot`. The tighter arc's, when joined. */
   float radius = 0.0f;
+  /** The arc's centre (joined: the arc in's). */
   Vector2F centre{};
   /** +1 turning left (anticlockwise), -1 right. */
   float sense = 1.0f;
   Vector2F spot{};
   /** How far before the waypoint it starts (about). */
   float lead = 0.0f;
+  /** Joined: the arc in (from the middle of the leg in to the apex) and the
+   * arc out (from the apex to the middle of the leg out), the apex and the
+   * way through it, and where the curve starts and ends. */
+  bool joined = false;
+  float radiusIn = 0.0f;
+  float radiusOut = 0.0f;
+  Vector2F centreOut{};
+  Vector2F apex{};
+  Vector2F way{};
+  Vector2F entry{};
+  Vector2F end{};
 };
 
 Turn turnThrough(Vector2F from, Vector2F waypoint, Vector2F to,
@@ -119,10 +155,14 @@ Turn turnThrough(Vector2F from, Vector2F waypoint, Vector2F to,
     turn.radius = STRAIGHT_ON_RADIUS;
     return turn;
   }
-  // A stop on a spot outside the waypoint passes outside it.
+  // A stop on a spot outside the waypoint passes outside it. A sharp
+  // reversal is a stop: he plants and turns rather than curving round.
   turn.spot = {waypoint.x + inward.x * std::min(apexOffset, 0.0f),
                waypoint.y + inward.y * std::min(apexOffset, 0.0f)};
-  if (halfCos < 1e-3f) return turn;
+  const float reversalDegrees = MatchTuning::Player::SHARP_REVERSAL_DEGREES;
+  if (halfCos < 1e-3f ||
+      cosine < std::cos(reversalDegrees * std::numbers::pi_v<float> / 180.0f))
+    return turn;
   const float halfTan = halfSin / halfCos;
   // The apex of an arc of radius r lies r (1 / cos(phi/2) - 1) inside the
   // corner its legs meet at.
@@ -133,28 +173,86 @@ Turn turnThrough(Vector2F from, Vector2F waypoint, Vector2F to,
   if (radius < 0.05f) return turn;
   // The corner moves out as far as it must to put the apex where asked.
   const float shift = std::max(0.0f, radius * bulge - apexOffset);
+  turn.sense = in.x * out.y - in.y * out.x >= 0.0f ? 1.0f : -1.0f;
+  // Its curve reaching halfway along a leg (no room for a straight before
+  // the next turn's), and moved out for its apex: moved out, it would cross
+  // the next turn's curve rather than meet it. Joined instead: an arc in
+  // from the middle of the leg in to the apex, the way between the legs
+  // there, and an arc out from it to the middle of the leg out, where the
+  // next turn's arc in takes over (with the same way, a slalom's next turn
+  // being the mirror of this one).
+  const bool halfLegs =
+      0.5f * std::min(inLength, outLength) / halfTan <= (outwardRoom + apexOffset) / bulge;
+  if (halfLegs && shift > 0.0f)
+  {
+    const Vector2F apex{waypoint.x + inward.x * apexOffset,
+                        waypoint.y + inward.y * apexOffset};
+    const Vector2F way =
+        unitOf({in.x / inLength + out.x / outLength, in.y / inLength + out.y / outLength});
+    // The radius of the arc through the apex (along `way` there) and `middle`.
+    const auto arcTo = [&](Vector2F middle)
+    {
+      const Vector2F offset{middle.x - apex.x, middle.y - apex.y};
+      const float across = offset.x * inward.x + offset.y * inward.y;
+      const float along = offset.x * way.x + offset.y * way.y;
+      return across > 1e-3f ? (along * along + across * across) / (2.0f * across) : 0.0f;
+    };
+    const Vector2F entry{waypoint.x - in.x * 0.5f, waypoint.y - in.y * 0.5f};
+    const Vector2F end{waypoint.x + out.x * 0.5f, waypoint.y + out.y * 0.5f};
+    const float radiusIn = arcTo(entry);
+    const float radiusOut = arcTo(end);
+    if (radiusIn >= 0.05f && radiusOut >= 0.05f)
+    {
+      turn.joined = true;
+      turn.radiusIn = radiusIn;
+      turn.radiusOut = radiusOut;
+      turn.radius = std::min(radiusIn, radiusOut);
+      turn.centre = {apex.x + inward.x * radiusIn, apex.y + inward.y * radiusIn};
+      turn.centreOut = {apex.x + inward.x * radiusOut, apex.y + inward.y * radiusOut};
+      turn.apex = apex;
+      turn.way = way;
+      turn.entry = entry;
+      turn.end = end;
+      turn.lead = 0.5f * inLength;
+      return turn;
+    }
+  }
   turn.radius = radius;
   turn.centre = {waypoint.x + inward.x * (radius / halfCos - shift),
                  waypoint.y + inward.y * (radius / halfCos - shift)};
-  turn.sense = in.x * out.y - in.y * out.x >= 0.0f ? 1.0f : -1.0f;
   turn.lead = radius * halfTan;
   return turn;
+}
+
+// The way along an arc (centre, sense) at `point` on it.
+Vector2F arcHeading(Vector2F centre, float sense, Vector2F point)
+{
+  const Vector2F radial = unitOf({point.x - centre.x, point.y - centre.y});
+  return {-radial.y * sense, radial.x * sense};
 }
 
 // Where his line through the turn points from `position` (metres), going
 // on to `next`, and how far it is to the start of the turn: off the arc,
 // the point where he joins it; on it, along it (aiming where it will be
 // after `ahead` metres), closing any offset over the near-point time at
-// `speed`. Also whether he has reached the arc's exit line to `next`.
+// `speed`. Also whether he has reached the arc's exit line to `next` (or
+// come within WAYPOINT_REACHED_METRES of the waypoint at or past the apex,
+// when `reachCounts`).
 struct LineAim
 {
   Vector2F direction{};
   float toTurn = 0.0f;
   bool exited = false;
+  /** On a curve: moved on only by coming that close to the waypoint, short
+   * of where the curve ends. */
+  bool reachedEarly = false;
+  /** On a curve: where it ends, and the way on from there. */
+  Vector2F exit{};
+  Vector2F exitHeading{};
 };
 
 LineAim aimThrough(const Turn& turn, Vector2F waypoint, Vector2F position,
-                   Vector2F next, float speed, float ahead)
+                   Vector2F next, float speed, float ahead, bool reachCounts = true)
 {
   LineAim aim;
   const Vector2F toWaypoint{waypoint.x - position.x, waypoint.y - position.y};
@@ -166,7 +264,7 @@ LineAim aimThrough(const Turn& turn, Vector2F waypoint, Vector2F position,
     aim.direction = unitOf(toWaypoint);
     aim.toTurn = waypointMetres;
     const Vector2F onward = unitOf({next.x - waypoint.x, next.y - waypoint.y});
-    aim.exited = waypointMetres <= WAYPOINT_REACHED_METRES ||
+    aim.exited = (reachCounts && waypointMetres <= WAYPOINT_REACHED_METRES) ||
                  -toWaypoint.x * onward.x - toWaypoint.y * onward.y >= 0.0f;
     return aim;
   }
@@ -175,7 +273,59 @@ LineAim aimThrough(const Turn& turn, Vector2F waypoint, Vector2F position,
     const Vector2F toSpot{turn.spot.x - position.x, turn.spot.y - position.y};
     aim.direction = unitOf(toSpot);
     aim.toTurn = std::sqrt(toSpot.x * toSpot.x + toSpot.y * toSpot.y);
-    aim.exited = aim.toTurn <= WAYPOINT_REACHED_METRES;
+    // Made once he is on it (within reach of it: with the ball he stops
+    // where he stops it) and slow enough to turn there.
+    aim.exited = aim.toTurn <= MatchTuning::Dribble::STOP_TOUCH_METRES &&
+                 speed <= PIVOT_BLEND_SPEED;
+    return aim;
+  }
+  // Along an arc (centre, radius): joined to it from off it, or along it
+  // and back onto it.
+  const auto follow = [&](Vector2F centre, float r)
+  {
+    const Vector2F fromCentre{position.x - centre.x, position.y - centre.y};
+    const float d =
+        std::sqrt(fromCentre.x * fromCentre.x + fromCentre.y * fromCentre.y);
+    const Vector2F radial = unitOf(fromCentre);
+    if (d > r)
+    {
+      const Vector2F t =
+          rotatedBy(radial, turn.sense * std::acos(std::min(r / d, 1.0f)));
+      const Vector2F join{centre.x + t.x * r, centre.y + t.y * r};
+      const Vector2F toJoin{join.x - position.x, join.y - position.y};
+      aim.toTurn = std::sqrt(toJoin.x * toJoin.x + toJoin.y * toJoin.y);
+      if (aim.toTurn > 1e-3f)
+      {
+        aim.direction = {toJoin.x / aim.toTurn, toJoin.y / aim.toTurn};
+        return;
+      }
+    }
+    const Vector2F along = rotatedBy(
+        Vector2F{-radial.y * turn.sense, radial.x * turn.sense},
+        turn.sense * ahead / r);
+    const float correction =
+        (d - r) / (NEAR_POINT_SECONDS * std::max(speed, 1.0f));
+    aim.direction = unitOf(
+        {along.x - radial.x * correction, along.y - radial.y * correction});
+    aim.toTurn = 0.0f;
+  };
+  if (turn.joined)
+  {
+    // The arc in up to the apex, the arc out past it; done at the middle of
+    // the leg out (where the next turn's curve takes over), not on reaching
+    // the waypoint.
+    const bool pastApex = (position.x - turn.apex.x) * turn.way.x +
+                              (position.y - turn.apex.y) * turn.way.y >=
+                          0.0f;
+    aim.exit = turn.end;
+    aim.exitHeading = arcHeading(turn.centreOut, turn.sense, turn.end);
+    aim.exited = pastApex && (position.x - turn.end.x) * aim.exitHeading.x +
+                                     (position.y - turn.end.y) * aim.exitHeading.y >=
+                                 0.0f;
+    if (pastApex)
+      follow(turn.centreOut, turn.radiusOut);
+    else
+      follow(turn.centre, turn.radiusIn);
     return aim;
   }
   const float r = turn.radius;
@@ -209,42 +359,107 @@ LineAim aimThrough(const Turn& turn, Vector2F waypoint, Vector2F position,
   // swung wide of it (else, wide, he would be sent round to join it again).
   const Vector2F exitRadial = unitOf({exit.x - turn.centre.x,
                                       exit.y - turn.centre.y});
-  aim.exited = waypointMetres <= WAYPOINT_REACHED_METRES ||
-               (d <= r * 1.5f + ON_ARC_METRES &&
-                radial.x * exitRadial.x + radial.y * exitRadial.y > 0.0f &&
-                (position.x - exit.x) * exitHeading.x +
-                        (position.y - exit.y) * exitHeading.y >=
-                    0.0f);
-  if (d > r)
-  {
-    // Off the arc: to the point where he joins it.
-    const Vector2F t =
-        rotatedBy(radial, turn.sense * std::acos(std::min(r / d, 1.0f)));
-    const Vector2F join{turn.centre.x + t.x * r, turn.centre.y + t.y * r};
-    const Vector2F toJoin{join.x - position.x, join.y - position.y};
-    aim.toTurn = std::sqrt(toJoin.x * toJoin.x + toJoin.y * toJoin.y);
-    if (aim.toTurn > 1e-3f)
-    {
-      aim.direction = {toJoin.x / aim.toTurn, toJoin.y / aim.toTurn};
-      return aim;
-    }
-  }
-  // On it: along it, where it will be after this step, and back onto it.
-  const Vector2F along = rotatedBy(
-      Vector2F{-radial.y * turn.sense, radial.x * turn.sense},
-      turn.sense * ahead / r);
-  const float correction =
-      (d - r) / (NEAR_POINT_SECONDS * std::max(speed, 1.0f));
-  aim.direction = unitOf(
-      {along.x - radial.x * correction, along.y - radial.y * correction});
-  aim.toTurn = 0.0f;
+  const bool pastExit =
+      d <= r * 1.5f + ON_ARC_METRES &&
+      radial.x * exitRadial.x + radial.y * exitRadial.y > 0.0f &&
+      (position.x - exit.x) * exitHeading.x + (position.y - exit.y) * exitHeading.y >=
+          0.0f;
+  // Close to the waypoint counts only once he is level with the apex or past
+  // it (round from the centre): on a tight, slow curve he is that close well
+  // before it, with most of the turn still to make.
+  const Vector2F apexRadial = unitOf({waypoint.x - turn.centre.x,
+                                      waypoint.y - turn.centre.y});
+  const bool pastApex =
+      turn.sense * (apexRadial.x * radial.y - apexRadial.y * radial.x) >= 0.0f &&
+      apexRadial.x * radial.x + apexRadial.y * radial.y > 0.0f;
+  const bool reached = waypointMetres <= WAYPOINT_REACHED_METRES && pastApex;
+  aim.exited = (reachCounts && reached) || pastExit;
+  aim.reachedEarly = reached && !pastExit;
+  aim.exit = exit;
+  aim.exitHeading = exitHeading;
+  // Off the arc, to the point where he joins it; on it, along it, where it
+  // will be after this step, and back onto it.
+  follow(turn.centre, r);
   return aim;
 }
 
-// Pivoting: from a standstill he can push off in any direction; on the move
-// he speeds up or brakes along his run and turns within a lateral limit.
-// The second takes over gradually, fully from this speed (no cliff).
-constexpr float PIVOT_BLEND_SPEED = 1.2f;
+// How far `point` is off his line through the turn (metres): the leg in
+// from `from` to the arc, round it, and the leg out from it to `next`.
+float metresOffLine(const Turn& turn, Vector2F from, Vector2F waypoint,
+                    Vector2F next, Vector2F point)
+{
+  const auto toSegment = [&](Vector2F a, Vector2F b)
+  {
+    const Vector2F ab{b.x - a.x, b.y - a.y};
+    const float squared = ab.x * ab.x + ab.y * ab.y;
+    const float share =
+        squared > 1e-6f
+            ? std::clamp(((point.x - a.x) * ab.x + (point.y - a.y) * ab.y) /
+                             squared,
+                         0.0f, 1.0f)
+            : 0.0f;
+    return std::hypot(point.x - a.x - ab.x * share,
+                      point.y - a.y - ab.y * share);
+  };
+  if (turn.straight)
+    return std::min(toSegment(from, waypoint), toSegment(waypoint, next));
+  if (turn.radius <= 0.0f)
+    return std::min(toSegment(from, turn.spot), toSegment(turn.spot, next));
+  if (turn.joined)
+  {
+    // Off an arc (centre, radius) from `start` to `stop`, if beside it.
+    const auto offArc = [&](Vector2F centre, float r, Vector2F start, Vector2F stop)
+    {
+      const Vector2F a{start.x - centre.x, start.y - centre.y};
+      const Vector2F b{stop.x - centre.x, stop.y - centre.y};
+      const Vector2F p{point.x - centre.x, point.y - centre.y};
+      const auto round = [&](Vector2F v)
+      {
+        const float angle =
+            turn.sense * std::atan2(a.x * v.y - a.y * v.x, a.x * v.x + a.y * v.y);
+        return angle < 0.0f ? angle + 2.0f * std::numbers::pi_v<float> : angle;
+      };
+      return round(p) <= round(b) ? std::abs(std::hypot(p.x, p.y) - r)
+                                  : std::numeric_limits<float>::max();
+    };
+    return std::min({toSegment(from, turn.entry),
+                     offArc(turn.centre, turn.radiusIn, turn.entry, turn.apex),
+                     offArc(turn.centreOut, turn.radiusOut, turn.apex, turn.end),
+                     toSegment(turn.end, next)});
+  }
+  const float r = turn.radius;
+  // Where a leg from `outside` meets the arc (as aimThrough() joins and
+  // leaves it).
+  const auto touching = [&](Vector2F outside, float sense)
+  {
+    const Vector2F fromCentre{outside.x - turn.centre.x,
+                              outside.y - turn.centre.y};
+    const float d = std::hypot(fromCentre.x, fromCentre.y);
+    const Vector2F radial = unitOf(fromCentre);
+    const Vector2F t =
+        d > r ? rotatedBy(radial, sense * std::acos(r / d)) : radial;
+    return Vector2F{turn.centre.x + t.x * r, turn.centre.y + t.y * r};
+  };
+  const Vector2F entry = touching(from, turn.sense);
+  const Vector2F exit = touching(next, -turn.sense);
+  // How far round the arc from its entry, the way it turns.
+  const auto around = [&](Vector2F at)
+  {
+    const Vector2F e{entry.x - turn.centre.x, entry.y - turn.centre.y};
+    const Vector2F a{at.x - turn.centre.x, at.y - turn.centre.y};
+    const float angle =
+        turn.sense * std::atan2(e.x * a.y - e.y * a.x, e.x * a.x + e.y * a.y);
+    return angle < 0.0f ? angle + 2.0f * std::numbers::pi_v<float> : angle;
+  };
+  const float onArc =
+      around(point) <= around(exit)
+          ? std::abs(std::hypot(point.x - turn.centre.x,
+                                point.y - turn.centre.y) -
+                     r)
+          : std::numeric_limits<float>::max();
+  return std::min({toSegment(from, entry), onArc, toSegment(exit, next)});
+}
+
 // Fatigue tiers (fatigue plan 4.5): each effect is a loss from the fresh
 // value as a function of fuel left, in straight lines between these points:
 // none from full down to 60%; the match research's at 30% (sprint ~3%
@@ -602,6 +817,175 @@ inline float tieredMovement(float fuel)
 {
   return 1.0f - tierLoss(MOVEMENT_LOSS, fuel);
 }
+
+/** One turn of his line (metres): the leg in from `from`, its waypoint, the
+ * way on to `next`. `held`: a curve he is finishing after his route moved
+ * on past its waypoint (done where the curve ends, not on reaching the
+ * waypoint). */
+struct LineLeg
+{
+  Vector2F from{};
+  Vector2F waypoint{};
+  Vector2F next{};
+  bool held = false;
+};
+
+/** His line's turns from now, in order: a curve he is holding, then the one
+ * at his waypoint, then the one at the waypoint after (on into `end`,
+ * metres). Empty off a route. */
+std::vector<LineLeg> lineLegsOf(const MatchPlayer& player, Vector2F end)
+{
+  std::vector<LineLeg> legs;
+  if (player.routeWaypoints <= 0) return legs;
+  if (player.holdingTurn)
+    legs.push_back({toMetres(player.heldLegStart), toMetres(player.heldWaypoint),
+                    toMetres(player.heldNext), true});
+  legs.push_back({toMetres(player.routeLegStart), toMetres(player.movementTarget),
+                  toMetres(player.nextTarget), false});
+  if (player.routeWaypoints > 1)
+    legs.push_back({toMetres(player.movementTarget), toMetres(player.nextTarget), end,
+                    false});
+  return legs;
+}
+
+/** The fastest he can run a curve of `radius` (m): where his lateral limit
+ * holds him on it, as the movement kernel has it. */
+float cornerSpeedOf(const MatchPlayer& player, float radius)
+{
+  using P = MatchTuning::Player;
+  const float grip = playerGrip(player) * tieredMovement(player.stamina);
+  const float b = (P::LATERAL_ACCELERATION_SLOW - P::LATERAL_ACCELERATION_FAST) *
+                  grip * radius / std::max(player.maxSpeed, EPSILON);
+  const float c = P::LATERAL_ACCELERATION_SLOW * grip * radius;
+  return 0.5f * (std::sqrt(b * b + 4.0f * c) - b);
+}
+
+/** Seconds from `from` (metres), running along `heading` at `speed`, onto
+ * his line through `leg` and on to its waypoint: held, while he comes round
+ * onto it, to what the movement kernel's joining cap allows (that angle
+ * turned within the room before the line's turn, at least
+ * HEADING_ROOM_MIN_METRES), at `speed` otherwise. */
+float joinSecondsOf(const MatchPlayer& player, Vector2F from, Vector2F heading,
+                    float speed, const LineLeg& leg)
+{
+  const Turn turn = turnThrough(leg.from, leg.waypoint, leg.next,
+                                player.routeApexOffset, player.routeOutwardRoom);
+  const LineAim aim =
+      aimThrough(turn, leg.waypoint, from, leg.next, speed, 0.0f, false);
+  const Vector2F join{from.x + aim.direction.x * aim.toTurn,
+                      from.y + aim.direction.y * aim.toTurn};
+  const float metres =
+      aim.toTurn + length({leg.waypoint.x - join.x, leg.waypoint.y - join.y});
+  const float off = std::acos(std::clamp(
+      heading.x * aim.direction.x + heading.y * aim.direction.y, -1.0f, 1.0f));
+  if (off <= HEADING_TURN_MIN_RADIANS) return metres / speed;
+  const float room = std::max(aim.toTurn, HEADING_ROOM_MIN_METRES);
+  const float joining = std::min(speed, cornerSpeedOf(player, room / off));
+  const float slowMetres = std::min(metres, room);
+  return slowMetres / joining + (metres - slowMetres) / speed;
+}
+
+/** His route has moved on to `waypoint` (then `next`, metres) while he is
+ * on the curve `held`: where to hand over (metres) if holding it until his
+ * new line (planned from the held waypoint) points the way the curve has
+ * him running (within HEADING_TURN_MIN_RADIANS), but no further than where
+ * that line's turn starts (so he takes it whole) or the curve ends, then
+ * taking up that line, gets him to `waypoint` sooner than taking
+ * up his new line now (its leg in from `switchFrom`). Not when he is not on
+ * the curve or is past its end (none then, or when holding is no quicker).
+ * Each way is timed at his speed now, held to what the curve, and coming
+ * round onto his line, allow. */
+std::optional<Vector2F> holdTurnHandoverOf(const MatchPlayer& player,
+                                           const LineLeg& held, Vector2F waypoint,
+                                           Vector2F next, Vector2F switchFrom)
+{
+  const float speed = length(player.velocity);
+  if (speed < HOLD_TURN_MIN_SPEED) return std::nullopt;
+  const Turn turn = turnThrough(held.from, held.waypoint, held.next,
+                                player.routeApexOffset, player.routeOutwardRoom);
+  if (turn.straight || turn.radius <= 0.0f) return std::nullopt;
+  const Vector2F at = toMetres(player.position);
+  const LineAim aim =
+      aimThrough(turn, held.waypoint, at, held.next, speed, 0.0f, false);
+  if (aim.exited || aim.toTurn > ON_ARC_METRES) return std::nullopt;
+  const LineLeg onwardLeg{held.waypoint, waypoint, next, false};
+  if (turn.joined)
+  {
+    // A joined curve hands over where it ends (the middle of the leg out,
+    // where the next turn's curve starts, the same way): the rest of it,
+    // round the arc in to the apex and the arc out, or the arc out alone.
+    const auto round = [&](Vector2F centre, Vector2F from, Vector2F to)
+    {
+      const Vector2F a = unitOf({from.x - centre.x, from.y - centre.y});
+      const Vector2F b = unitOf({to.x - centre.x, to.y - centre.y});
+      return std::max(0.0f, turn.sense * std::atan2(a.x * b.y - a.y * b.x,
+                                                    a.x * b.x + a.y * b.y));
+    };
+    const bool pastApex =
+        (at.x - turn.apex.x) * turn.way.x + (at.y - turn.apex.y) * turn.way.y >= 0.0f;
+    const float rest =
+        pastApex ? turn.radiusOut * round(turn.centreOut, at, turn.end)
+                 : turn.radiusIn * round(turn.centre, at, turn.apex) +
+                       turn.radiusOut * round(turn.centreOut, turn.apex, turn.end);
+    const float holding =
+        (aim.toTurn + rest) / std::min(speed, cornerSpeedOf(player, turn.radius)) +
+        joinSecondsOf(player, aim.exit, aim.exitHeading, speed, onwardLeg);
+    const float switching =
+        joinSecondsOf(player, at, unitOf(player.velocity), speed,
+                      {switchFrom, waypoint, next, false});
+    if (holding >= switching) return std::nullopt;
+    return aim.exit;
+  }
+  // Round the curve in short steps, to where his new line takes over.
+  const LineLeg onward{held.waypoint, waypoint, next, false};
+  const Turn onwardTurn = turnThrough(onward.from, waypoint, next,
+                                      player.routeApexOffset, player.routeOutwardRoom);
+  const float r = turn.radius;
+  const Vector2F exitRadial =
+      unitOf({aim.exit.x - turn.centre.x, aim.exit.y - turn.centre.y});
+  Vector2F radial = unitOf({at.x - turn.centre.x, at.y - turn.centre.y});
+  Vector2F point{turn.centre.x + radial.x * r, turn.centre.y + radial.y * r};
+  Vector2F heading{-radial.y * turn.sense, radial.x * turn.sense};
+  float arcMetres = aim.toTurn;
+  const float aligned = std::cos(HEADING_TURN_MIN_RADIANS);
+  // Where his new line's turn starts (on its leg in from the held waypoint):
+  // he hands over by then, so as to take that turn whole.
+  const LineAim intoOnward =
+      aimThrough(onwardTurn, waypoint, held.waypoint, next, speed, 0.0f);
+  for (int step = 0; step < HOLD_TRACE_STEPS; ++step)
+  {
+    const float along = (point.x - held.waypoint.x) * intoOnward.direction.x +
+                        (point.y - held.waypoint.y) * intoOnward.direction.y;
+    if (along >= intoOnward.toTurn) break;
+    const LineAim onwardAim =
+        aimThrough(onwardTurn, waypoint, point, next, speed, 0.0f);
+    const float match =
+        heading.x * onwardAim.direction.x + heading.y * onwardAim.direction.y;
+    if (match >= aligned) break;
+    const float left = turn.sense * std::atan2(radial.x * exitRadial.y -
+                                                   radial.y * exitRadial.x,
+                                               radial.x * exitRadial.x +
+                                                   radial.y * exitRadial.y);
+    if (left <= 0.0f)
+    {
+      point = aim.exit;
+      heading = aim.exitHeading;
+      break;
+    }
+    const float by = std::min(left, HOLD_TRACE_METRES / r);
+    radial = rotatedBy(radial, turn.sense * by);
+    arcMetres += r * by;
+    point = {turn.centre.x + radial.x * r, turn.centre.y + radial.y * r};
+    heading = {-radial.y * turn.sense, radial.x * turn.sense};
+  }
+  const float holding = arcMetres / std::min(speed, cornerSpeedOf(player, r)) +
+                        joinSecondsOf(player, point, heading, speed, onward);
+  const float switching =
+      joinSecondsOf(player, at, unitOf(player.velocity), speed,
+                    {switchFrom, waypoint, next, false});
+  if (holding >= switching) return std::nullopt;
+  return point;
+}
 }  // namespace
 
 float MatchEngine::executionErrorScaleBinturong(const MatchPlayer& player) const
@@ -712,6 +1096,11 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
   alignas(16) std::array<std::int32_t, LANES> bodyRequested;
   alignas(16) std::array<float, LANES> bodyRequest;
   alignas(16) std::array<float, LANES> grip;
+  // Into a stop on his route (a sharp reversal): the plant's extra braking
+  // (a share of his own), and just out of one the push-off's extra
+  // acceleration (a share).
+  alignas(16) std::array<float, LANES> plantGain;
+  alignas(16) std::array<float, LANES> pushOffGain;
   alignas(16) std::array<float, LANES> targetVelocityX;
   alignas(16) std::array<float, LANES> targetVelocityY;
   // On a route: the metres beyond the waypoint he heads for, to the end.
@@ -737,6 +1126,8 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
   alignas(16) std::array<float, LANES> thirdCornerRadius;
   alignas(16) std::array<float, LANES> thirdCornerLead;
   alignas(16) std::array<float, LANES> meetPaceShare;
+  // He means to reach his target at full speed (1) rather than stop on it.
+  alignas(16) std::array<float, LANES> throughSpeed;
   // Movement modes (when his brain uses them): his mode and its style.
   std::array<std::int8_t, LANES> modeOf;
   std::array<const MovementStyle*, LANES> styleOf;
@@ -766,44 +1157,104 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     // On a route (planned by a brain without target lag) he heads for its
     // waypoints in turn, moving on to the next as he reaches each one. A
     // restart walk has none.
+    player.sinceStopSeconds = std::min(player.sinceStopSeconds + dt, 1.0e6f);
     if (walking) player.routeWaypoints = 0;
+    if (player.routeWaypoints == 0) player.holdingTurn = false;
     if (player.routeWaypoints == 1) player.nextTarget = routeEnd;
-    // A waypoint given him (not one he moved on to): its leg starts here.
+    const float speedNow = length(player.velocity);
+    // His route moving on before the curve he is on ends (a new route given
+    // him, or his waypoint reached at the curve's middle): he holds that
+    // curve to its end if that gets him to his new waypoint sooner than
+    // coming off it onto his new line now, which can be sharp; his new line
+    // is then the one planned from that waypoint (its turn starting about
+    // where the held curve ends).
+    const auto holdCurve = [&](const LineLeg& curve, Vector2F switchFrom)
+    {
+      const std::optional<Vector2F> handover =
+          holdTurnHandoverOf(player, curve, toMetres(player.movementTarget),
+                             toMetres(player.nextTarget), switchFrom);
+      if (!handover) return false;
+      player.holdingTurn = true;
+      player.heldUntil = toPitch(*handover);
+      player.heldLegStart = toPitch(curve.from);
+      player.heldWaypoint = toPitch(curve.waypoint);
+      player.heldNext = toPitch(curve.next);
+      player.routeLegStart = toPitch(curve.waypoint);
+      return true;
+    };
+    // A waypoint given him (not one he moved on to): its leg starts here,
+    // unless he holds the curve he was on.
     if (player.routeWaypoints > 0 &&
         (player.movementTarget.x != player.routeLegEnd.x ||
          player.movementTarget.y != player.routeLegEnd.y))
     {
-      player.routeLegStart = player.position;
+      const LineLeg was =
+          player.holdingTurn
+              ? LineLeg{toMetres(player.heldLegStart), toMetres(player.heldWaypoint),
+                        toMetres(player.heldNext), true}
+              : LineLeg{toMetres(player.routeLegStart), toMetres(player.routeLegEnd),
+                        toMetres(player.routeLegNext), true};
+      player.holdingTurn = false;
+      if (!holdCurve(was, toMetres(player.position)))
+        player.routeLegStart = player.position;
       player.routeLegEnd = player.movementTarget;
     }
-    // His line through his waypoint (movement targets plan 3b), in metres:
-    // the turn there, and where the line points from where he is.
-    const float speedNow = length(player.velocity);
-    const auto lineThrough = [&]
+    // His line through a turn (movement targets plan 3b), in metres: the
+    // turn there, and where the line points from where he is.
+    const auto lineThrough = [&](const LineLeg& leg)
     {
-      const Vector2F waypoint = toMetres(player.movementTarget);
-      const Vector2F next = toMetres(player.nextTarget);
-      const Turn turn =
-          turnThrough(toMetres(player.routeLegStart), waypoint, next,
-                      player.routeApexOffset, player.routeOutwardRoom);
-      return std::pair{turn, aimThrough(turn, waypoint,
-                                        toMetres(player.position), next,
-                                        speedNow, speedNow * dt)};
+      const Turn turn = turnThrough(leg.from, leg.waypoint, leg.next,
+                                    player.routeApexOffset, player.routeOutwardRoom);
+      return std::pair{turn, aimThrough(turn, leg.waypoint, toMetres(player.position),
+                                        leg.next, speedNow, speedNow * dt, !leg.held)};
     };
-    // He moves on from his waypoint where his line leaves its turn.
-    if (player.routeWaypoints > 0 && lineThrough().second.exited)
+    const auto routeLeg = [&]
     {
+      return LineLeg{toMetres(player.routeLegStart), toMetres(player.movementTarget),
+                     toMetres(player.nextTarget), false};
+    };
+    // A curve he holds he lets go of where he decided to hand over to his
+    // route's line (round the curve, level with that point), or where the
+    // curve ends.
+    if (player.holdingTurn)
+    {
+      const LineLeg held{toMetres(player.heldLegStart), toMetres(player.heldWaypoint),
+                         toMetres(player.heldNext), true};
+      const auto [heldTurn, heldLine] = lineThrough(held);
+      const Vector2F at = toMetres(player.position);
+      const Vector2F until = toMetres(player.heldUntil);
+      const Vector2F here = unitOf({at.x - heldTurn.centre.x, at.y - heldTurn.centre.y});
+      const Vector2F there =
+          unitOf({until.x - heldTurn.centre.x, until.y - heldTurn.centre.y});
+      const float past = heldTurn.sense * std::atan2(there.x * here.y - there.y * here.x,
+                                                     there.x * here.x + there.y * here.y);
+      if (heldLine.exited || heldTurn.straight || heldTurn.radius <= 0.0f ||
+          (!heldTurn.joined && past >= 0.0f))
+        player.holdingTurn = false;
+    }
+    // He moves on from his waypoint where his line leaves its turn (a stop:
+    // made, where he turns).
+    if (const auto [made, madeLine] = player.routeWaypoints > 0
+                                          ? lineThrough(routeLeg())
+                                          : std::pair<Turn, LineAim>{};
+        player.routeWaypoints > 0 && madeLine.exited)
+    {
+      if (made.radius <= 0.0f && !made.straight) player.sinceStopSeconds = 0.0f;
+      const LineLeg was = routeLeg();
       player.routeLegStart = player.movementTarget;
       player.movementTarget = player.nextTarget;
       player.routeLegEnd = player.movementTarget;
       --player.routeWaypoints;
       ++player.routeAdvances;
       if (player.routeWaypoints == 1) player.nextTarget = routeEnd;
+      // Reached at the curve's middle, he may hold the rest of it.
+      if (madeLine.reachedEarly && player.routeWaypoints > 0 && !player.holdingTurn)
+        holdCurve(was, was.waypoint);
     }
-    // Dribbling with a planned meet (dribble meet plan), his run is a
-    // corner at the meet point, on the way his touch there sends the ball;
-    // a route he has stays, for his touches. Without one, his body chases
-    // the ball (its target).
+    // Dribbling with a planned meet (dribble meet plan), he runs his route's
+    // line if he has one (below), else a corner at the meet point, on the
+    // way his touch there sends the ball; the route stays, for his touches.
+    // Without a meet, his body chases the ball (its target).
     const bool hasRoute = player.routeWaypoints > 0;
     const bool meeting = !walking && ball.inTouch &&
                          ball.possessedBy == player.player &&
@@ -817,22 +1268,51 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     const Turn straightOn = turn;
     Turn nextTurn = turn;
     LineAim line;
+    // Planting into a stop on his route, his body twists toward the way
+    // out (by his Agility), at his turn rate.
+    bool planting = false;
+    float plantFacing = 0.0f;
     if (hasRoute)
     {
-      std::tie(turn, line) = lineThrough();
+      std::tie(turn, line) =
+          lineThrough(lineLegsOf(player, toMetres(routeEnd)).front());
+      if (turn.radius <= 0.0f && !turn.straight &&
+          line.toTurn <= P::PLANT_METRES && speedNow > PIVOT_BLEND_SPEED)
+      {
+        const Vector2F run = unitOf(player.velocity);
+        const Vector2F nextMetres = toMetres(player.nextTarget);
+        const Vector2F way =
+            unitOf({nextMetres.x - turn.spot.x, nextMetres.y - turn.spot.y});
+        const float wanted = std::atan2(run.x * way.y - run.y * way.x,
+                                        run.x * way.x + run.y * way.y);
+        const float twist =
+            (P::PLANT_TWIST_DEGREES_LOW +
+             (P::PLANT_TWIST_DEGREES_HIGH - P::PLANT_TWIST_DEGREES_LOW) *
+                 statShare(player, DerivedStat::AGILITY)) *
+            PI / 180.0f;
+        const Vector2F body = rotatedBy(run, std::clamp(wanted, -twist, twist));
+        plantFacing = std::atan2(body.y / Pitch::WIDTH_METRES,
+                                 body.x / Pitch::LENGTH_METRES);
+        planting = true;
+      }
+      // Where his line points, at least as far on as he runs in
+      // ROUTE_AIM_LEAD_SECONDS: read a step later (his dribble aim), he is
+      // not yet on it.
       const float aimMetres = std::max(
-          1.0f, length(toMetres({player.movementTarget.x - player.position.x,
-                                 player.movementTarget.y - player.position.y})));
+          {1.0f, speedNow * ROUTE_AIM_LEAD_SECONDS,
+           length(toMetres({player.movementTarget.x - player.position.x,
+                            player.movementTarget.y - player.position.y}))});
       const Vector2F aimed =
           toPitch({line.direction.x * aimMetres, line.direction.y * aimMetres});
       player.routeAim = {player.position.x + aimed.x,
                          player.position.y + aimed.y};
-      // With a second waypoint, the turn there too (into the end).
-      if (player.routeWaypoints > 1)
-        nextTurn = turnThrough(toMetres(player.movementTarget),
-                               toMetres(player.nextTarget), toMetres(routeEnd),
-                               player.routeApexOffset,
-                               player.routeOutwardRoom);
+      // The turn after: holding a curve, the one at his waypoint; with a
+      // second waypoint, the one there (into the end).
+      const std::vector<LineLeg> legs = lineLegsOf(player, toMetres(routeEnd));
+      if (legs.size() > 1)
+        nextTurn = turnThrough(legs[1].from, legs[1].waypoint, legs[1].next,
+                               player.routeApexOffset, player.routeOutwardRoom);
+      player.routeLegNext = player.nextTarget;
     }
     else if (targetBlend >= 1.0f)
     {
@@ -874,17 +1354,21 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
       const Turn routeNext = nextTurn;
       if (hasRoute)
       {
+        // His line's turn now (a curve he holds, else the one at his
+        // waypoint) and the waypoint of the one after.
+        const std::vector<LineLeg> legs = lineLegsOf(player, toMetres(routeEnd));
         const Vector2F meet = toMetres(ball.meetPoint);
-        const Vector2F waypoint = toMetres(player.movementTarget);
-        const Vector2F next = toMetres(player.nextTarget);
-        const LineAim fromMeet =
-            aimThrough(routeTurn, waypoint, meet, next, speedNow, 0.0f);
+        const Vector2F waypoint = legs.front().waypoint;
+        const Vector2F next = legs.front().next;
+        const Vector2F after = legs.size() > 1 ? legs[1].waypoint : next;
+        const LineAim fromMeet = aimThrough(routeTurn, waypoint, meet, next, speedNow,
+                                            0.0f, !legs.front().held);
         const float toNext =
             length({waypoint.x - meet.x, waypoint.y - meet.y}) +
-            length(onward) - routeNext.lead;
+            length({after.x - waypoint.x, after.y - waypoint.y}) - routeNext.lead;
         if (fromMeet.exited)
           secondCorner = {routeNext.radius,
-                          length({next.x - meet.x, next.y - meet.y}) -
+                          length({after.x - meet.x, after.y - meet.y}) -
                               routeNext.lead};
         else
         {
@@ -912,8 +1396,22 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
           speedNow > MatchTuning::Dribble::CLOSE_CONTROL_SPEED &&
           (offset.x * player.velocity.x + offset.y * player.velocity.y) >
               MEET_AHEAD_COSINE * toMeet * speedNow;
-      bool straight = ball.meetRecovering || !ahead;
-      if (!straight)
+      // On a route he runs his own line through it, as without the ball,
+      // his touches keeping the ball on it. He leaves it only where it would
+      // lose him the ball (a touch gone wrong, the meet not ahead of him, so
+      // that his line would carry him past it, or out of his reach from it),
+      // or to shape his run into a strike decided for the meet.
+      const bool striking = pendingStrike && pendingStrike->atMeet &&
+                            pendingStrike->striker == &player;
+      const bool onLine =
+          hasRoute && !ball.meetRecovering && !striking && ahead &&
+          [&]
+          {
+            const LineLeg now = lineLegsOf(player, toMetres(routeEnd)).front();
+            return metresOffLine(turn, now.from, now.waypoint, now.next, meet);
+          }() <= MatchTuning::Dribble::KICK_REACH_METRES;
+      bool straight = !onLine && (ball.meetRecovering || !ahead);
+      if (!onLine && !straight)
       {
         turn = turnThrough(toMetres(ball.meetLegStart), meet, out,
                            MatchTuning::Dribble::MEET_APEX_METRES,
@@ -976,12 +1474,16 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     toTurn[lane] = line.toTurn;
     nextCornerRadius[lane] = meeting ? secondCorner.first : nextTurn.radius;
     nextCornerLead[lane] = meeting ? 0.0f : nextTurn.lead;
-    nextLeg[lane] = meeting ? secondCorner.second : routed ? length(onward) : 0.0f;
+    // Holding a curve, the turn after it is the one at his waypoint.
+    nextLeg[lane] = meeting                          ? secondCorner.second
+                    : routed && !player.holdingTurn ? length(onward)
+                                                    : 0.0f;
     thirdCornerRadius[lane] = thirdCorner.first;
     thirdCornerLead[lane] = thirdCorner.second;
     onTimeSpeed[lane] = onTime;
     // Dribbling, his legs run at the pace he carries it (above his run band
     // for a better dribbler): a sprint job, held to that pace.
+    throughSpeed[lane] = player.arriveAtSpeed && !walking && !meeting ? 1.0f : 0.0f;
     meetPaceShare[lane] =
         meeting ? ball.meetPace / std::max(player.maxSpeed, EPSILON) : 0.0f;
     velocityX[lane] = player.velocity.x;
@@ -1027,8 +1529,15 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     talk[lane] = talkOf(player.isHomeTeam);
     shout[lane] = shoutWorkRate(player.isHomeTeam);
     turnRate[lane] = bodyTurnRate(player);
-    bodyRequested[lane] = player.facingRequested ? 1 : 0;
-    bodyRequest[lane] = player.facingRequest;
+    bodyRequested[lane] = player.facingRequested || planting ? 1 : 0;
+    bodyRequest[lane] = planting ? plantFacing : player.facingRequest;
+    const float agility = statShare(player, DerivedStat::AGILITY);
+    plantGain[lane] = P::PLANT_BRAKING_GAIN_LOW +
+                      (P::PLANT_BRAKING_GAIN_HIGH - P::PLANT_BRAKING_GAIN_LOW) * agility;
+    pushOffGain[lane] =
+        player.sinceStopSeconds < P::PUSH_OFF_SECONDS
+            ? P::PUSH_OFF_GAIN_LOW + (P::PUSH_OFF_GAIN_HIGH - P::PUSH_OFF_GAIN_LOW) * agility
+            : 0.0f;
     grip[lane] = playerGrip(player);
   }
 
@@ -1057,7 +1566,12 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
                 : std::max(intentScale[lane],
                            std::min(maxUrgency[lane],
                                     remaining / urgencyDistance[lane]));
-    const float brake = braking[lane] * legs;
+    // Planting into a stop (a sharp reversal): the planted leg brakes
+    // harder than his run does.
+    const bool stopCorner = cornerRadius[lane] <= 0.0f;
+    const float plant =
+        stopCorner && toTurn[lane] <= P::PLANT_METRES ? plantGain[lane] : 0.0f;
+    const float brake = braking[lane] * legs * (1.0f + plant);
     // With movement modes: the top of his mode's band (a jog job by its
     // distance ramp), as a share of his fresh top speed.
     const bool moded = modeOf[lane] >= 0;
@@ -1097,7 +1611,8 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     // Acceleration-speed profile a(v) = A0 (1 - v / vmax), stronger braking,
     // and a lateral limit (scaled by his grip) that forces a player to slow
     // down to turn sharply.
-    const float push = acceleration[lane] * legs;
+    // Just out of a stop, the push-off adds to his drive.
+    const float push = acceleration[lane] * legs * (1.0f + pushOffGain[lane]);
     const float oldX = velocityX[lane];
     const float oldY = velocityY[lane];
     const float speed = std::sqrt(oldX * oldX + oldY * oldY);
@@ -1171,8 +1686,15 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
                                               std::min(effort, 1.0f)),
         std::max(-limits.low, EPSILON));
     const float approach = remaining - ARRIVAL_TOLERANCE_METRES;
+    // Arriving at full speed (running through his target), no slowing for
+    // it; meeting his ball, slowed only to the pace he carries it on at
+    // (the turns are the corners' to brake for); otherwise he stops on it.
+    const float meetPaceNow = meetPaceShare[lane] * maxSpeed[lane];
     const float stopping =
-        std::sqrt(2.0f * arrivalDeceleration * std::max(approach, 0.0f));
+        throughSpeed[lane] > 0.0f
+            ? topSpeed
+            : std::sqrt(meetPaceNow * meetPaceNow +
+                        2.0f * arrivalDeceleration * std::max(approach, 0.0f));
     // On a route he must also make the turns at his waypoints: slowed to
     // the speed of each where it starts (on a turn, held to it). The
     // fastest he can take a turn of radius r is where his lateral limit
@@ -1191,10 +1713,20 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     };
     const float firstTurn = turnSpeed(cornerRadius[lane]);
     const float secondTurn = turnSpeed(nextCornerRadius[lane]);
-    const float cornering = std::sqrt(
-        firstTurn * firstTurn +
-        2.0f * arrivalDeceleration *
-            std::max(toTurn[lane], 0.0f));
+    // Into a stop he brakes later, for the plant's harder braking over its
+    // last PLANT_METRES (already his, planting).
+    const float plantDeceleration =
+        plant > 0.0f ? arrivalDeceleration
+                     : arrivalDeceleration * (1.0f + plantGain[lane]);
+    const float cornering =
+        stopCorner
+            ? std::sqrt(2.0f * plantDeceleration *
+                            std::clamp(toTurn[lane], 0.0f, P::PLANT_METRES) +
+                        2.0f * arrivalDeceleration *
+                            std::max(toTurn[lane] - P::PLANT_METRES, 0.0f))
+            : std::sqrt(firstTurn * firstTurn +
+                        2.0f * arrivalDeceleration *
+                            std::max(toTurn[lane], 0.0f));
     const float nextCornering = std::sqrt(
         secondTurn * secondTurn +
         2.0f * arrivalDeceleration *
@@ -1205,10 +1737,23 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
         thirdTurn * thirdTurn +
         2.0f * arrivalDeceleration *
             std::max(targetDistance + thirdCornerLead[lane], 0.0f));
+    // On a route, his own run must come round onto his line too: the angle
+    // between the way he is running and his line, turned within the room he
+    // has before his line's turn, is a turn of radius room / angle (taken at
+    // its speed now, as there is no room to brake for it later).
+    const float headingCosine =
+        speed > EPSILON
+            ? std::clamp((oldX * directionX + oldY * directionY) / speed, -1.0f, 1.0f)
+            : 1.0f;
+    const float headingTurn = std::acos(headingCosine);
+    const float joining =
+        headingTurn > HEADING_TURN_MIN_RADIANS
+            ? turnSpeed(std::max(toTurn[lane], HEADING_ROOM_MIN_METRES) / headingTurn)
+            : std::numeric_limits<float>::max();
     const float closing = std::min(
         onTimeSpeed[lane],
         onRoute[lane] != 0
-            ? std::min(std::min(stopping, thirdCornering),
+            ? std::min(std::min(std::min(stopping, thirdCornering), joining),
                        std::min(cornering, nextCornering))
             : stopping);
     // With movement modes he follows a moving target: its velocity plus a
@@ -3292,6 +3837,140 @@ bool MatchEngine::followsRoutesBinturong(const MatchPlayer& /*player*/) const
   return true;
 }
 
+std::optional<Vector2F> MatchEngine::dribbleOutAlongBinturong(
+    const MatchPlayer& player, Vector2F from, float& metres) const
+{
+  // His line from there, walked in short steps as he would run it: round
+  // his line's turn now (a curve he holds, else the one at his waypoint),
+  // then on round the next (toward his goal, as his body sees it).
+  if (player.routeWaypoints <= 0 || isControlled(player) || metres <= EPSILON)
+    return std::nullopt;
+  constexpr float STEP_METRES = 0.25f;
+  constexpr int MOST_STEPS = 64;
+  const float speed = length(player.velocity);
+  const Vector2F start = toMetres(from);
+  const std::vector<LineLeg> legs = lineLegsOf(player, toMetres(ball.dribbleGoal));
+  std::size_t leg = 0;
+  Vector2F at = start;
+  Vector2F waypoint = legs[0].waypoint;
+  Vector2F next = legs[0].next;
+  Turn turn = turnThrough(legs[0].from, waypoint, next, player.routeApexOffset,
+                          player.routeOutwardRoom);
+  const int steps =
+      std::clamp(static_cast<int>(std::ceil(metres / STEP_METRES)), 1, MOST_STEPS);
+  const float step = metres / static_cast<float>(steps);
+  using R = MatchTuning::Dribble;
+  const float cut = R::PUSH_LINE_CUT_POOR_METRES +
+                    (R::PUSH_LINE_CUT_BEST_METRES - R::PUSH_LINE_CUT_POOR_METRES) *
+                        std::clamp(player.dribbling, 0.0f, 1.0f);
+  bool past = false;
+  std::vector<Vector2F> traced;
+  traced.reserve(static_cast<std::size_t>(steps));
+  for (int index = 0; index < steps; ++index)
+  {
+    LineAim line = aimThrough(turn, waypoint, at, next, speed, step, !legs[leg].held);
+    if (line.exited && !past)
+    {
+      // On to the next leg: round its turn if one follows, else straight to
+      // its end.
+      if (leg + 1 < legs.size())
+      {
+        ++leg;
+        waypoint = legs[leg].waypoint;
+        next = legs[leg].next;
+        turn = turnThrough(legs[leg].from, waypoint, next, player.routeApexOffset,
+                           player.routeOutwardRoom);
+        line = aimThrough(turn, waypoint, at, next, speed, step);
+      }
+      else
+        past = true;
+    }
+    if (past)
+    {
+      const Vector2F toEnd{next.x - at.x, next.y - at.y};
+      if (length(toEnd) <= step) break;
+      line.direction = unitOf(toEnd);
+    }
+    const Vector2F onward{at.x + line.direction.x * step,
+                          at.y + line.direction.y * step};
+    // No further than a straight roll stays on his line: round a tight
+    // turn, a point further on would take the ball across its inside (the
+    // wrong side of a cone); a better dribbler cuts more.
+    const Vector2F chord = unitOf({onward.x - start.x, onward.y - start.y});
+    bool cuts = false;
+    for (const Vector2F& passed : traced)
+      cuts = cuts || std::abs((passed.x - start.x) * chord.y -
+                              (passed.y - start.y) * chord.x) >
+                         cut;
+    if (cuts) break;
+    traced.push_back(onward);
+    at = onward;
+  }
+  const Vector2F way{at.x - start.x, at.y - start.y};
+  const float wayMetres = length(way);
+  if (wayMetres <= EPSILON) return std::nullopt;
+  return clearOfObstaclesBinturong(player, start,
+                                   {way.x / wayMetres, way.y / wayMetres}, metres);
+}
+
+Vector2F MatchEngine::clearOfObstaclesBinturong(const MatchPlayer& player,
+                                                Vector2F start, Vector2F direction,
+                                                float& metres) const
+{
+  const auto cross = [](Vector2F a, Vector2F b) { return a.x * b.y - a.y * b.x; };
+  // How near an obstacle an end of the leg he is on is to be the one his
+  // line goes round it by.
+  constexpr float ROUTE_BESIDE_METRES = 1.5f;
+  const LineLeg now = player.routeWaypoints > 0
+                          ? lineLegsOf(player, toMetres(ball.dribbleGoal)).front()
+                          : LineLeg{toMetres(player.routeLegStart),
+                                    toMetres(player.movementTarget), {}, false};
+  const std::array<Vector2F, 2> route{now.from, now.waypoint};
+  for (const Obstacle& obstacle : obstacles)
+  {
+    const Vector2F at = toMetres(obstacle.position);
+    // The ball's centre clears it by its radius as well.
+    const float clearance = obstacle.radiusMetres + MatchTuning::Units::BALL_RADIUS_METRES;
+    const Vector2F to{at.x - start.x, at.y - start.y};
+    const float distance = length(to);
+    // Only one the push reaches (ahead of the ball, within its length) and
+    // passes close by: how far to the side (+ on the push's left, - its
+    // right).
+    const float ahead = to.x * direction.x + to.y * direction.y;
+    if (distance <= EPSILON || ahead <= 0.0f || ahead > metres + clearance) continue;
+    const float passes = cross(direction, {start.x - at.x, start.y - at.y});
+    if (std::abs(passes) >= ROUTE_BESIDE_METRES) continue;
+    // His side of it: where an end of the leg he is on is beside it (his
+    // line goes round it by that point), the side his leg's line passes it
+    // (it stays that side of him as he turns round it); else the side the
+    // ball is already passing it.
+    float side = passes >= 0.0f ? 1.0f : -1.0f;
+    const float nearestMetres =
+        std::min(length({route[0].x - at.x, route[0].y - at.y}),
+                 length({route[1].x - at.x, route[1].y - at.y}));
+    const Vector2F leg{route[1].x - route[0].x, route[1].y - route[0].y};
+    const float legMetres = length(leg);
+    if (nearestMetres <= ROUTE_BESIDE_METRES && legMetres > EPSILON)
+    {
+      const Vector2F legWay{leg.x / legMetres, leg.y / legMetres};
+      const float routeSide = cross(legWay, {route[0].x - at.x, route[0].y - at.y});
+      if (std::abs(routeSide) > EPSILON) side = routeSide > 0.0f ? 1.0f : -1.0f;
+    }
+    // Clear of it on his side: left alone. Else (touching it, or the other
+    // side of it from him) turned to just graze it on his side, square to
+    // it when the ball is already that close.
+    if (passes * side > 0.0f && std::abs(passes) >= clearance) continue;
+    const float angle = side * std::asin(std::min(clearance / distance, 1.0f));
+    const Vector2F toward{to.x / distance, to.y / distance};
+    direction = {toward.x * std::cos(angle) - toward.y * std::sin(angle),
+                 toward.x * std::sin(angle) + toward.y * std::cos(angle)};
+    // Turned off his line, it goes only as far as takes it past (the next
+    // touch brings it back onto his line).
+    metres = std::min(metres, to.x * direction.x + to.y * direction.y + clearance);
+  }
+  return direction;
+}
+
 std::optional<Vector2F> MatchEngine::dribbleOutFromBinturong(
     const MatchPlayer& player, Vector2F from) const
 {
@@ -3301,12 +3980,13 @@ std::optional<Vector2F> MatchEngine::dribbleOutFromBinturong(
   Vector2F towards = toMetres(ball.dribbleGoal);
   if (player.routeWaypoints > 0)
   {
-    const Vector2F waypoint = toMetres(player.movementTarget);
-    const Vector2F next = toMetres(player.nextTarget);
-    const Turn turn =
-        turnThrough(toMetres(player.routeLegStart), waypoint, next,
-                    player.routeApexOffset, player.routeOutwardRoom);
-    const LineAim line = aimThrough(turn, waypoint, at, next, length(player.velocity), 0.0f);
+    const LineLeg now = lineLegsOf(player, towards).front();
+    const Vector2F waypoint = now.waypoint;
+    const Vector2F next = now.next;
+    const Turn turn = turnThrough(now.from, waypoint, next, player.routeApexOffset,
+                                  player.routeOutwardRoom);
+    const LineAim line = aimThrough(turn, waypoint, at, next, length(player.velocity),
+                                    0.0f, !now.held);
     if (!line.exited &&
         line.direction.x * line.direction.x + line.direction.y * line.direction.y >
             0.5f)
@@ -3430,6 +4110,12 @@ void MatchEngine::planDribbleMeetBinturong(MatchPlayer& owner)
                      std::max(turnAhead.furthest,
                               touchKnobs[TouchKnob::SET_OFFSET]))
           : 0.0f;
+  // On a route, aimed where his line will be when it gets there (a bend
+  // ahead: angled into it), as the touch will.
+  if (out && ball.meetPush > EPSILON)
+    if (const std::optional<Vector2F> along =
+            dribbleOutAlongBinturong(owner, meet, ball.meetPush))
+      ball.meetOut = *along;
   // A pass or shot decided for this meet bends his run toward its line.
   shapeMeetForStrikeBinturong(owner);
   // His body runs there (integrateMovementsBinturong takes the corner).
@@ -3439,26 +4125,58 @@ void MatchEngine::planDribbleMeetBinturong(MatchPlayer& owner)
   owner.urgentMovement = true;
 }
 
+namespace
+{
+/** His speed-change limits (m/s^2) at `speed` as his body has them
+ * (stepKinematicsBinturong): a(v) = A0 (1 - v / top) and his braking on
+ * tired legs, held to his critical speed's power as his burst reserve
+ * runs out. */
+AccelerationRange legLimitsOf(const MatchPlayer& player, float speed, float top)
+{
+  const float fuel = player.stamina;
+  const float legs = tieredMovement(fuel);
+  const float fullness = std::clamp(
+      player.sprintReserve / std::max(tieredBurstCapacity(fuel), EPSILON), 0.0f,
+      1.0f);
+  const float transition = MatchRules::walkRunTransitionSpeed(player.heightMetres);
+  return burstLimits(
+      playerAcceleration(player) * legs *
+          std::max(0.05f, 1.0f - speed / std::max(top, EPSILON)),
+      playerBraking(player) * legs, speed, fullness,
+      tieredCriticalSpeed(
+          derivedPhysicalValue(DerivedStat::ENDURANCE,
+                               player.derivedStat(DerivedStat::ENDURANCE)),
+          fuel, transition),
+      transition);
+}
+}  // namespace
+
 float MatchEngine::dribbleReachablePaceBinturong(const MatchPlayer& player,
                                                  float startSpeed, float target,
-                                                 float seconds) const
+                                                 float seconds,
+                                                 float* speedingUpShare) const
 {
-  // His push as the body gives it, a(v) = A0 (1 - v / top) on tired legs,
-  // held at the target once there; the mean over the time.
+  // His push as the body gives it (legLimitsOf: tired legs, and an empty
+  // burst reserve), held at the target once there; the mean over the time.
   constexpr int STEPS = 10;
+  if (speedingUpShare) *speedingUpShare = 0.0f;
   if (seconds <= EPSILON || startSpeed >= target) return target;
   const float top = std::max(currentTopSpeedBinturong(player), EPSILON);
-  const float push = playerAcceleration(player) * tieredMovement(player.stamina);
   const float dt = seconds / static_cast<float>(STEPS);
   float speed = startSpeed;
   float covered = 0.0f;
+  float rising = 0.0f;
   for (int step = 0; step < STEPS; ++step)
   {
-    const float next = std::min(
-        target, speed + push * std::max(0.05f, 1.0f - speed / top) * dt);
+    const float gain = std::max(legLimitsOf(player, speed, top).high, 0.0f) * dt;
+    const float next = std::min(target, speed + gain);
+    // Up to the target part way through the step: only that part of it.
+    if (speed < target)
+      rising += gain > EPSILON ? dt * std::min((target - speed) / gain, 1.0f) : dt;
     covered += 0.5f * (speed + next) * dt;
     speed = next;
   }
+  if (speedingUpShare) *speedingUpShare = std::min(rising / seconds, 1.0f);
   return covered / seconds;
 }
 
@@ -3475,18 +4193,18 @@ MatchEngine::DribbleTurnAhead MatchEngine::dribbleTurnAheadBinturong(
   if (player.routeWaypoints == 0) return ahead;
   using P = MatchTuning::Player;
   const Vector2F at = toMetres(from);
-  const Vector2F waypoint = toMetres(player.movementTarget);
-  const Vector2F next = toMetres(player.nextTarget);
-  Turn turn = turnThrough(toMetres(player.routeLegStart), waypoint, next,
+  const std::vector<LineLeg> legs = lineLegsOf(player, toMetres(ball.dribbleGoal));
+  Turn turn = turnThrough(legs[0].from, legs[0].waypoint, legs[0].next,
                           player.routeApexOffset, player.routeOutwardRoom);
-  LineAim line = aimThrough(turn, waypoint, at, next, length(player.velocity), 0.0f);
+  LineAim line = aimThrough(turn, legs[0].waypoint, at, legs[0].next,
+                            length(player.velocity), 0.0f, !legs[0].held);
   if (line.exited)
   {
-    if (player.routeWaypoints < 2) return ahead;
-    const Vector2F end = toMetres(ball.dribbleGoal);
-    turn = turnThrough(waypoint, next, end, player.routeApexOffset,
-                       player.routeOutwardRoom);
-    line = aimThrough(turn, next, at, end, length(player.velocity), 0.0f);
+    if (legs.size() < 2) return ahead;
+    turn = turnThrough(legs[1].from, legs[1].waypoint, legs[1].next,
+                       player.routeApexOffset, player.routeOutwardRoom);
+    line = aimThrough(turn, legs[1].waypoint, at, legs[1].next,
+                      length(player.velocity), 0.0f);
     if (line.exited) return ahead;
   }
   if (turn.straight) return ahead;
@@ -3497,12 +4215,28 @@ MatchEngine::DribbleTurnAhead MatchEngine::dribbleTurnAheadBinturong(
   const float c = P::LATERAL_ACCELERATION_SLOW * grip * radius;
   ahead.toTurn = std::max(line.toTurn, 0.0f);
   ahead.turnSpeed = 0.5f * (std::sqrt(b * b + 4.0f * c) - b);
+  // A stop (a sharp reversal): it gets there with pace left for his touch
+  // to stop it, the more the better his Dribbling.
+  if (radius <= 0.0f)
+  {
+    using R = MatchTuning::Dribble;
+    ahead.stop = true;
+    ahead.turnSpeed = R::STOP_MEET_PACE_POOR +
+                      (R::STOP_MEET_PACE_BEST - R::STOP_MEET_PACE_POOR) *
+                          std::clamp(player.dribbling, 0.0f, 1.0f);
+  }
   ahead.furthest =
       ahead.toTurn +
       std::sqrt(2.0f * radius * MatchTuning::Dribble::PUSH_LINE_DEVIATION_METRES);
-  // As his body brakes for a turn ahead (integrateMovementsBinturong).
-  ahead.braking = ARRIVAL_BRAKING_SHARE * playerBraking(player) *
-                  tieredMovement(player.stamina);
+  // As his body brakes for a turn ahead (integrateMovementsBinturong), at
+  // full effort: on tired legs, and less once his burst reserve is empty.
+  const float speedNow = length(player.velocity);
+  const float canBrake = std::max(
+      -legLimitsOf(player, speedNow, currentTopSpeedBinturong(player)).low, EPSILON);
+  ahead.braking = std::min(
+      std::max(MatchTuning::Player::ARRIVAL_DECELERATION,
+               ARRIVAL_BRAKING_SHARE * canBrake),
+      canBrake);
   return ahead;
 }
 
