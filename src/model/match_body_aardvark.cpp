@@ -506,7 +506,7 @@ bool MatchEngine::updateDribbleAardvark(MatchPlayer& carrier, float dt)
         launchBall(carrier, BallRelease{origin, 0.0f, 0.0f},
                    {origin.x + ball.dribbleDirection.x,
                     origin.y + ball.dribbleDirection.y},
-                   push, 0.0f, 0.0f);
+                   push, 0.0f, BallSpin{});
         ball.velocity = {ball.dribbleDirection.x * push,
                          ball.dribbleDirection.y * push};
         return false;
@@ -541,10 +541,12 @@ bool MatchEngine::updateDribbleAardvark(MatchPlayer& carrier, float dt)
 }
 
 MatchEngine::Kick MatchEngine::kickPassAardvark(const MatchPlayer& passer,
-                                                const MatchPlayer& receiver,
+                                                const MatchPlayer* receiver,
                                                 Vector2F target,
                                                 float passDistance, bool lofted,
-                                                bool delivery)
+                                                bool delivery,
+                                                std::optional<BallSpin> /*spin*/,
+                                                std::optional<float> arrivalSpeed)
 {
   const float pressure =
       std::clamp((MatchTuning::Passing::PASS_PRESSURE_RADIUS_METRES -
@@ -555,7 +557,7 @@ MatchEngine::Kick MatchEngine::kickPassAardvark(const MatchPlayer& passer,
   // distance, fatigue and away nerves. Passes back to the own keeper are
   // played safely.
   const Vector2F direct = metricDirection(passer.position, target);
-  const float care = receiver.isGoalkeeper
+  const float care = receiver && receiver->isGoalkeeper
                          ? MatchTuning::Passing::BACK_PASS_ERROR_SCALE
                          : 1.0f;
   const float error =
@@ -572,8 +574,10 @@ MatchEngine::Kick MatchEngine::kickPassAardvark(const MatchPlayer& passer,
   {
     // Lofted balls are launched so they drop at the target: long passes at
     // chest height to be controlled, crosses at head height to be attacked.
+    // With no receiver (a drill's pass to a spot) it lands on the target.
     const float arrivalMetres =
-        delivery
+        !receiver ? 0.0f
+        : delivery
             ? MatchTuning::Aerial::ARRIVAL_HEIGHT_METRES +
                   randomFloat(-MatchTuning::Passing::DELIVERY_HEIGHT_SPREAD,
                               MatchTuning::Passing::DELIVERY_HEIGHT_SPREAD)
@@ -586,18 +590,21 @@ MatchEngine::Kick MatchEngine::kickPassAardvark(const MatchPlayer& passer,
         loftVerticalSpeed(travel, kick.speed, 0.0f, arrivalMetres);
     return kick;
   }
-  // Ground passes are weighted to arrive at a controllable pace; longer
-  // passes and better passers zip the ball in harder.
-  const float arrivalSpeed =
+  // Ground passes arrive at the pace the brain asked for; without one,
+  // weighted to arrive at a controllable pace: longer passes and better
+  // passers zip the ball in harder.
+  const float arrival = arrivalSpeed.value_or(
       MatchTuning::Passing::ARRIVAL_SPEED_BASE +
       passer.passing * MatchTuning::Passing::ARRIVAL_SPEED_PASSING +
-      travel * MatchTuning::Passing::ARRIVAL_SPEED_PER_METRE;
-  kick.speed = std::clamp(groundLaunchSpeed(travel, arrivalSpeed),
+      travel * MatchTuning::Passing::ARRIVAL_SPEED_PER_METRE);
+  kick.speed = std::clamp(groundLaunchSpeed(travel, arrival),
                           MatchTuning::Passing::MIN_GROUND_SPEED,
                           MatchTuning::Passing::MAX_GROUND_SPEED);
-  kick.curve = randomFloat(-MatchTuning::Passing::MAX_CURVE,
-                           MatchTuning::Passing::MAX_CURVE) *
-               (MatchTuning::Passing::CURVE_SKILL_BASE + passer.passing);
+  // A random curve (a heading turn), as sidespin.
+  kick.spin.side = randomFloat(-MatchTuning::Passing::MAX_CURVE,
+                               MatchTuning::Passing::MAX_CURVE) *
+                   (MatchTuning::Passing::CURVE_SKILL_BASE + passer.passing) /
+                   MatchTuning::Ball::TURN_PER_SIDESPIN;
   return kick;
 }
 
@@ -936,7 +943,7 @@ bool MatchEngine::tryOwnGoalTouchAardvark(MatchPlayer& defender)
                          height * MatchTuning::Units::BALL_Z_METRES},
              target,
              randomFloat(S::OWN_GOAL_MIN_SPEED, S::OWN_GOAL_MAX_SPEED),
-             randomFloat(0.0f, S::OWN_GOAL_MAX_LIFT), 0.0f);
+             randomFloat(0.0f, S::OWN_GOAL_MAX_LIFT), BallSpin{});
   lastShooter = nullptr;
   return true;
 }

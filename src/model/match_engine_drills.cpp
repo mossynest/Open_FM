@@ -216,12 +216,35 @@ void MatchEngine::forcePass(PlayerID playerId, PlayerID receiverId,
   recordCommand(command);
 }
 
-void MatchEngine::keepBall(PlayerID playerId, bool keep)
+void MatchEngine::forcePassTo(PlayerID playerId, Vector2F spot,
+                              ForcedPassStyle style,
+                              std::optional<BallSpin> spin,
+                              std::optional<float> arrivalSpeed)
+{
+  MatchCommandRecord command;
+  command.type = MatchCommandType::FORCE_PASS;
+  command.player = playerId;
+  command.target = spot;
+  command.passStyle = style;
+  command.passSpin = spin;
+  command.passArrival = arrivalSpeed;
+  recordCommand(command);
+}
+
+bool MatchEngine::passHeldFor(PlayerID playerId) const
+{
+  return pendingStrike && pendingStrike->kind == PendingStrike::Kind::PASS &&
+         pendingStrike->striker && pendingStrike->striker->player &&
+         pendingStrike->striker->player->getId() == playerId;
+}
+
+void MatchEngine::keepBall(PlayerID playerId, bool keep, float urgency)
 {
   MatchCommandRecord command;
   command.type = MatchCommandType::KEEP_BALL;
   command.player = playerId;
   command.urgent = keep;
+  command.keepUrgency = urgency;
   recordCommand(command);
 }
 

@@ -131,7 +131,8 @@ Managers: each side's AI manager (substitutions, who comes on, late shouts),
 aardvark (default) or binturong, set the same way as the brains.
 
 Ball: the ball physics (flight, drag, bounces, rolling, swerve, and the
-launch solvers), one for the match: aardvark (default) or binturong.
+launch solvers), one for the match: aardvark (default) or binturong;
+drills default to binturong, as in the match sandbox.
 
 Out of play: goals, the woodwork, corners, goal kicks, throw-ins and every
 restart set up and taken, one for the match: aardvark (default) or binturong.

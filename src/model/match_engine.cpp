@@ -440,15 +440,26 @@ bool MatchEngine::executeCommand(const MatchCommandRecord& command)
       ++inputRevision;
       return true;
     case MatchCommandType::FORCE_PASS:
-      if (!drillPlayer(command.player) || !drillPlayer(command.incoming))
+      // To a team-mate, or (no team-mate) to a spot.
+      if (!drillPlayer(command.player) ||
+          (command.incoming != 0 ? !drillPlayer(command.incoming)
+                                 : !command.target))
         return false;
-      forcedPass = {command.player, command.incoming, command.passStyle};
+      forcedPass = {command.player, command.incoming, command.passStyle,
+                    command.incoming != 0 ? std::nullopt : command.target,
+                    command.passSpin, command.passArrival};
       ++inputRevision;
       return true;
     case MatchCommandType::KEEP_BALL:
       if (!drillPlayer(command.player)) return false;
       std::erase(ballKeepers, command.player);
-      if (command.urgent) ballKeepers.push_back(command.player);
+      std::erase_if(ballKeeperUrgency, [&](const auto& keeper)
+                    { return keeper.first == command.player; });
+      if (command.urgent)
+      {
+        ballKeepers.push_back(command.player);
+        ballKeeperUrgency.emplace_back(command.player, command.keepUrgency);
+      }
       ++inputRevision;
       return true;
     case MatchCommandType::FEED_BALL:
@@ -466,7 +477,7 @@ bool MatchEngine::executeCommand(const MatchCommandRecord& command)
       ball.z = 0.0f;
       ball.velocity = command.feedVelocity;
       ball.velocityZ = command.feedLift;
-      ball.curve = 0.0f;
+      ball.spin = {};
       ball.lastPossessor = nullptr;
       ball.kicker = nullptr;
       ball.kickerLockout = 0.0f;
@@ -1191,8 +1202,9 @@ void MatchEngine::simulateStepBody(float dt)
     if ((!ball.possessedBy || ball.inTouch) && state == MatchState::PLAYING)
       updateBall(dt);
     // A strike he never got to in the sweep is dropped: he decides again.
-    // One decided for his next meet waits for it while it holds.
-    if (pendingStrike && pendingStrike->atMeet)
+    // One decided for his next meet waits for it while it holds, and one
+    // he is turning to while he still can.
+    if (pendingStrike && (pendingStrike->atMeet || pendingStrike->turning))
       ageHeldStrike(dt);
     else
       pendingStrike.reset();
@@ -2244,7 +2256,7 @@ void MatchEngine::resolvePossessionAndActions(float dt)
                            MatchTuning::Dribble::MEET_DECISION_HORIZON_SECONDS &&
                        brainOf(carrier->isHomeTeam) == BrainId::BINTURONG &&
                        getBody(carrier->isHomeTeam) == BodyId::BINTURONG;
-  if (pendingStrike && pendingStrike->atMeet &&
+  if (pendingStrike && (pendingStrike->atMeet || pendingStrike->turning) &&
       pendingStrike->striker == carrier)
     return;
   if ((carrier->actionCooldown <= 0.0f ||
@@ -2278,8 +2290,23 @@ void MatchEngine::resolvePossessionAndActions(float dt)
       // A drill's forced pass: the AI's own pass to the team-mate named.
       const ForcedPass pass = forcedPass;
       forcedPass = {};
-      if (MatchPlayer* receiver = drillPlayer(pass.receiver);
-          receiver && active(*receiver))
+      if (pass.spot)
+      {
+        // To a spot with nobody there: weighted as for a man standing on
+        // it, and a lofted one lands on it.
+        PassOption option;
+        option.targetPoint = *pass.spot;
+        option.passDistance = distance(carrier->position, *pass.spot);
+        option.spin = pass.spin;
+        option.arrivalSpeed = pass.arrivalSpeed;
+        option.lofted =
+            pass.style == ForcedPassStyle::LOFTED ||
+            (pass.style == ForcedPassStyle::AS_CHOSEN &&
+             option.passDistance > MatchTuning::Passing::LOFTED_DISTANCE_METRES);
+        passBall(*carrier, option, pass.style == ForcedPassStyle::LOFTED);
+      }
+      else if (MatchPlayer* receiver = drillPlayer(pass.receiver);
+               receiver && active(*receiver))
       {
         PassOption option = evaluatePassOption(*carrier, *receiver);
         if (pass.style == ForcedPassStyle::GROUND) option.lofted = false;
@@ -2722,8 +2749,9 @@ void MatchEngine::executeBallAction(MatchPlayer& carrier,
 void MatchEngine::passBall(MatchPlayer& passer, const PassOption& option,
                            bool forceLofted)
 {
-  if (!option.receiver || !option.receiver->player) return;
-  MatchPlayer& receiver = *option.receiver;
+  // No receiver: a drill's pass to a spot (forcePassTo), with nobody there.
+  MatchPlayer* const receiver = option.receiver;
+  if (receiver && !receiver->player) return;
   Vector2F target = option.targetPoint;
   const float passDistance = option.passDistance;
   if (passDistance <= EPSILON) return;
@@ -2733,14 +2761,14 @@ void MatchEngine::passBall(MatchPlayer& passer, const PassOption& option,
   const bool lofted = forceLofted || option.lofted;
 
   clearFlightState();
-  ball.intendedReceiver = receiver.player;
+  ball.intendedReceiver = receiver ? receiver->player : nullptr;
   ball.isPass = true;
   ball.passByHome = passer.isHomeTeam;
   ball.passWasOffside =
-      judgeOffside(passer, option, offsideLine(passer.isHomeTeam));
+      receiver && judgeOffside(passer, option, offsideLine(passer.isHomeTeam));
   lastPassDecision = {
       passer.player ? passer.player->getId() : 0,
-      receiver.player ? receiver.player->getId() : 0,
+      receiver ? receiver->player->getId() : 0,
       target,
       state == MatchState::PLAYING ? option.intent : PassIntent::SET_PIECE,
       option.utility,
@@ -2752,20 +2780,20 @@ void MatchEngine::passBall(MatchPlayer& passer, const PassOption& option,
                         (state == MatchState::FREE_KICK && lofted);
   // The passer's body strikes it: where it really goes, how hard, how high.
   const Kick kick = kickPass(passer, receiver, target, passDistance, lofted,
-                             delivery);
+                             delivery, option.spin, option.arrivalSpeed);
   target = kick.target;
   ball.passTarget = {std::clamp(target.x, 0.0f, 1.0f),
                      std::clamp(target.y, 0.0f, 1.0f)};
   launchBall(passer, releaseFrom(passer, ReleaseKind::PASS), target, kick.speed,
              kick.verticalSpeed,
-             kick.curve);
+             kick.spin);
   ball.isAerialDelivery = lofted && delivery;
   ball.fromThrowIn = state == MatchState::THROW_IN;
   if (getRecorder())
   {
     MatchActionRecord action;
     action.kind = MatchActionKind::PASS;
-    action.target = receiver.player->getId();
+    action.target = receiver ? receiver->player->getId() : 0;
     action.lofted = lofted;
     action.passIntent = lastPassDecision.intent;
     action.estimate = option.completionProbability;
@@ -2778,7 +2806,7 @@ void MatchEngine::passBall(MatchPlayer& passer, const PassOption& option,
     control.timer = 0.0f;
   }
 
-  afterPassReleased(passer, receiver);
+  if (receiver) afterPassReleased(passer, *receiver);
 
   if (passer.isHomeTeam)
     ++stats.homePassesAttempted;
@@ -2863,7 +2891,7 @@ float MatchEngine::strikeShot(MatchPlayer& shooter, float forcedXG, bool header,
                  ? strike.verticalSpeed
                  : loftVerticalSpeed(goalDistance, speed, startHeight,
                                      crossingZ),
-             0.0f);
+             BallSpin{});
   ball.isShot = true;
   ball.shotByHome = shooter.isHomeTeam;
   ball.shotOnTarget = onTarget;
@@ -2951,14 +2979,15 @@ void MatchEngine::takeShot(MatchPlayer& shooter, float forcedXG, bool header,
 void MatchEngine::launchBall(const MatchPlayer& kicker,
                              const BallRelease& from, Vector2F target,
                              float horizontalSpeed, float verticalSpeed,
-                             float curve)
+                             BallSpin spin)
 {
   // Where and how high it leaves are his body's (releaseFrom); this only
   // sets it off.
   const Vector2F direction = metricDirection(from.position, target);
   sendBallOff(kicker, from.position, from.z,
               {direction.x * horizontalSpeed, direction.y * horizontalSpeed},
-              verticalSpeed, curve, MatchTuning::Passing::KICKER_LOCKOUT_SECONDS);
+              verticalSpeed, spin,
+              MatchTuning::Passing::KICKER_LOCKOUT_SECONDS);
   clearPossession();
   ball.lastPossessor = kicker.player;
 }
@@ -2980,7 +3009,7 @@ void MatchEngine::reportKick(MatchActionRecord& action,
   action.to = target;
   action.speed = length(ball.velocity);
   action.verticalSpeed = ball.velocityZ;
-  action.curve = ball.curve;
+  action.curve = ball.spin.side * MatchTuning::Ball::TURN_PER_SIDESPIN;
   recorder->onAction(*this, action);
 }
 
@@ -3042,7 +3071,7 @@ void MatchEngine::updateBall(float dt)
 MatchEngine::BallMotion MatchEngine::ballMotion() const
 {
   return {ball.position, ball.z,     ball.velocity,
-          ball.velocityZ, ball.curve, ball.isAerialDelivery};
+          ball.velocityZ, ball.spin, ball.isAerialDelivery};
 }
 
 void MatchEngine::setBallMotion(const BallMotion& motion)
@@ -3051,7 +3080,7 @@ void MatchEngine::setBallMotion(const BallMotion& motion)
   ball.z = motion.z;
   ball.velocity = motion.velocity;
   ball.velocityZ = motion.velocityZ;
-  ball.curve = motion.curve;
+  ball.spin = motion.spin;
   ball.isAerialDelivery = motion.isAerialDelivery;
 }
 
@@ -3079,7 +3108,7 @@ std::optional<float> MatchEngine::moveBallStretch(float seconds)
         now.position.y == predicted.position.y && now.z == predicted.z &&
         now.velocity.x == predicted.velocity.x &&
         now.velocity.y == predicted.velocity.y &&
-        now.velocityZ == predicted.velocityZ && now.curve == predicted.curve;
+        now.velocityZ == predicted.velocityZ && now.spin == predicted.spin;
     resolveLooseBall(beforeLine);
   };
 
@@ -3424,8 +3453,11 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     if (&player == touchOwner)
     {
       const std::uint32_t bit = 1U << contact.slot;
-      // A pass, shot or clearance he chose at the step's start: struck here.
-      if (pendingStrike && pendingStrike->striker == &player)
+      // A pass, shot or clearance he chose at the step's start: struck here
+      // (a pass he is turning to, once he has turned or his time is up;
+      // until then he keeps the ball as he would).
+      if (pendingStrike && pendingStrike->striker == &player &&
+          (!pendingStrike->turning || turnedToPassBinturong(player)))
       {
         ball.touchWaiting &= ~bit;
         playPendingStrike(moment);
@@ -3554,7 +3586,7 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
       ball.velocity = heavyTouchVelocity(player, ball.velocity);
       ball.velocityZ = 0.0f;
       ball.z = 0.0f;
-      ball.curve = 0.0f;
+      ball.spin = {};
       ball.lastPossessor = player.player;
       ball.kicker = player.player;
       ball.kickerLockout = B::FAILED_TOUCH_LOCKOUT;
@@ -3740,7 +3772,7 @@ void MatchEngine::clearBehind(MatchPlayer& defender, bool headed)
                target, MatchTuning::Aerial::HEADER_CLEARANCE_SPEED,
                MatchTuning::Aerial::HEADER_LIFT * 0.5f);
   launchBall(defender, from, kick.target, kick.speed, kick.verticalSpeed,
-             0.0f);
+             BallSpin{});
   lastShooter = nullptr;
 }
 
@@ -3762,7 +3794,7 @@ void MatchEngine::clearBall(MatchPlayer& defender)
       strikeAs(defender, StrikeKind::CLEARANCE, target, speed,
                loftVerticalSpeed(clearanceMetres, speed, 0.0f, 0.0f));
   launchBall(defender, from, kick.target, kick.speed, kick.verticalSpeed,
-             0.0f);
+             BallSpin{});
   if (getRecorder())
   {
     MatchActionRecord action;
@@ -3840,7 +3872,7 @@ void MatchEngine::headBall(MatchPlayer& header)
       const Kick kick = strikeAs(header, StrikeKind::HEADER, play.aim,
                                  play.speed, play.lift);
       launchBall(header, from, kick.target, kick.speed,
-                 kick.verticalSpeed, 0.0f);
+                 kick.verticalSpeed, BallSpin{});
     }
     else
       clearBehind(header, true);
@@ -3855,7 +3887,7 @@ void MatchEngine::headBall(MatchPlayer& header)
     const Kick kick = strikeAs(header, StrikeKind::HEADER, play.aim, speed,
                                MatchTuning::Aerial::HEADER_LIFT);
     launchBall(header, from, kick.target, kick.speed,
-               kick.verticalSpeed, 0.0f);
+               kick.verticalSpeed, BallSpin{});
     if (getRecorder())
     {
       MatchActionRecord action;
@@ -3873,7 +3905,7 @@ void MatchEngine::headBall(MatchPlayer& header)
                  MatchTuning::Aerial::HEADER_PASS_SPEED,
                  MatchTuning::Aerial::HEADER_LIFT * 0.5f);
     launchBall(header, from, kick.target, kick.speed,
-               kick.verticalSpeed, 0.0f);
+               kick.verticalSpeed, BallSpin{});
     if (getRecorder())
     {
       MatchActionRecord action;
@@ -3984,7 +4016,7 @@ void MatchEngine::playFirstTouch(MatchPlayer& player, const TouchMoment& moment)
               {std::clamp(contactPoint.x, 0.001f, 0.999f),
                std::clamp(contactPoint.y, 0.001f, 0.999f)},
               moment.height / MatchTuning::Units::BALL_Z_METRES, touch.velocity,
-              touch.verticalSpeed, 0.0f, 0.0f);
+              touch.verticalSpeed, BallSpin{}, 0.0f);
   ball.inTouch = true;
   ball.touchCollected = false;
   ball.touchPasser = receivingPass ? passer : nullptr;
@@ -3995,13 +4027,13 @@ void MatchEngine::playFirstTouch(MatchPlayer& player, const TouchMoment& moment)
 
 void MatchEngine::sendBallOff(const MatchPlayer& kicker, Vector2F position,
                               float z, Vector2F velocity, float velocityZ,
-                              float curve, float kickerLockout)
+                              BallSpin spin, float kickerLockout)
 {
   ball.position = position;
   ball.z = z;
   ball.velocity = velocity;
   ball.velocityZ = velocityZ;
-  ball.curve = curve;
+  ball.spin = spin;
   ball.kicker = kicker.player;
   ball.kickerLockout = kickerLockout;
   ball.touchAttempts = 0;
@@ -4021,6 +4053,16 @@ bool MatchEngine::holdStrikeForSweep(const PendingStrike& strike)
     pendingStrike->atMeet = true;
     pendingStrike->meetPoint = ball.meetPoint;
   }
+  else if (strike.kind == PendingStrike::Kind::PASS &&
+           getBody(strike.striker->isHomeTeam) == BodyId::BINTURONG)
+  {
+    // Turning to pass: he turns his body to it first, for as long as he
+    // has before an opponent could get to the ball.
+    pendingStrike->turning = true;
+    pendingStrike->turnSeconds =
+        std::min(opponentArrivalSecondsBinturong(*strike.striker, ball.position),
+                 MatchTuning::Dribble::TURN_TO_PASS_MAX_SECONDS);
+  }
   return true;
 }
 
@@ -4030,6 +4072,15 @@ void MatchEngine::ageHeldStrike(float dt)
   using R = MatchTuning::Dribble;
   PendingStrike& strike = *pendingStrike;
   strike.heldSeconds += dt;
+  if (strike.turning)
+  {
+    // Held while he turns: until he loses it, or well past his time.
+    if (!strike.striker || state != MatchState::PLAYING || !ball.inTouch ||
+        ball.possessedBy != strike.striker->player ||
+        strike.heldSeconds > strike.turnSeconds + R::MEET_DECISION_LATE_SECONDS)
+      pendingStrike.reset();
+    return;
+  }
   const bool holds =
       strike.atMeet && strike.striker && state == MatchState::PLAYING &&
       ball.inTouch && ball.possessedBy == strike.striker->player &&
@@ -4481,7 +4532,7 @@ void MatchEngine::playDribbleTouch(MatchPlayer& player, const TouchMoment& momen
               {std::clamp(moment.contactPoint.x, 0.001f, 0.999f),
                std::clamp(moment.contactPoint.y, 0.001f, 0.999f)},
               moment.height / MatchTuning::Units::BALL_Z_METRES, touch.velocity,
-              touch.verticalSpeed, 0.0f, 0.0f);
+              touch.verticalSpeed, BallSpin{}, 0.0f);
   // The quickest he can play it again: a Binturong body's by his
   // Dribbling (dribble meet plan 3b).
   ball.ownTouchCooldown = getBody(player.isHomeTeam) == BodyId::BINTURONG
@@ -4611,7 +4662,7 @@ void MatchEngine::clearFlightState()
   ball.shotElapsedSeconds = 0.0f;
   ball.isAerialDelivery = false;
   ball.fromThrowIn = false;
-  ball.curve = 0.0f;
+  ball.spin = {};
 }
 
 void MatchEngine::makeSave(MatchPlayer& goalkeeper)

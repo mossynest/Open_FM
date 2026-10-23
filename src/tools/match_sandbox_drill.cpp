@@ -9,8 +9,11 @@
 #include "tools/match_sandbox_drill.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstring>
 #include <format>
+#include <numbers>
 
 #include "gui/render/imatch_renderer.h"
 #include "gui/view_models/formation.h"
@@ -162,27 +165,41 @@ void Drill::renderSettings()
       ImGui::EndCombo();
     }
   }
+  // A section starts where its title changes (by text: settings may each
+  // hold their own copy of it); a closed collapsible one hides its settings.
   const char* section = nullptr;
+  bool open = true;
   for (const DrillParameter& parameter : parameters())
   {
     if (!parameter.value) continue;
-    if (parameter.section && parameter.section != section)
+    if (parameter.section &&
+        (!section || std::strcmp(parameter.section, section) != 0))
     {
       section = parameter.section;
-      ImGui::SeparatorText(section);
+      if (parameter.collapsible)
+        open = ImGui::CollapsingHeader(section);
+      else
+      {
+        ImGui::SeparatorText(section);
+        open = true;
+      }
     }
+    if (!open) continue;
+    const std::string id =
+        parameter.label ? std::format("{}##{}", parameter.label, parameter.name)
+                        : std::string(parameter.name);
     float& value = *parameter.value;
     if (!parameter.choices.empty())
     {
       int index = static_cast<int>(value);
-      if (ImGui::Combo(parameter.name, &index, parameter.choices.data(),
+      if (ImGui::Combo(id.c_str(), &index, parameter.choices.data(),
                        static_cast<int>(parameter.choices.size())))
         value = static_cast<float>(index);
     }
     else if (parameter.integer)
     {
       int whole = static_cast<int>(std::lround(value));
-      if (ImGui::SliderInt(parameter.name, &whole,
+      if (ImGui::SliderInt(id.c_str(), &whole,
                            static_cast<int>(parameter.min),
                            static_cast<int>(parameter.max)))
         value = static_cast<float>(whole);
@@ -201,7 +218,7 @@ void Drill::renderSettings()
         ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, warning);
         ImGui::PushStyleColor(ImGuiCol_Text, warning);
       }
-      if (ImGui::SliderFloat(parameter.name, &shown, parameter.min, parameter.max,
+      if (ImGui::SliderFloat(id.c_str(), &shown, parameter.min, parameter.max,
                              parameter.max - parameter.min < 2.5f ? "%.3f" : "%.1f"))
         value = shown;
       if (automatic) ImGui::PopStyleColor(3);
@@ -293,4 +310,26 @@ void DrillDraw::path(const IMatchRenderer& renderer, ImDrawList& draw,
 {
   for (std::size_t index = 1; index < points.size(); ++index)
     line(renderer, draw, points[index - 1], points[index], color, thickness);
+}
+
+void DrillDraw::circle(const IMatchRenderer& renderer, ImDrawList& draw,
+                       Vector2F centre, float radiusMetres, ImU32 fill,
+                       ImU32 outline, float thickness)
+{
+  // Points round it on the ground, each projected (the view may tilt).
+  constexpr int POINTS = 48;
+  std::array<ImVec2, POINTS> screen{};
+  for (int index = 0; index < POINTS; ++index)
+  {
+    const float angle = 2.0f * std::numbers::pi_v<float> *
+                        static_cast<float>(index) / static_cast<float>(POINTS);
+    const Vector2F at{
+        centre.x + std::cos(angle) * radiusMetres / MatchTuning::Pitch::LENGTH_METRES,
+        centre.y + std::sin(angle) * radiusMetres / MatchTuning::Pitch::WIDTH_METRES};
+    if (!project(renderer, at, screen[static_cast<std::size_t>(index)])) return;
+  }
+  if (fill != 0) draw.AddConvexPolyFilled(screen.data(), POINTS, fill);
+  if (outline != 0)
+    draw.AddPolyline(screen.data(), POINTS, outline, ImDrawFlags_Closed,
+                     thickness);
 }

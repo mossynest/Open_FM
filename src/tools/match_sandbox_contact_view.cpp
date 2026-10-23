@@ -37,10 +37,9 @@ constexpr float BALL_RADIUS_METRES = 0.11f;
 
 // The zone conditions' indices, in ContactAssessment::factors order.
 constexpr int TURN = 1;
-constexpr int FROM_BEHIND = 3;
+constexpr int APPROACH = 3;
 constexpr int STRETCH = 5;
 constexpr int WEAK_FOOT = 6;
-constexpr int ACROSS_BODY = 10;
 
 /** What each condition reads, for the breakdown. */
 constexpr std::array<const char*, CONTACT_FACTOR_COUNT> DEPENDS_ON = {
@@ -54,15 +53,15 @@ constexpr std::array<const char*, CONTACT_FACTOR_COUNT> DEPENDS_ON = {
     "ball height",
     "the brain: a pass meant for someone else",
     "nearest opponent",
-    "aim against his facing (outer ring)",
-    "his lift against the ball's steepness (side view)"};
+    "his lift against the ball's steepness (side view)",
+    "the spin he asks for against what he can put on (strikes)"};
 
 /** Which conditions colour each part of the circle in the zones view. */
 // Weaker foot is left off the disc so stretch reads clearly (it can still
 // be shown alone with Colour by).
 constexpr std::array<int, 1> DISC_ZONES{STRETCH};
-constexpr std::array<int, 1> FROM_ZONES{FROM_BEHIND};
-constexpr std::array<int, 2> AIM_ZONES{TURN, ACROSS_BODY};
+constexpr std::array<int, 1> FROM_ZONES{APPROACH};
+constexpr std::array<int, 1> AIM_ZONES{TURN};
 
 /** Each zone condition's colour. */
 ImVec4 zoneHue(int factor)
@@ -71,9 +70,8 @@ ImVec4 zoneHue(int factor)
   {
     case STRETCH: return {1.00f, 0.55f, 0.15f, 1.0f};
     case WEAK_FOOT: return {0.25f, 0.55f, 1.00f, 1.0f};
-    case FROM_BEHIND: return {0.90f, 0.30f, 0.80f, 1.0f};
+    case APPROACH: return {0.90f, 0.30f, 0.80f, 1.0f};
     case TURN: return {0.95f, 0.85f, 0.25f, 1.0f};
-    case ACROSS_BODY: return {0.25f, 0.85f, 0.85f, 1.0f};
     default: return {0.7f, 0.7f, 0.7f, 1.0f};
   }
 }
@@ -744,12 +742,11 @@ void ContactViewScene::renderCircle(ImVec2 size)
     ImGui::NewLine();
     ImGui::TextDisabled("Inner ring (comes from):");
     ImGui::SameLine();
-    swatch(FROM_BEHIND, "from behind him");
+    swatch(APPROACH, "approach angle");
     ImGui::NewLine();
     ImGui::TextDisabled("Outer ring (sends to):");
     ImGui::SameLine();
     swatch(TURN, "turn off its line");
-    swatch(ACROSS_BODY, "across his body");
     ImGui::NewLine();
   }
   else

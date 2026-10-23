@@ -153,9 +153,11 @@ bool MatchEngine::updateDribble(MatchPlayer& carrier, float dt)
 }
 
 MatchEngine::Kick MatchEngine::kickPass(const MatchPlayer& passer,
-                                        const MatchPlayer& receiver,
+                                        const MatchPlayer* receiver,
                                         Vector2F target, float passDistance,
-                                        bool lofted, bool delivery)
+                                        bool lofted, bool delivery,
+                                        std::optional<BallSpin> spin,
+                                        std::optional<float> arrivalSpeed)
 {
   switch (bodyOf(passer.isHomeTeam))
   {
@@ -163,10 +165,10 @@ MatchEngine::Kick MatchEngine::kickPass(const MatchPlayer& passer,
       break;
     case BodyId::BINTURONG:
       return kickPassBinturong(passer, receiver, target, passDistance, lofted,
-                               delivery);
+                               delivery, spin, arrivalSpeed);
   }
   return kickPassAardvark(passer, receiver, target, passDistance, lofted,
-                          delivery);
+                          delivery, spin, arrivalSpeed);
 }
 
 float MatchEngine::recoverySeconds(const MatchPlayer& player, Recovery after)

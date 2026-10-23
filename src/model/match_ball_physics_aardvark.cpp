@@ -91,15 +91,17 @@ void MatchEngine::integrateBallAardvark(float dt)
   Vector2F direction = speed > EPSILON ? Vector2F{ball.velocity.x / speed,
                                                   ball.velocity.y / speed}
                                        : Vector2F{0.0f, 0.0f};
-  if (std::abs(ball.curve) > EPSILON)
+  if (std::abs(ball.spin.side) > EPSILON)
   {
-    // Spin bends the flight (a Magnus-effect stand-in) and slowly decays.
-    const float rotation = ball.curve * dt;
+    // Sidespin bends the flight (a Magnus-effect stand-in: a steady heading
+    // turn) and slowly decays. Topspin plays no part.
+    const float rotation =
+        ball.spin.side * MatchTuning::Ball::TURN_PER_SIDESPIN * dt;
     const float cosine = std::cos(rotation);
     const float sine = std::sin(rotation);
     direction = {direction.x * cosine - direction.y * sine,
                  direction.x * sine + direction.y * cosine};
-    ball.curve *= 1.0f - MatchTuning::Ball::CURVE_DECAY_PER_SECOND * dt;
+    ball.spin.side *= 1.0f - MatchTuning::Ball::SPIN_DECAY_PER_SECOND * dt;
   }
   FlightState flight{speed, ball.velocityZ,
                      ball.z * MatchTuning::Units::BALL_Z_METRES, false};
@@ -114,7 +116,7 @@ void MatchEngine::integrateBallAardvark(float dt)
   ball.velocityZ = flight.verticalSpeed;
   ball.velocity = {direction.x * flight.horizontalSpeed,
                    direction.y * flight.horizontalSpeed};
-  if (flight.horizontalSpeed <= 0.0f) ball.curve = 0.0f;
+  if (flight.horizontalSpeed <= 0.0f) ball.spin = {};
 }
 
 float MatchEngine::groundLaunchSpeedAardvark(float distanceMetres,

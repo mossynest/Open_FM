@@ -40,9 +40,10 @@
    */
   bool updateDribbleAardvark(MatchPlayer& carrier, float dt);
   /** The passer's strike: execution error, weight, height and curve. */
-  Kick kickPassAardvark(const MatchPlayer& passer, const MatchPlayer& receiver,
+  Kick kickPassAardvark(const MatchPlayer& passer, const MatchPlayer* receiver,
                 Vector2F target, float passDistance, bool lofted,
-                bool delivery);
+                bool delivery, std::optional<BallSpin> spin,
+                std::optional<float> arrivalSpeed);
   float recoverySecondsAardvark(const MatchPlayer& player, Recovery after);
   /** A shot's execution error (metres, one standard deviation). */
   float shotSpreadAardvark(const MatchPlayer& shooter, bool header, bool penalty,

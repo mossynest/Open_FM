@@ -223,7 +223,7 @@ void MatchEngine::updateBallInNetAardvark(float dt)
   // The ball settles into the net instead of bouncing out of the goal mouth.
   ball.velocityZ = 0.0f;
   ball.z = 0.0f;
-  ball.curve = 0.0f;
+  ball.spin = {};
 }
 
 void MatchEngine::setupThrowInAardvark(bool homeTeam)

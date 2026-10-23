@@ -15,6 +15,7 @@
 #include <format>
 #include <random>
 #include <string>
+#include <string_view>
 
 #include "controller/game_controller.h"
 #include "gui/gui_view.h"
@@ -161,6 +162,7 @@ void DrillScene::renderPanel(float width)
   ImGui::SeparatorText("Settings");
   ImGui::PushItemWidth(-130.0f * Theme::scale());
   drill.renderSettings();
+  drill.renderAfterSettings();
   ImGui::InputScalar("Seed", ImGuiDataType_U32, &drill.seed);
   ImGui::PopItemWidth();
   ImGui::Checkbox("New seed each run", &newSeedEachRun);
@@ -225,8 +227,19 @@ void DrillScene::renderPanel(float width)
     ImGui::Text("%s  ·  %.1f s", run->finished() ? "Finished" : "Running",
                 static_cast<double>(run->engine().getSimulatedSteps()) * STEP);
     ImGui::PushTextWrapPos(0.0f);
+    // A line that starts PASS or FAIL (after OUTCOME, if it is one) is
+    // coloured by it.
     for (const std::string& line : drill.report())
-      ImGui::TextUnformatted(line.c_str());
+    {
+      std::string_view verdict = line;
+      if (verdict.starts_with("OUTCOME  ")) verdict.remove_prefix(9);
+      if (verdict.starts_with("PASS"))
+        ImGui::TextColored(ImVec4(0.45f, 0.9f, 0.5f, 1.0f), "%s", line.c_str());
+      else if (verdict.starts_with("FAIL"))
+        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.35f, 1.0f), "%s", line.c_str());
+      else
+        ImGui::TextUnformatted(line.c_str());
+    }
     ImGui::PopTextWrapPos();
   }
 

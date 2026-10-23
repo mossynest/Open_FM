@@ -48,6 +48,10 @@ struct ContactSituation
   float surprise = 0.0f;
   /** How pressed he is (0-1, contactPressure). */
   float pressure = 0.0f;
+  /** The spin he means (rad/s), and the most he can put on (rad/s; 0, no
+   * spin to ask of him). */
+  BallSpin intendedSpin{};
+  float spinCapacity = 0.0f;
 };
 
 /** Whether a ball met `gap` metres from his centre, in direction `toBall`
@@ -61,11 +65,12 @@ inline bool inTouchDeadZone(Vector2F facing, Vector2F toBall, float gap,
   return cosine < std::cos(angleDegrees * std::numbers::pi_v<float> / 180.0f);
 }
 
-/** How far the ball comes from behind him (0-1), by the angle between where
+/** The approach angle (0-1): how far the ball comes from behind him, by
+ * the angle between where
  * it comes from and his `facing` (both metric unit): 0 within 45 degrees
  * of his front, up to 0.15 at square, up to 1 at 165 degrees, 1 beyond
  * (MatchTuning::FirstTouch::BEHIND_*). */
-float fromBehindValue(Vector2F from, Vector2F facing);
+float approachAngleValue(Vector2F from, Vector2F facing);
 
 /** Whether sending the ball on along `aim` from where he meets it turns it
  * outward (likely the outside of his foot) rather than inward (the

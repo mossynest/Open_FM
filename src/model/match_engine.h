@@ -452,16 +452,17 @@ struct ContactProfile
    * vertical contact plan step 3. */
   bool carriesOutVertical = false;
   Weights incomingPace;
-  Weights fromBehind;
+  Weights approach;
   Weights ownSpeed;
   Weights stretch;
   Weights weakerFoot;
   Weights offGround;
   Weights surprise;
   Weights pressure;
-  /** Sending it across or behind his body (0 for the touch, whose outward
-   * turn covers it). */
-  Weights acrossBody;
+  /** The spin he asks for against what he can put on (strikes): what it
+   * adds to the angle and weight jobs, and to the spin job. */
+  Weights spinAsked;
+  float spinAskedSpin = 0.0f;
   // How the conditions are measured.
   float referenceSpeed = 25.0f;
   float pressureRadius = 3.0f;
@@ -472,7 +473,9 @@ struct ContactProfile
   /** Technique error added at an empty tank (the fatigue tiers' shape
    * scales up to it). */
   float fatigueErrorGain = 0.0f;
-  float shownWeakFootGain = 0.0f;
+  /** Error added when he plays it with his weaker foot, at Technique 0
+   * (none at 1). */
+  float weakerFootErrorGain = 0.0f;
   float angleFailBase = 0.0f;
   float angleFailRange = 0.0f;
   float weightFailBase = 0.0f;
@@ -494,8 +497,22 @@ struct ContactProfile
    * the share that go up. */
   float verticalShare = 0.0f;
   float upShare = 0.5f;
+  /** Above 0: the elevation's own jitter (rad), and on a failed angle its
+   * own miss, independent of the line's, which keeps all of its error
+   * (verticalShare unused). */
+  float elevationJitter = 0.0f;
   float angleJitter = 0.0f;
   float weightJitter = 0.0f;
+  /** The spin job (strikes): how often the spin he asks for comes off
+   * wrong, by what share of it, the share of failures that put on less
+   * than he meant, and a clean strike's jitter (rad/s). All 0 until tuned:
+   * the spin comes off as asked. */
+  float spinFailBase = 0.0f;
+  float spinFailRange = 0.0f;
+  float spinMissBase = 0.0f;
+  float spinMissRange = 0.0f;
+  float underSpinShare = 1.0f;
+  float spinJitter = 0.0f;
   /** A ball sent back the way it came leaves at most this share of its
    * incoming pace. */
   float reboundShare = 1.0f;
@@ -510,14 +527,15 @@ inline constexpr std::size_t CONTACT_FACTOR_COUNT = 12;
  * conditions' sum rather than adding to it. */
 inline constexpr std::size_t WEAK_FOOT_FACTOR = 6;
 /** The turn off the line's steepness: the vertical angle job's size. */
-inline constexpr std::size_t VERTICAL_TURN_FACTOR = 11;
+inline constexpr std::size_t VERTICAL_TURN_FACTOR = 10;
+/** The spin he asks for against what he can put on. */
+inline constexpr std::size_t SPIN_ASKED_FACTOR = 11;
 inline constexpr std::array<std::string_view, CONTACT_FACTOR_COUNT>
     CONTACT_FACTOR_LABELS = {
         "Pace change",     "Turn off its line",  "Incoming pace",
-        "From behind him", "His own speed",      "Stretching",
+        "Approach angle",  "His own speed",      "Stretching",
         "Weaker foot",     "Off the ground",     "Surprise",
-        "Pressure",        "Across or behind his body",
-        "Turn up or down"};
+        "Pressure",        "Turn up or down",    "Spin asked"};
 
 /** A contact's three jobs (vertical contact plan): the turn seen from
  * above, the pace (in 3D), and the turn in steepness. */
@@ -526,6 +544,8 @@ enum class ContactJob : std::uint8_t
   ANGLE,
   WEIGHT,
   VERTICAL,
+  /** Putting on the spin he asks for (strikes). */
+  SPIN,
 };
 
 /** One condition of a contact: its value (0-1) and what it adds to each
@@ -539,12 +559,14 @@ struct ContactFactor
   float angleWeight = 0.0f;
   float weightWeight = 0.0f;
   float verticalWeight = 0.0f;
+  float spinWeight = 0.0f;
 
   [[nodiscard]] float weightFor(ContactJob job) const
   {
-    return job == ContactJob::ANGLE    ? angleWeight
-           : job == ContactJob::WEIGHT ? weightWeight
-                                       : verticalWeight;
+    return job == ContactJob::ANGLE      ? angleWeight
+           : job == ContactJob::WEIGHT   ? weightWeight
+           : job == ContactJob::VERTICAL ? verticalWeight
+                                         : spinWeight;
   }
 };
 
@@ -578,28 +600,34 @@ struct ContactAssessment
   float angleDifficulty = 0.0f;
   float weightDifficulty = 0.0f;
   float verticalDifficulty = 0.0f;
+  /** The spin he means (rad/s) and the spin job's difficulty. */
+  BallSpin intendedSpin{};
+  float spinDifficulty = 0.0f;
   /** What his weaker foot added to each job: the rest's sum times its
    * weight, when he plays it with that foot. */
   float weakFootAngle = 0.0f;
   float weakFootWeight = 0.0f;
   float weakFootVertical = 0.0f;
+  float weakFootSpin = 0.0f;
 
   /** What condition `index` added to `job`. */
   [[nodiscard]] float added(std::size_t index, ContactJob job) const
   {
     if (index == WEAK_FOOT_FACTOR)
-      return job == ContactJob::ANGLE    ? weakFootAngle
-             : job == ContactJob::WEIGHT ? weakFootWeight
-                                         : weakFootVertical;
+      return job == ContactJob::ANGLE      ? weakFootAngle
+             : job == ContactJob::WEIGHT   ? weakFootWeight
+             : job == ContactJob::VERTICAL ? weakFootVertical
+                                           : weakFootSpin;
     const ContactFactor& factor = factors[index];
     return factor.value * factor.weightFor(job);
   }
   /** A job's difficulty (0-1). */
   [[nodiscard]] float difficulty(ContactJob job) const
   {
-    return job == ContactJob::ANGLE    ? angleDifficulty
-           : job == ContactJob::WEIGHT ? weightDifficulty
-                                       : verticalDifficulty;
+    return job == ContactJob::ANGLE      ? angleDifficulty
+           : job == ContactJob::WEIGHT   ? weightDifficulty
+           : job == ContactJob::VERTICAL ? verticalDifficulty
+                                         : spinDifficulty;
   }
 };
 
@@ -650,6 +678,10 @@ struct ContactOutcome
   /** The turn he achieved (radians) and the pace (m/s). */
   float achievedTurn = 0.0f;
   float actualSpeed = 0.0f;
+  /** The spin job: the spin he put on (rad/s). */
+  float spinFailChance = 0.0f;
+  bool spinFailed = false;
+  BallSpin achievedSpin{};
 };
 
 /** One contact the body is asked for (unified kick plan): a touch, with
@@ -678,6 +710,10 @@ struct ContactRequest
   std::optional<float> pressure;
   /** Scales a strike's angle error (a shot's spread). */
   float precision = 1.0f;
+  /** The spin he means (rad/s; a strike), and the most he can put on
+   * (rad/s, his skill's). */
+  BallSpin spin{};
+  float spinCapacity = 0.0f;
 };
 
 /** A contact assessed and carried out, and the skill it was carried out
@@ -692,7 +728,7 @@ struct ContactResult
 /**
  * The ball.`position` is normalised; `z` is the height in length units
  * (z * MatchTuning::Units::BALL_Z_METRES = metres) for renderers. Velocities
- * are in m/s and `curve` is the heading rotation rate in rad/s.
+ * are in m/s and `spin` in rad/s (BallSpin).
  */
 struct MatchBall
 {
@@ -700,7 +736,7 @@ struct MatchBall
   float z = 0.0f;
   Vector2F velocity{0.0f, 0.0f};
   float velocityZ = 0.0f;
-  float curve = 0.0f;
+  BallSpin spin{};
 
   const Player* possessedBy = nullptr;
   /** Owned but rolling free (a claimed ball): a first touch has played it,
@@ -981,8 +1017,15 @@ struct MatchCommandRecord
    * (m/s) and this upward speed (m/s), to `player` (0: loose). */
   Vector2F feedVelocity{0.0f, 0.0f};
   float feedLift = 0.0f;
-  /** FORCE_PASS: `player` passes to `incoming`, played this way. */
+  /** FORCE_PASS: `player` passes to `incoming`, played this way. With
+   * no `incoming`, to the spot `target`. */
   ForcedPassStyle passStyle = ForcedPassStyle::AS_CHOSEN;
+  /** FORCE_PASS to a spot: the spin he means (PassOption::spin), and the
+   * pace it is to arrive at (PassOption::arrivalSpeed). */
+  std::optional<BallSpin> passSpin;
+  std::optional<float> passArrival;
+  /** KEEP_BALL: how hard he carries it (older recordings: flat out). */
+  float keepUrgency = 1.0f;
 };
 
 /** One-shot action requested by an external controller (play mode). */
@@ -1550,6 +1593,9 @@ class MatchEngine
   /** Open-play strikes by Binturong bodies as the contact model reads them
    * (contact plan step 2; no effect on the strikes). */
   const StrikeContactStats& getStrikeContacts() const { return strikeContacts; }
+  /** Drills: whether a pass of this player's is held for its strike (for
+   * the sweep, his meet, or his turn to it). */
+  bool passHeldFor(PlayerID playerId) const;
   const PlayerMatchStats* findPlayerStats(PlayerID playerId) const;
   /**
    * Touch maps, pass network, pressures and the like for the match report
@@ -1785,10 +1831,19 @@ class MatchEngine
    * `style` can force it along the ground or lofted. Logged and replayed. */
   void forcePass(PlayerID playerId, PlayerID receiverId,
                  ForcedPassStyle style);
+  /** Drills: the player passes to `spot` (normalised), with nobody there,
+   * as soon as he has the ball and can act: weighted as for a man standing
+   * on it, and a lofted pass is aimed to land on it; `curve` is the curve
+   * he means (PassOption::curve). Logged and replayed. */
+  void forcePassTo(PlayerID playerId, Vector2F spot, ForcedPassStyle style,
+                   std::optional<BallSpin> spin = std::nullopt,
+                   std::optional<float> arrivalSpeed = std::nullopt);
   /** Drills: while he has the ball, the player only carries it (no pass,
    * shot, clearance or take-on), so a drill measures his dribbling alone;
-   * `keep` off releases him. Logged and replayed. */
-  void keepBall(PlayerID playerId, bool keep);
+   * `keep` off releases him. `urgency` is how hard he carries it (the
+   * Binturong brain's carry urgency: 0 a walk, 1/3 a jog, 2/3 a run, 1 a
+   * sprint). Logged and replayed. */
+  void keepBall(PlayerID playerId, bool keep, float urgency = 1.0f);
   /** Drills: plays the ball in from `from` (normalised) with `velocity`
    * along the ground (m/s) and `lift` upward (m/s): as a pass to
    * `receiverId` (his own pass to receive), or loose for 0. Nobody kicked
@@ -1855,10 +1910,15 @@ class MatchEngine
     PlayerID passer = 0;
     PlayerID receiver = 0;
     ForcedPassStyle style = ForcedPassStyle::AS_CHOSEN;
+    /** A pass to a spot instead (receiver 0). */
+    std::optional<Vector2F> spot;
+    std::optional<BallSpin> spin;
+    std::optional<float> arrivalSpeed;
   };
   ForcedPass forcedPass;
-  /** Players who only carry the ball (keepBall). */
+  /** Players who only carry the ball (keepBall), and how hard each does. */
   std::vector<PlayerID> ballKeepers;
+  std::vector<std::pair<PlayerID, float>> ballKeeperUrgency;
   /** Places the scenario's players and ball; the carrier (null when the
    * ball is loose), or nothing when a player is unknown. */
   std::optional<MatchPlayer*> placeScenario(const MatchScenario& scenario,
@@ -2036,7 +2096,7 @@ class MatchEngine
     float z = 0.0f;
     Vector2F velocity{};
     float velocityZ = 0.0f;
-    float curve = 0.0f;
+    BallSpin spin{};
     bool isAerialDelivery = false;
   };
   BallMotion substepStartMotion;
@@ -2216,6 +2276,13 @@ class MatchEngine
     float completionProbability = 0.0f;
     float passDistance = 0.0f;
     bool lofted = false;
+    /** The spin he means (rad/s): sidespin (+ curls it to the right of its
+     * way) and topspin (- backspin). None: the body's default for the kind
+     * of pass. */
+    std::optional<BallSpin> spin;
+    /** The pace (m/s) he wants a ground pass to reach the receiver (or its
+     * target) at; none, the body's default weighting. */
+    std::optional<float> arrivalSpeed;
   };
 
   /** A strike decided at the step's start on a loose ball at his feet,
@@ -2241,6 +2308,10 @@ class MatchEngine
     bool atMeet = false;
     float heldSeconds = 0.0f;
     Vector2F meetPoint{};
+    /** A pass held while his body turns to it (Binturong body), for at most
+     * turnSeconds. */
+    bool turning = false;
+    float turnSeconds = 0.0f;
   };
   std::optional<PendingStrike> pendingStrike;
   /** True while the carrier decides what to do with a loose ball at his
@@ -2546,12 +2617,20 @@ class MatchEngine
     Vector2F target;
     float speed = 0.0f;
     float verticalSpeed = 0.0f;
-    float curve = 0.0f;
+    /** The spin it leaves with (rad/s). */
+    BallSpin spin{};
+    /** Struck with his left foot (the contact model's: the foot on the side
+     * the ball is on, his stronger one on his line). */
+    bool leftFoot = false;
   };
-  /** The passer's strike: execution error, weight, height and curve. */
-  Kick kickPass(const MatchPlayer& passer, const MatchPlayer& receiver,
+  /** The passer's strike: execution error, weight, height and curve. No
+   * receiver (a drill's pass to a spot): a lofted ball lands on the target.
+   * `spin`: the spin he means (PassOption::spin); `arrivalSpeed`: the
+   * pace a ground pass is to arrive at (PassOption::arrivalSpeed). */
+  Kick kickPass(const MatchPlayer& passer, const MatchPlayer* receiver,
                 Vector2F target, float passDistance, bool lofted,
-                bool delivery);
+                bool delivery, std::optional<BallSpin> spin,
+                std::optional<float> arrivalSpeed);
   /** How long a player needs after an action before he can act again. */
   enum class Recovery
   {
@@ -3023,13 +3102,13 @@ class MatchEngine
    */
   void launchBall(const MatchPlayer& kicker, const BallRelease& from,
                   Vector2F target, float horizontalSpeed, float verticalSpeed,
-                  float curve);
+                  BallSpin spin);
   /** What every contact does to the ball (unified kick plan): it leaves
    * from `position` (normalised) at height `z` (length units) with the
    * velocity off his foot, played by `kicker`, who may not touch it again
    * for `kickerLockout` seconds. Possession is the caller's. */
   void sendBallOff(const MatchPlayer& kicker, Vector2F position, float z,
-                   Vector2F velocity, float velocityZ, float curve,
+                   Vector2F velocity, float velocityZ, BallSpin spin,
                    float kickerLockout);
   /** A touch's record on the ball: what he tried, how it went, and how far
    * it is from him now. */
@@ -3101,10 +3180,19 @@ class MatchEngine
   void integrateBall(float dt);
   /** Launch speed for a ground ball to arrive at `arrivalSpeed`. */
   float groundLaunchSpeed(float distanceMetres, float arrivalSpeed) const;
-  /** Vertical launch speed so the ball is at `arrivalHeight` metres after
-   * `distanceMetres` of horizontal travel. */
+  /** Vertical launch speed so the ball is at `arrivalHeight` metres when
+   * `distanceMetres` from where it was struck, launched with `spin` (the
+   * Binturong ball physics flies it; the Aardvark one ignores it). */
   float loftVerticalSpeed(float distanceMetres, float horizontalSpeed,
-                          float startHeight, float arrivalHeight) const;
+                          float startHeight, float arrivalHeight,
+                          BallSpin spin = {}) const;
+  /** How far round (rad, + the way a positive sidespin turns it) the
+   * sidespin of a ball launched `along` and `up` (m/s) from
+   * `startHeight` (m) has carried it by the time it is `distanceMetres`
+   * from where it was struck: aimed that much the other way, it gets there
+   * (0 with the Aardvark ball physics). */
+  float curlAngle(float distanceMetres, float along, float up,
+                  float startHeight, BallSpin spin) const;
 
   // The bodies' own members, one file per body (after every type they use;
   // the functions in "Player body" above dispatch to them,

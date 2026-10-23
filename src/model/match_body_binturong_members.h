@@ -47,14 +47,16 @@
    * `surprise`: how little he expected it (0-1, the brain's read; 0 for
    * his own ball or one he chose to strike). No random draws, so the brain
    * can read it too. `pressure`: how pressed he is (0-1, the brain's read
-   * for a touch). */
+   * for a touch). `spin`: the spin he means (rad/s), against the most he
+   * can put on, `spinCapacity`. */
   ContactAssessment assessContactBinturong(const MatchPlayer& player,
                                            const ContactProfile& profile,
                                            Vector2F aim, float intendedSpeed,
                                            float intendedLift,
                                            const TouchMoment& moment,
                                            float surprise,
-                                           float pressure) const;
+                                           float pressure, BallSpin spin = {},
+                                           float spinCapacity = 0.0f) const;
   /** A strike's contact profile (provisional, contact plan §3). */
   ContactProfile strikeProfileBinturong(StrikeKind kind) const;
   /** Where a strike meets the ball: where it lies, its gap from his centre
@@ -85,7 +87,8 @@
    * The kick's target gives only its direction. */
   Kick strikeContactBinturong(const MatchPlayer& striker, StrikeKind kind,
                               Vector2F target, float speed, float lift,
-                              float precision = 1.0f);
+                              float precision = 1.0f, BallSpin spin = {},
+                              float spinCapacity = 0.0f);
   /** Carries an assessed contact out with `skill` (0-1): each job's chance
    * of going wrong, how badly, and the ball off it. */
   ContactOutcome carryOutContactBinturong(const MatchPlayer& player,
@@ -103,10 +106,30 @@
   TouchResult dribbleTouchBinturong(const MatchPlayer& player,
                                 const TouchIntent& intent,
                                 const TouchMoment& moment);
+  /** His kick power: the fastest he can strike a pass (m/s), from his
+   * Passing (MatchTuning::Passing::MIN_KICK_SPEED to MAX_KICK_SPEED). */
+  static float kickPowerBinturong(const MatchPlayer& player);
+  /** The most spin he can put on a pass (rad/s), from his Passing
+   * (MatchTuning::Passing::MIN_SPIN_REVS to MAX_SPIN_REVS). */
+  static float spinCapacityBinturong(const MatchPlayer& player);
+  /** Where to aim (normalised) for a ball curled `curl` rad round
+   * (curlAngle) to get to `target`: that far the other way round the
+   * ball. */
+  Vector2F curlAimBinturong(Vector2F target, float curl) const;
+  /** A lofted pass struck at `speed` (his kick power) for a target
+   * further than his usual flight can carry at it: (along, up) m/s, the
+   * flattest launch that comes down through `arrivalHeight` that far out,
+   * or, when none does, the one that gets furthest. */
+  std::pair<float, float> fullPowerLoftBinturong(float distanceMetres,
+                                                 float speed,
+                                                 float startHeight,
+                                                 float arrivalHeight,
+                                                 BallSpin spin) const;
   /** The passer's strike: execution error, weight, height and curve. */
-  Kick kickPassBinturong(const MatchPlayer& passer, const MatchPlayer& receiver,
+  Kick kickPassBinturong(const MatchPlayer& passer, const MatchPlayer* receiver,
                 Vector2F target, float passDistance, bool lofted,
-                bool delivery);
+                bool delivery, std::optional<BallSpin> spin,
+                std::optional<float> arrivalSpeed);
   float recoverySecondsBinturong(const MatchPlayer& player, Recovery after);
   /** A shot's execution error (metres, one standard deviation). */
   float shotSpreadBinturong(const MatchPlayer& shooter, bool header, bool penalty,
@@ -201,6 +224,17 @@
    * line, by the time he has to spare before an opponent could get there
    * (dribble meet plan 2b). */
   void shapeMeetForStrikeBinturong(const MatchPlayer& owner);
+  /** The soonest (s) an opponent of `owner` could get to `point`, with the
+   * moment it takes him to read it; very large with none. */
+  float opponentArrivalSecondsBinturong(const MatchPlayer& owner,
+                                        Vector2F point) const;
+  /** Turning to pass: the facing (an angle like facingAngle) a held pass
+   * asks of its passer, along its line from the ball, turned no further
+   * than keeps the ball clear of his dead zone; none without one. */
+  std::optional<float> turnToPassFacingBinturong(const MatchPlayer& player) const;
+  /** Whether a pass held while he turns is to be struck now: turned to it,
+   * or out of time. */
+  bool turnedToPassBinturong(const MatchPlayer& player) const;
   /** His average speed (m/s) over `seconds` from `startSpeed`, speeding
    * up toward `target` as hard as his legs allow (the body's a(v)); and,
    * into `speedingUpShare`, the share of the time before he gets there. */

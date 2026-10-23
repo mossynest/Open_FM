@@ -67,6 +67,12 @@ struct DrillParameter
   std::vector<const char*> choices;
   /** A heading shown above this setting (and the ones after it). */
   const char* section = nullptr;
+  /** Its section is a header that opens and closes (closed at first),
+   * for long lists such as tuning knobs. */
+  bool collapsible = false;
+  /** Shown instead of the name, which stays what presets, sweeps and
+   * --set use (e.g. a knob shown without its kind). */
+  const char* label = nullptr;
   /** When set, a value of 0 means set automatically: the slider shows what
    * this returns, in the warning colour, and moving it gives the setting
    * its own value (back to 0 is automatic again). */
@@ -106,6 +112,9 @@ class Drill
   /** Settings widgets: the presets, then every parameter as a slider or a
    * choice (ctrl+click a slider to type a value beyond its range). */
   void renderSettings();
+  /** Shown below the settings (after the knobs): e.g. how hard the last
+   * run's strike was. */
+  virtual void renderAfterSettings() const {}
   /** The players this drill needs (their ids follow, in this order). */
   [[nodiscard]] virtual std::vector<DrillPlayerSpec> players() const = 0;
   /** Sets a run up on a fresh engine: positions, ball, first commands. */
@@ -195,4 +204,9 @@ void cone(const IMatchRenderer& renderer, ImDrawList& draw, Vector2F at,
 /** A path through pitch points. */
 void path(const IMatchRenderer& renderer, ImDrawList& draw,
           const std::vector<Vector2F>& points, ImU32 color, float thickness);
+/** A circle on the ground round `centre`, `radiusMetres` across the pitch
+ * as drawn: filled with `fill` (0: not filled) and outlined in `outline`
+ * (0: no outline). */
+void circle(const IMatchRenderer& renderer, ImDrawList& draw, Vector2F centre,
+            float radiusMetres, ImU32 fill, ImU32 outline, float thickness);
 }  // namespace DrillDraw

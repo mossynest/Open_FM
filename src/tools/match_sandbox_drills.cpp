@@ -12,6 +12,7 @@
 #include <array>
 #include <cmath>
 #include <format>
+#include <limits>
 #include <map>
 #include <numbers>
 #include <optional>
@@ -3052,9 +3053,10 @@ class FirstTouchDrill final : public Drill
     for (std::size_t index = 0; index < TOUCH_KNOB_COUNT; ++index)
     {
       const TouchKnobInfo& info = TOUCH_KNOBS[index];
-      add(setting(info.name.data(), &knobs.values[index], info.min, info.max,
-                  false),
-          sections[index].c_str());
+      DrillParameter knob = setting(info.name.data(), &knobs.values[index],
+                                    info.min, info.max, false);
+      knob.collapsible = true;
+      add(knob, sections[index].c_str());
     }
     return list;
   }
@@ -3501,6 +3503,12 @@ class PassDrill final : public Drill
                 "0: he passes standing. Otherwise he runs with the ball up "
                 "the pitch this far, then passes on the move."),
         "Passer");
+    DrillParameter pace =
+        setting("Run-up pace", &paceChoice, 0.0f, 2.0f, true,
+                "How hard he carries it on the run-up: a jog, a run or a "
+                "sprint (as his Dribbling allows).");
+    pace.choices = {"Jog", "Run", "Sprint"};
+    add(pace, "Passer");
     add(setting("Passing", &passing, 1.0f, 100.0f, true), "Passer");
     add(setting("Condition", &condition, 30.0f, 100.0f, true,
                 "How fresh he is at the start (tiredness widens the "
@@ -3538,19 +3546,21 @@ class PassDrill final : public Drill
       for (std::size_t k = 0; k < KINDS.size(); ++k)
         for (std::size_t index = 0; index < STRIKE_KNOB_COUNT; ++index)
           titles[k][index] =
-              "Knobs: " +
               std::string(STRIKE_KIND_NAMES[static_cast<std::size_t>(KINDS[k])]) +
-              ", " + std::string(STRIKE_KNOBS[index].group);
+              " knobs: " + std::string(STRIKE_KNOBS[index].group);
       return titles;
     }();
     for (std::size_t k = 0; k < KINDS.size(); ++k)
       for (std::size_t index = 0; index < STRIKE_KNOB_COUNT; ++index)
       {
         const StrikeKnobInfo& info = STRIKE_KNOBS[index];
-        add(setting(names[k][index].c_str(),
+        DrillParameter knob =
+            setting(names[k][index].c_str(),
                     &knobs.at(KINDS[k], static_cast<StrikeKnob>(index)),
-                    info.min, info.max, false),
-            sections[k][index].c_str());
+                    info.min, info.max, false);
+        knob.collapsible = true;
+        knob.label = info.name.data();
+        add(knob, sections[k][index].c_str());
       }
     return list;
   }
@@ -3639,7 +3649,7 @@ class PassDrill final : public Drill
     if (hasDefender) engine.setDrillTarget(defenderId, defenderSpot, false);
     if (runUp > 0.0f)
     {
-      engine.keepBall(passerId, true);
+      engine.keepBall(passerId, true, (paceChoice + 1.0f) / 3.0f);
       engine.setDrillTarget(passerId,
                             along(passerStart, up, runUp + RUN_THROUGH_METRES),
                             true);
@@ -3651,6 +3661,7 @@ class PassDrill final : public Drill
     }
     before = engine.getStrikeContacts();
     pass.reset();
+    held.reset();
     outcome.clear();
     endAt.reset();
     ballPath.clear();
@@ -3665,6 +3676,11 @@ class PassDrill final : public Drill
         (metresBetween(passerStart, passer->position) >= runUp || now >= 6.0))
       order(engine);
     if (engine.getSimulatedSteps() % 2 == 0) ballPath.push_back(ball.position);
+    // When he decides on it (the pass held for its strike): his body's angle
+    // to its line then, and his speed.
+    if (!pass && !held && passer && engine.passHeldFor(passerId))
+      held = Held{now, bodyAngleToTarget(*passer, ball.position),
+                  speedOf(*passer)};
 
     if (!pass)
     {
@@ -3697,7 +3713,13 @@ class PassDrill final : public Drill
         reading.from = ball.position;
         reading.speed = std::hypot(ball.velocity.x, ball.velocity.y);
         reading.lift = ball.velocityZ;
-        if (passer) reading.passerSpeed = speedOf(*passer);
+        if (passer)
+        {
+          reading.passerSpeed = speedOf(*passer);
+          // Where it went against where his body faced.
+          reading.bodyAngle = bodyAngleTo(*passer, ball.velocity);
+        }
+        reading.held = held;
         pass = reading;
         closest = metresBetween(ball.position, receiverSpot);
         closestHeight = 0.0f;
@@ -3774,6 +3796,14 @@ class PassDrill final : public Drill
           pass->lift > 0.0f ? std::format(" ({:.1f} up)", pass->lift)
                             : std::string(),
           pass->angleDifficulty, pass->weightDifficulty));
+      lines.push_back(std::format(
+          "Body {:.0f} deg off the pass when struck{}", pass->bodyAngle,
+          pass->held ? std::format(" ({:.0f} deg when he decided, {:.2f} s "
+                                   "before; {:.1f} -> {:.1f} m/s)",
+                                   pass->held->bodyAngle,
+                                   pass->at - pass->held->at,
+                                   pass->held->speed, pass->passerSpeed)
+                     : std::string(" (struck at once)")));
       if (pass->carriedOut)
         lines.push_back(std::format(
             "Angle {}{:.1f} deg (elevation {:+.1f}), weight {}{:+.2f} m/s",
@@ -3808,6 +3838,17 @@ class PassDrill final : public Drill
     out.push_back({"Launch speed (m/s)", pass->speed});
     out.push_back({"Launch lift (m/s)", pass->lift});
     out.push_back({"Passer speed (m/s)", pass->passerSpeed});
+    // Turning to pass: how far round he got, in how long, at what cost.
+    out.push_back({"Body off the pass at strike (deg)", pass->bodyAngle});
+    if (pass->held)
+    {
+      out.push_back({"Body off the pass at decision (deg)",
+                     pass->held->bodyAngle});
+      out.push_back({"Turned (deg)", pass->held->bodyAngle - pass->bodyAngle});
+      out.push_back({"Decision to strike (s)", pass->at - pass->held->at});
+      out.push_back({"Passer speed at decision (m/s)", pass->held->speed});
+      out.push_back({"Speed lost (m/s)", pass->held->speed - pass->passerSpeed});
+    }
     out.push_back({"Angle difficulty", pass->angleDifficulty});
     out.push_back({"Weight difficulty", pass->weightDifficulty});
     if (pass->carriedOut)
@@ -3826,6 +3867,13 @@ class PassDrill final : public Drill
   }
 
  private:
+  /** The pass when he decided on it. */
+  struct Held
+  {
+    double at = 0.0;
+    float bodyAngle = 0.0f;
+    float speed = 0.0f;
+  };
   struct Pass
   {
     double at = 0.0;
@@ -3843,7 +3891,31 @@ class PassDrill final : public Drill
     float speed = 0.0f;
     float lift = 0.0f;
     float passerSpeed = 0.0f;
+    std::optional<Held> held;
+    /** His body's angle to where he sent it (deg). */
+    float bodyAngle = 0.0f;
   };
+
+  /** His body's angle (deg) to the line from the ball to the receiver. */
+  float bodyAngleToTarget(const MatchPlayer& player, Vector2F ballAt) const
+  {
+    return bodyAngleTo(player,
+                       {(receiverSpot.x - ballAt.x) * MatchTuning::Pitch::LENGTH_METRES,
+                        (receiverSpot.y - ballAt.y) * MatchTuning::Pitch::WIDTH_METRES});
+  }
+
+  /** His body's angle (deg) to a direction (metres). */
+  static float bodyAngleTo(const MatchPlayer& player, Vector2F line)
+  {
+    const Vector2F body{
+        std::cos(player.facingAngle) * MatchTuning::Pitch::LENGTH_METRES,
+        std::sin(player.facingAngle) * MatchTuning::Pitch::WIDTH_METRES};
+    const float lengths = std::hypot(body.x, body.y) * std::hypot(line.x, line.y);
+    if (lengths <= 0.0f) return 0.0f;
+    return std::acos(std::clamp((body.x * line.x + body.y * line.y) / lengths,
+                                -1.0f, 1.0f)) *
+           180.0f / PI;
+  }
 
   /** The pass is ordered: he plays it as soon as he can act. */
   void order(MatchEngine& engine)
@@ -3865,6 +3937,7 @@ class PassDrill final : public Drill
   float placeChoice = 0.0f;
   // Passer
   float runUp = 0.0f;
+  float paceChoice = 2.0f;
   float passing = 70.0f;
   float condition = 100.0f;
   float footChoice = 0.0f;
@@ -3885,12 +3958,804 @@ class PassDrill final : public Drill
   Vector2F defenderSpot{};
   StrikeContactStats before;
   std::optional<Pass> pass;
+  std::optional<Held> held;
   float closest = 0.0f;
   float closestHeight = 0.0f;
   float closestSpeed = 0.0f;
   std::string outcome;
   std::optional<double> endAt;
   std::vector<Vector2F> ballPath;
+};
+
+// --- Passes to a target ------------------------------------------------------
+
+/**
+ * A pass from the penalty spot to a target on the line towards the centre
+ * circle, with nobody there (MatchEngine::forcePassTo): weighted as for a
+ * man standing on it, and a lofted one aimed to land on it. The passer, the
+ * strike's reading and the knobs of its kind; each drill judges where the
+ * ball goes.
+ */
+class PassTargetDrill : public Drill
+{
+ public:
+  /** A run ends this long after its outcome, or with no outcome
+   * TIME_LIMIT seconds after the pass. */
+  static constexpr double LINGER_SECONDS = 0.5;
+  static constexpr double TIME_LIMIT = 8.0;
+  /** The penalty spot (the home side's own), and the way to the centre
+   * circle from it (up the pitch, metres). */
+  static constexpr Vector2F SPOT{MatchTuning::Pitch::LEFT_PENALTY_SPOT_X,
+                                 MatchTuning::Pitch::CENTRE};
+  static constexpr Vector2F UP{1.0f, 0.0f};
+
+  std::vector<DrillPlayerSpec> players() const override
+  {
+    DrillPlayerSpec passer{"Passer", PlayerRole::CM, true,
+                           {{"Passing", passing}}, 180};
+    passer.foot = footChoice < 0.5f ? Foot::Right : Foot::Left;
+    passer.condition = condition;
+    return {passer};
+  }
+
+  void begin(MatchEngine& engine, const std::vector<PlayerID>& ids) override
+  {
+    passerId = ids[0];
+    engine.setStrikeKnobs(knobs);
+    MatchScenario scenario;
+    scenario.players.push_back({passerId, SPOT, false});
+    scenario.carrierId = passerId;
+    scenario.ballPosition = SPOT;
+    engine.startDrill(scenario);
+    engine.forcePassTo(passerId, target(), style(), spin(), arrivalSpeed());
+    before = engine.getStrikeContacts();
+    strike.reset();
+    outcome.clear();
+    endAt.reset();
+    ballPath.clear();
+    reset();
+  }
+
+  bool afterStep(MatchEngine& engine) override
+  {
+    const double now = secondsOf(engine);
+    const MatchBall& ball = engine.getBall();
+    if (engine.getSimulatedSteps() % 2 == 0) ballPath.push_back(ball.position);
+    if (!strike)
+    {
+      readStrike(engine, now);
+      if (strike)
+      {
+        // Struck: he stays where he played it, and the ball runs alone.
+        engine.setDrillTarget(passerId, SPOT, false);
+        struck(ball);
+      }
+      else if (now >= 10.0)
+        outcome = "no pass";
+    }
+    else if (outcome.empty())
+    {
+      outcome = track(ball, now);
+      if (outcome.empty() && engine.getState() != MatchState::PLAYING)
+        outcome = "out of play";
+      if (outcome.empty() && now >= strike->at + TIME_LIMIT)
+        outcome = "time up";
+    }
+    if (!outcome.empty() && !endAt) endAt = now;
+    return !(endAt && now >= *endAt + LINGER_SECONDS);
+  }
+
+ protected:
+  /** How the strike came off (StrikeContactStats, before and after). */
+  struct Strike
+  {
+    double at = 0.0;
+    StrikeKind kind = StrikeKind::GROUND_PASS;
+    bool angleFailed = false;
+    bool weightFailed = false;
+    /** Rad (unsigned), m/s (+ harder), rad (+ higher). */
+    float angleError = 0.0f;
+    float weightError = 0.0f;
+    float elevationError = 0.0f;
+    float angleDifficulty = 0.0f;
+    float weightDifficulty = 0.0f;
+    /** The conditions' values (0-1). */
+    std::array<float, CONTACT_FACTOR_COUNT> factors{};
+    /** Off his foot: along the ground and upward (m/s). */
+    float speed = 0.0f;
+    float lift = 0.0f;
+  };
+
+  /** The kind of strike whose knobs this drill offers, and how it is
+   * played. */
+  [[nodiscard]] virtual StrikeKind kind() const = 0;
+  [[nodiscard]] virtual ForcedPassStyle style() const = 0;
+  /** Distance from the spot to the target (m). */
+  [[nodiscard]] virtual float range() const = 0;
+  /** The spin he means (rad/s): sidespin (+ curls it to his right) and
+   * topspin (- backspin); none, the body's default for the kind. */
+  [[nodiscard]] virtual std::optional<BallSpin> spin() const
+  {
+    return std::nullopt;
+  }
+  /** Rev/s as asked in the settings, as the engine's spin (rad/s); none
+   * when both are 0. */
+  [[nodiscard]] static std::optional<BallSpin> spinOf(float sideRevs,
+                                                      float topRevs)
+  {
+    if (sideRevs == 0.0f && topRevs == 0.0f) return std::nullopt;
+    return BallSpin{sideRevs * 2.0f * PI, topRevs * 2.0f * PI};
+  }
+  /** The spin settings, in a report line. */
+  [[nodiscard]] static std::string spinText(float sideRevs, float topRevs)
+  {
+    std::string text;
+    if (sideRevs != 0.0f)
+      text += std::format(", sidespin {:+.1f} rev/s", sideRevs);
+    if (topRevs != 0.0f)
+      text += std::format(", {} {:.1f} rev/s",
+                          topRevs > 0.0f ? "topspin" : "backspin",
+                          std::abs(topRevs));
+    return text;
+  }
+  /** The pace (m/s) he means a ground pass to arrive at; none, as the AI
+   * weights it. */
+  [[nodiscard]] virtual std::optional<float> arrivalSpeed() const
+  {
+    return std::nullopt;
+  }
+  /** A new run: the drill's own state cleared. */
+  virtual void reset() = 0;
+  /** The pass is away (the ball as it is now). */
+  virtual void struck(const MatchBall& ball) = 0;
+  /** After every step once struck: the outcome, or empty while it runs. */
+  virtual std::string track(const MatchBall& ball, double now) = 0;
+
+  [[nodiscard]] Vector2F target() const { return along(SPOT, UP, range()); }
+  /** Where a pitch point is, in metres: along the line from the spot (+
+   * towards the target) and across it (+ to his right). */
+  static Vector2F lineMetres(Vector2F point)
+  {
+    const Vector2F offset = toMetres({point.x - SPOT.x, point.y - SPOT.y});
+    return {offset.x * UP.x + offset.y * UP.y, offset.y * UP.x - offset.x * UP.y};
+  }
+  /** A point given in metres along and across the line. */
+  static Vector2F onLine(float alongMetres, float acrossMetres)
+  {
+    return along(along(SPOT, UP, alongMetres), {-UP.y, UP.x}, acrossMetres);
+  }
+
+  /** The passer's settings and the knobs of this drill's kind. */
+  void addPasserAndKnobs(std::vector<DrillParameter>& list)
+  {
+    const auto add = [&list](DrillParameter parameter, const char* section)
+    {
+      parameter.section = section;
+      list.push_back(std::move(parameter));
+    };
+    add(setting("Passing", &passing, 1.0f, 100.0f, true), "Passer");
+    add(setting("Condition", &condition, 30.0f, 100.0f, true,
+                "How fresh he is at the start (tiredness widens the "
+                "errors)."),
+        "Passer");
+    DrillParameter foot = setting("Foot", &footChoice, 0.0f, 1.0f, true);
+    foot.choices = {"Right", "Left"};
+    add(foot, "Passer");
+    // Names live as long as the drill: the settings point at them.
+    const auto kindName = STRIKE_KIND_NAMES[static_cast<std::size_t>(kind())];
+    for (std::size_t index = 0; index < STRIKE_KNOB_COUNT; ++index)
+    {
+      knobNames[index] = strikeKnobName(kind(), static_cast<StrikeKnob>(index));
+      knobSections[index] = std::string(kindName) + " knobs: " +
+                            std::string(STRIKE_KNOBS[index].group);
+    }
+    for (std::size_t index = 0; index < STRIKE_KNOB_COUNT; ++index)
+    {
+      const StrikeKnobInfo& info = STRIKE_KNOBS[index];
+      DrillParameter knob =
+          setting(knobNames[index].c_str(),
+                  &knobs.at(kind(), static_cast<StrikeKnob>(index)), info.min,
+                  info.max, false);
+      knob.collapsible = true;
+      knob.label = info.name.data();
+      add(knob, knobSections[index].c_str());
+    }
+  }
+
+  /** The passer and his strike, for the report. */
+  void reportStrike(std::vector<std::string>& lines) const
+  {
+    lines.push_back(std::format("Passer: Passing {:.0f}, condition {:.0f}, {} foot",
+                                passing, condition,
+                                footChoice < 0.5f ? "right" : "left"));
+    if (!strike) return;
+    constexpr float DEGREES = 180.0f / PI;
+    lines.push_back(std::format(
+        "{} at {:.2f} s, {:.1f} m/s{}",
+        STRIKE_KIND_NAMES[static_cast<std::size_t>(strike->kind)], strike->at,
+        strike->speed,
+        strike->lift > 0.0f ? std::format(" ({:.1f} up)", strike->lift)
+                            : std::string()));
+    // Each job: whether it went wrong, and by how much it missed.
+    lines.push_back(std::format(
+        "{}  angle: {:.1f} deg off (elevation {:+.1f} deg)",
+        strike->angleFailed ? "FAIL" : "PASS", strike->angleError * DEGREES,
+        strike->elevationError * DEGREES));
+    lines.push_back(std::format("{}  weight: {:+.2f} m/s",
+                                strike->weightFailed ? "FAIL" : "PASS",
+                                strike->weightError));
+  }
+
+  /** The drill's outcome, PASS or FAIL first. */
+  void reportOutcome(std::vector<std::string>& lines, bool passed) const
+  {
+    if (!outcome.empty())
+      lines.push_back(
+          std::format("OUTCOME  {}  {}", passed ? "PASS" : "FAIL", outcome));
+  }
+
+  /** How hard the last pass was: each job's difficulty and the conditions
+   * (0-1) that made it so, below the settings. */
+  void renderAfterSettings() const override
+  {
+    ImGui::SeparatorText("Difficulty of the last pass");
+    if (!strike)
+    {
+      ImGui::TextDisabled("No pass yet.");
+      return;
+    }
+    if (!ImGui::BeginTable("##difficulty", 2, ImGuiTableFlags_SizingStretchProp))
+      return;
+    const auto row = [](const char* name, float value, bool strong)
+    {
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn();
+      if (strong)
+        ImGui::TextUnformatted(name);
+      else
+        ImGui::TextDisabled("%s", name);
+      ImGui::TableNextColumn();
+      ImGui::Text("%.3f", static_cast<double>(value));
+    };
+    row("Angle difficulty", strike->angleDifficulty, true);
+    row("Weight difficulty", strike->weightDifficulty, true);
+    // The conditions that were there at all.
+    for (std::size_t index = 0; index < CONTACT_FACTOR_COUNT; ++index)
+      if (strike->factors[index] > 0.0005f)
+        row(std::string(CONTACT_FACTOR_LABELS[index]).c_str(), strike->factors[index], false);
+    ImGui::EndTable();
+  }
+
+  /** The strike, as numbers (Measure mode). */
+  void strikeMetrics(std::vector<DrillMetric>& out) const
+  {
+    if (!strike) return;
+    const auto flag = [](bool value) { return value ? 1.0 : 0.0; };
+    constexpr float DEGREES = 180.0f / PI;
+    out.push_back({"Launch speed (m/s)", strike->speed});
+    out.push_back({"Launch lift (m/s)", strike->lift});
+    out.push_back({"Angle difficulty", strike->angleDifficulty});
+    out.push_back({"Weight difficulty", strike->weightDifficulty});
+    out.push_back({"Angle failed", flag(strike->angleFailed)});
+    out.push_back({"Weight failed", flag(strike->weightFailed)});
+    out.push_back({"Abs angle error (deg)", strike->angleError * DEGREES});
+    out.push_back({"Weight error (m/s)", strike->weightError});
+    out.push_back(
+        {"Elevation error (deg, + higher)", strike->elevationError * DEGREES});
+  }
+
+  // Passer
+  float passing = 70.0f;
+  float condition = 100.0f;
+  float footChoice = 0.0f;
+  // The strike's tuning, as this drill plays it.
+  StrikeKnobs knobs;
+
+  PlayerID passerId = 0;
+  std::optional<Strike> strike;
+  std::string outcome;
+  std::optional<double> endAt;
+  std::vector<Vector2F> ballPath;
+
+ private:
+  /** The pass: a strike the contact model has read since the start. */
+  void readStrike(const MatchEngine& engine, double now)
+  {
+    const StrikeContactStats& after = engine.getStrikeContacts();
+    for (std::size_t index = 0; index < STRIKE_KIND_COUNT; ++index)
+    {
+      const auto& a = before.byKind[index];
+      const auto& b = after.byKind[index];
+      if (b.strikes == a.strikes) continue;
+      const MatchBall& ball = engine.getBall();
+      Strike reading;
+      reading.at = now;
+      reading.kind = static_cast<StrikeKind>(index);
+      reading.angleFailed = b.angleFailed > a.angleFailed;
+      reading.weightFailed = b.weightFailed > a.weightFailed;
+      reading.angleError = static_cast<float>(b.angleErrorSum - a.angleErrorSum);
+      reading.weightError =
+          static_cast<float>(b.weightErrorSum - a.weightErrorSum);
+      reading.elevationError =
+          static_cast<float>(b.elevationErrorSum - a.elevationErrorSum);
+      reading.angleDifficulty =
+          static_cast<float>(b.angleDifficulty - a.angleDifficulty);
+      reading.weightDifficulty =
+          static_cast<float>(b.weightDifficulty - a.weightDifficulty);
+      for (std::size_t factor = 0; factor < CONTACT_FACTOR_COUNT; ++factor)
+        reading.factors[factor] =
+            static_cast<float>(b.factorSum[factor] - a.factorSum[factor]);
+      reading.speed = std::hypot(ball.velocity.x, ball.velocity.y);
+      reading.lift = ball.velocityZ;
+      strike = reading;
+      return;
+    }
+  }
+
+  StrikeContactStats before;
+  std::array<std::string, STRIKE_KNOB_COUNT> knobNames;
+  std::array<std::string, STRIKE_KNOB_COUNT> knobSections;
+};
+
+/**
+ * Ground passes down a corridor: from the penalty spot along the ground to a
+ * target on the line towards the centre circle, between two rows of cones.
+ * The ball has to reach the target's line without leaving the corridor.
+ */
+class CorridorPassDrill final : public PassTargetDrill
+{
+ public:
+  const char* name() const override { return "Ground pass corridor"; }
+  const char* summary() const override
+  {
+    return "A ground pass from the penalty spot to a target on the line "
+           "towards the centre circle (nobody on it: weighted as for a man "
+           "standing there), down a corridor marked by cones. The ball must "
+           "reach the target's line without leaving the corridor. Measures "
+           "how far off the line it runs, where it leaves the corridor or "
+           "stops short, and how the strike came off, with his Passing and "
+           "every ground-pass strike knob as settings.";
+  }
+
+  std::vector<DrillParameter> parameters() override
+  {
+    std::vector<DrillParameter> list;
+    const auto add = [&list](DrillParameter parameter)
+    {
+      parameter.section = "Corridor";
+      list.push_back(std::move(parameter));
+    };
+    add(setting("Range (m)", &rangeMetres, 3.0f, 60.0f, false,
+                "From the penalty spot to the target, towards the centre "
+                "circle."));
+    add(setting("Corridor width (m)", &width, 0.5f, 10.0f, false,
+                "Between the two rows of cones (the ball's centre must stay "
+                "inside)."));
+    add(setting("Cone spacing (m)", &coneSpacing, 1.0f, 10.0f, false,
+                "Along each row, from the spot to the target's line."));
+    add(setting("Sidespin (rev/s)", &sideRevs, -10.0f, 10.0f, false,
+                "The sidespin he means to put on it: + curls it to his "
+                "right, - to his left (it fades as it rolls). Held to what "
+                "his Passing can put on. 0: a straight pass, curved only by "
+                "accident (less often the better he passes)."));
+    add(setting("Arrival speed (m/s)", &arrivalChoice, 0.0f, 20.0f, false,
+                "The pace he means it to reach the target at (the brain's "
+                "call). 0: as the AI weights it (by his Passing and the "
+                "distance)."));
+    addPasserAndKnobs(list);
+    return list;
+  }
+
+  std::vector<DrillPreset> presets() const override
+  {
+    return {
+        {"Short pass", "10 m down a 2 m corridor.",
+         {{"Range (m)", 10.0f}, {"Corridor width (m)", 2.0f},
+          {"Cone spacing (m)", 2.0f}}},
+        {"Medium pass", "20 m down a 3 m corridor.",
+         {{"Range (m)", 20.0f}, {"Corridor width (m)", 3.0f},
+          {"Cone spacing (m)", 4.0f}}},
+        {"Long ground pass", "35 m down a 4 m corridor.",
+         {{"Range (m)", 35.0f}, {"Corridor width (m)", 4.0f},
+          {"Cone spacing (m)", 5.0f}}},
+    };
+  }
+
+  void drawOverlay(const IMatchRenderer& renderer, ImDrawList& draw) const override
+  {
+    const float scale = Theme::scale();
+    const float half = width * 0.5f;
+    const ImU32 edge = IM_COL32(255, 140, 30, 90);
+    DrillDraw::line(renderer, draw, onLine(0.0f, -half), onLine(rangeMetres, -half),
+                    edge, 1.0f * scale);
+    DrillDraw::line(renderer, draw, onLine(0.0f, half), onLine(rangeMetres, half),
+                    edge, 1.0f * scale);
+    DrillDraw::line(renderer, draw, onLine(rangeMetres, -half),
+                    onLine(rangeMetres, half), IM_COL32(90, 220, 120, 160),
+                    1.5f * scale);
+    // Cones every spacing from the spot, and at the target's line.
+    const int count = static_cast<int>(rangeMetres / coneSpacing);
+    for (int index = 0; index <= count + 1; ++index)
+    {
+      const float at = std::min(static_cast<float>(index) * coneSpacing, rangeMetres);
+      for (const float side : {-half, half})
+        DrillDraw::cone(renderer, draw, onLine(at, side), IM_COL32(255, 140, 30, 255));
+    }
+    DrillDraw::marker(renderer, draw, target(), 3.0f * scale,
+                      IM_COL32(90, 220, 120, 220),
+                      outcome.empty() ? "target" : outcome.c_str());
+    if (leftAt)
+      DrillDraw::marker(renderer, draw, *leftAt, 2.5f * scale,
+                        IM_COL32(240, 80, 80, 220));
+    DrillDraw::path(renderer, draw, ballPath, IM_COL32(255, 230, 120, 160),
+                    1.5f * scale);
+  }
+
+  std::vector<std::string> report() const override
+  {
+    std::vector<std::string> lines;
+    lines.push_back(std::format(
+        "{:.0f} m along the ground, corridor {:.1f} m wide{}{}", rangeMetres,
+        width,
+        spinText(sideRevs, 0.0f),
+        arrivalChoice > 0.0f
+            ? std::format(", to arrive at {:.1f} m/s", arrivalChoice)
+            : std::string()));
+    reportStrike(lines);
+    if (strike)
+    {
+      lines.push_back(std::format("Widest off the line before the target {:.2f} m",
+                                  widest));
+      if (atTarget)
+        lines.push_back(std::format(
+            "At the target's line {:+.2f} m off it (+ right), {:.1f} m/s",
+            atTarget->x, atTarget->y));
+      if (leftAfter)
+        lines.push_back(std::format("Left the corridor after {:.1f} m", *leftAfter));
+      if (shortBy)
+        lines.push_back(std::format("Stopped {:.1f} m short of the target", *shortBy));
+      lines.push_back(
+          std::format("Closest to the target point {:.0f} cm", closest * 100.0f));
+    }
+    reportOutcome(lines, outcome == IN_CORRIDOR);
+    return lines;
+  }
+
+  std::vector<DrillMetric> metrics() const override
+  {
+    if (outcome.empty()) return {};
+    const auto flag = [](bool value) { return value ? 1.0 : 0.0; };
+    std::vector<DrillMetric> out{{"Passed", flag(strike.has_value())}};
+    if (!strike) return out;
+    out.push_back({"In the corridor", flag(outcome == IN_CORRIDOR)});
+    out.push_back({"Left the corridor", flag(leftAfter.has_value())});
+    out.push_back({"Stopped short", flag(shortBy.has_value())});
+    out.push_back({"Widest off the line (m)", widest});
+    out.push_back({"Miss from the target (cm)", closest * 100.0f});
+    if (leftAfter) out.push_back({"Left the corridor after (m)", *leftAfter});
+    if (shortBy) out.push_back({"Short of the target (m)", *shortBy});
+    if (atTarget)
+    {
+      out.push_back({"Off the line at the target (m, + right)", atTarget->x});
+      out.push_back({"Abs off the line at the target (m)", std::abs(atTarget->x)});
+      out.push_back({"Speed at the target (m/s)", atTarget->y});
+    }
+    strikeMetrics(out);
+    return out;
+  }
+
+ protected:
+  StrikeKind kind() const override { return StrikeKind::GROUND_PASS; }
+  ForcedPassStyle style() const override { return ForcedPassStyle::GROUND; }
+  float range() const override { return rangeMetres; }
+  std::optional<BallSpin> spin() const override
+  {
+    return spinOf(sideRevs, 0.0f);
+  }
+  std::optional<float> arrivalSpeed() const override
+  {
+    return arrivalChoice > 0.0f ? std::optional<float>(arrivalChoice)
+                                : std::nullopt;
+  }
+
+  void reset() override
+  {
+    widest = 0.0f;
+    last = {0.0f, 0.0f};
+    atTarget.reset();
+    leftAfter.reset();
+    leftAt.reset();
+    shortBy.reset();
+    closest = std::numeric_limits<float>::max();
+  }
+
+  void struck(const MatchBall& ball) override { last = lineMetres(ball.position); }
+
+  std::string track(const MatchBall& ball, double /*now*/) override
+  {
+    // Followed on past the corridor's edge, to the target's line (or until
+    // it stops), so a pass out of the corridor has its miss too.
+    const Vector2F now = lineMetres(ball.position);
+    const Vector2F was = last;
+    last = now;
+    const float half = width * 0.5f;
+    // Closest to the target point over the step's move.
+    {
+      const Vector2F move{now.x - was.x, now.y - was.y};
+      const float moved = move.x * move.x + move.y * move.y;
+      const float share =
+          moved > 1e-9f
+              ? std::clamp(((rangeMetres - was.x) * move.x - was.y * move.y) / moved,
+                           0.0f, 1.0f)
+              : 0.0f;
+      closest = std::min(closest, std::hypot(was.x + move.x * share - rangeMetres,
+                                             was.y + move.y * share));
+    }
+    const auto leave = [&](float at, Vector2F where)
+    {
+      if (leftAfter) return;
+      leftAfter = at;
+      leftAt = where;
+    };
+    // Over the target's line: where it crossed, and how fast.
+    if (now.x >= rangeMetres)
+    {
+      const float share =
+          now.x > was.x ? (rangeMetres - was.x) / (now.x - was.x) : 1.0f;
+      const float across = was.y + (now.y - was.y) * std::clamp(share, 0.0f, 1.0f);
+      if (!leftAfter) widest = std::max(widest, std::abs(across));
+      if (std::abs(across) > half) leave(rangeMetres, onLine(rangeMetres, across));
+      atTarget = Vector2F{across, std::hypot(ball.velocity.x, ball.velocity.y)};
+      return leftAfter ? OUT_OF_CORRIDOR : IN_CORRIDOR;
+    }
+    if (!leftAfter) widest = std::max(widest, std::abs(now.y));
+    // Back out of the corridor's mouth.
+    if (now.x < 0.0f) leave(0.0f, ball.position);
+    if (std::abs(now.y) > half)
+    {
+      // Where it went over the edge (the step's move, crossed at the edge).
+      const float edge = now.y > 0.0f ? half : -half;
+      const float share = std::abs(now.y - was.y) > 1e-6f
+                              ? std::clamp((edge - was.y) / (now.y - was.y), 0.0f, 1.0f)
+                              : 1.0f;
+      const float at = was.x + (now.x - was.x) * share;
+      leave(at, onLine(at, edge));
+    }
+    if (std::hypot(ball.velocity.x, ball.velocity.y) <= MatchTuning::Ball::STOP_SPEED)
+    {
+      shortBy = rangeMetres - now.x;
+      return leftAfter ? OUT_OF_CORRIDOR : "stopped short";
+    }
+    return {};
+  }
+
+ private:
+  static constexpr const char* IN_CORRIDOR = "reached the target in the corridor";
+  static constexpr const char* OUT_OF_CORRIDOR = "out of the corridor";
+
+  float rangeMetres = 20.0f;
+  float width = 3.0f;
+  float coneSpacing = 4.0f;
+  float sideRevs = 0.0f;
+  float arrivalChoice = 0.0f;
+
+  /** The ball's last place along and across the line (m). */
+  Vector2F last{};
+  float widest = 0.0f;
+  /** At the target's line: across it (m, + right) and the ball's speed. */
+  std::optional<Vector2F> atTarget;
+  std::optional<float> leftAfter;
+  std::optional<Vector2F> leftAt;
+  std::optional<float> shortBy;
+  /** The ball path's closest to the target point (m). */
+  float closest = std::numeric_limits<float>::max();
+};
+
+/**
+ * Lofted passes at a bullseye: from the penalty spot, in the air, to a
+ * target of concentric rings on the ground on the line towards the centre
+ * circle. Scores where the ball first comes down.
+ */
+class BullseyePassDrill final : public PassTargetDrill
+{
+ public:
+  const char* name() const override { return "Lofted pass target"; }
+  const char* summary() const override
+  {
+    return "A lofted pass from the penalty spot to a bullseye on the ground "
+           "on the line towards the centre circle (nobody on it: the ball is "
+           "aimed to land on it). Measures where it first comes down: how "
+           "far from the centre, long or short, left or right, and the ring "
+           "it lands in, and how the strike came off, with his Passing and "
+           "every lofted-pass strike knob as settings.";
+  }
+
+  std::vector<DrillParameter> parameters() override
+  {
+    std::vector<DrillParameter> list;
+    const auto add = [&list](DrillParameter parameter)
+    {
+      parameter.section = "Target";
+      list.push_back(std::move(parameter));
+    };
+    add(setting("Range (m)", &rangeMetres, 5.0f, 60.0f, false,
+                "From the penalty spot to the bullseye, towards the centre "
+                "circle."));
+    add(setting("Ring width (m)", &ringWidth, 0.5f, 5.0f, false,
+                "Each ring's width: the bullseye's radius, and the step out to "
+                "each ring beyond it."));
+    add(setting("Rings", &ringCount, 1.0f, 10.0f, true,
+                "How many rings, the bullseye included. A landing in the "
+                "bullseye scores this many, the outer ring 1, outside 0."));
+    add(setting("Sidespin (rev/s)", &sideRevs, -10.0f, 10.0f, false,
+                "The sidespin he means to put on it: + curls it to his "
+                "right, - to his left (it fades in flight). 0 with no "
+                "topspin: as the AI strikes it, curled only by accident "
+                "(less often the better he passes)."));
+    add(setting("Topspin (rev/s)", &topRevs, -10.0f, 10.0f, false,
+                "+ topspin (it dips, and runs on at the bounce), - backspin "
+                "(it holds up, and checks at the bounce). Held, with the "
+                "sidespin, to what his Passing can put on."));
+    addPasserAndKnobs(list);
+    return list;
+  }
+
+  std::vector<DrillPreset> presets() const override
+  {
+    return {
+        {"Short lofted pass", "20 m.", {{"Range (m)", 20.0f}}},
+        {"Long ball", "35 m.", {{"Range (m)", 35.0f}}},
+        {"Very long ball", "50 m.", {{"Range (m)", 50.0f}}},
+    };
+  }
+
+  void drawOverlay(const IMatchRenderer& renderer, ImDrawList& draw) const override
+  {
+    const float scale = Theme::scale();
+    const int rings = static_cast<int>(ringCount);
+    // Outermost first, alternating, so each inner ring covers the middle.
+    for (int ring = rings; ring >= 1; --ring)
+    {
+      const bool red = (rings - ring) % 2 == 0;
+      DrillDraw::circle(renderer, draw, target(),
+                        ringWidth * static_cast<float>(ring),
+                        red ? IM_COL32(220, 60, 60, 110) : IM_COL32(245, 245, 245, 90),
+                        IM_COL32(20, 20, 20, 160), 1.0f * scale);
+    }
+    DrillDraw::line(renderer, draw, SPOT, target(), IM_COL32(255, 255, 255, 50),
+                    1.0f * scale);
+    DrillDraw::marker(renderer, draw, SPOT, 2.5f * scale,
+                      IM_COL32(255, 255, 255, 200), "pass");
+    if (landing)
+      DrillDraw::marker(renderer, draw, landing->point, 3.0f * scale,
+                        IM_COL32(255, 230, 120, 255),
+                        std::format("{:.1f} m", landing->miss).c_str());
+    DrillDraw::path(renderer, draw, ballPath, IM_COL32(255, 230, 120, 160),
+                    1.5f * scale);
+  }
+
+  std::vector<std::string> report() const override
+  {
+    std::vector<std::string> lines;
+    lines.push_back(std::format(
+        "{:.0f} m lofted, {} rings {:.1f} m wide{}", rangeMetres,
+        static_cast<int>(ringCount), ringWidth, spinText(sideRevs, topRevs)));
+    reportStrike(lines);
+    if (landing)
+      lines.push_back(std::format(
+          "Landed {:.2f} m from the centre ({:+.2f} m long, {:+.2f} m right) "
+          "after {:.2f} s: {}",
+          landing->miss, landing->longer, landing->right, landing->flight,
+          landing->score > 0 ? std::format("{} points", landing->score)
+                             : std::string("outside the rings")));
+    reportOutcome(lines, landing && landing->score > 0);
+    return lines;
+  }
+
+  std::vector<DrillMetric> metrics() const override
+  {
+    if (outcome.empty()) return {};
+    const auto flag = [](bool value) { return value ? 1.0 : 0.0; };
+    std::vector<DrillMetric> out{{"Passed", flag(strike.has_value())}};
+    if (!strike) return out;
+    out.push_back({"Landed", flag(landing.has_value())});
+    if (landing)
+    {
+      out.push_back({"Miss (m)", landing->miss});
+      out.push_back({"Long (m, - short)", landing->longer});
+      out.push_back({"Right (m, - left)", landing->right});
+      out.push_back({"Score", static_cast<double>(landing->score)});
+      out.push_back({"On the target", flag(landing->score > 0)});
+      out.push_back({"Flight (s)", landing->flight});
+    }
+    strikeMetrics(out);
+    return out;
+  }
+
+ protected:
+  StrikeKind kind() const override { return StrikeKind::LOFTED_PASS; }
+  ForcedPassStyle style() const override { return ForcedPassStyle::LOFTED; }
+  float range() const override { return rangeMetres; }
+  std::optional<BallSpin> spin() const override
+  {
+    return spinOf(sideRevs, topRevs);
+  }
+
+  void reset() override
+  {
+    landing.reset();
+    previous = {};
+  }
+
+  void struck(const MatchBall& ball) override { previous = stateOf(ball); }
+
+  std::string track(const MatchBall& ball, double now) override
+  {
+    const BallState was = previous;
+    previous = stateOf(ball);
+    // Down: bounced since the last step (falling then, rising now), or on
+    // the ground. Where it came down is worked out from the last step,
+    // falling under gravity (drag is small over a step).
+    const bool bounced = was.lift < 0.0f && previous.lift > 0.0f;
+    const bool grounded = previous.height <= 0.01f && previous.lift <= 0.0f;
+    if (!bounced && !grounded) return {};
+    constexpr float G = MatchTuning::Ball::GRAVITY;
+    const float fall = (was.lift + std::sqrt(was.lift * was.lift +
+                                             2.0f * G * std::max(was.height, 0.0f))) /
+                       G;
+    const Vector2F point{was.position.x + was.velocity.x * fall / LENGTH,
+                         was.position.y + was.velocity.y * fall / WIDTH};
+    Landing down;
+    down.point = point;
+    const Vector2F offset = lineMetres(point);
+    down.longer = offset.x - rangeMetres;
+    down.right = offset.y;
+    down.miss = std::hypot(down.longer, down.right);
+    const int ring = static_cast<int>(std::floor(down.miss / ringWidth));
+    const int rings = static_cast<int>(ringCount);
+    down.score = ring < rings ? rings - ring : 0;
+    down.flight = static_cast<float>(now - STEP - strike->at) + fall;
+    landing = down;
+    return down.score > 0
+               ? std::format("landed on the target, {} points", down.score)
+               : std::string("landed outside the rings");
+  }
+
+ private:
+  struct BallState
+  {
+    Vector2F position{};
+    Vector2F velocity{};
+    /** Metres up, and upward speed (m/s). */
+    float height = 0.0f;
+    float lift = 0.0f;
+  };
+  static BallState stateOf(const MatchBall& ball)
+  {
+    return {ball.position, ball.velocity,
+            ball.z * MatchTuning::Units::BALL_Z_METRES, ball.velocityZ};
+  }
+  struct Landing
+  {
+    Vector2F point{};
+    /** From the centre (m); long (+) or short, right (+) or left (m). */
+    float miss = 0.0f;
+    float longer = 0.0f;
+    float right = 0.0f;
+    int score = 0;
+    /** From the strike to coming down (s, roughly: the strike is read at
+     * the end of its step). */
+    float flight = 0.0f;
+  };
+
+  float rangeMetres = 35.0f;
+  float ringWidth = 1.0f;
+  float ringCount = 5.0f;
+  float sideRevs = 0.0f;
+  float topRevs = 0.0f;
+
+  BallState previous;
+  std::optional<Landing> landing;
 };
 }  // namespace
 
@@ -3908,5 +4773,7 @@ std::vector<std::unique_ptr<Drill>> makeDrills()
   drills.push_back(std::make_unique<ShotDrill>());
   drills.push_back(std::make_unique<FirstTouchDrill>());
   drills.push_back(std::make_unique<PassDrill>());
+  drills.push_back(std::make_unique<CorridorPassDrill>());
+  drills.push_back(std::make_unique<BullseyePassDrill>());
   return drills;
 }

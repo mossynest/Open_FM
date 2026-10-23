@@ -52,9 +52,22 @@ float MatchEngine::groundLaunchSpeed(float distanceMetres,
   return groundLaunchSpeedAardvark(distanceMetres, arrivalSpeed);
 }
 
+float MatchEngine::curlAngle(float distanceMetres, float along, float up,
+                             float startHeight, BallSpin spin) const
+{
+  switch (ballPhysicsId)
+  {
+    case BallPhysicsId::AARDVARK:
+      break;
+    case BallPhysicsId::BINTURONG:
+      return curlAngleBinturong(distanceMetres, along, up, startHeight, spin);
+  }
+  return 0.0f;
+}
+
 float MatchEngine::loftVerticalSpeed(float distanceMetres,
                                      float horizontalSpeed, float startHeight,
-                                     float arrivalHeight) const
+                                     float arrivalHeight, BallSpin spin) const
 {
   switch (ballPhysicsId)
   {
@@ -62,7 +75,7 @@ float MatchEngine::loftVerticalSpeed(float distanceMetres,
       break;
     case BallPhysicsId::BINTURONG:
       return loftVerticalSpeedBinturong(distanceMetres, horizontalSpeed,
-                                        startHeight, arrivalHeight);
+                                        startHeight, arrivalHeight, spin);
   }
   return loftVerticalSpeedAardvark(distanceMetres, horizontalSpeed, startHeight,
                                    arrivalHeight);

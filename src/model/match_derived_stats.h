@@ -55,6 +55,7 @@ enum class DerivedStat : std::uint8_t
   AGILITY,
   FIRST_TOUCH,
   ACCELERATION,
+  TECHNIQUE,
   // Match-engine-only stats.
   ENDURANCE,
   BURST_CAPACITY,
@@ -62,7 +63,7 @@ enum class DerivedStat : std::uint8_t
   RECOVERY_RATE,
   FAST_RECOVERY,
 };
-inline constexpr std::size_t DERIVED_STAT_COUNT = 8;
+inline constexpr std::size_t DERIVED_STAT_COUNT = 9;
 
 enum class DerivedLayer : std::uint8_t
 {
@@ -149,6 +150,10 @@ inline constexpr std::array<DerivedStatInfo, DERIVED_STAT_COUNT> DERIVED_STATS{{
      "Getting going: his maximum push from a standstill (A0 of the "
      "acceleration-speed profile, fading to nothing at his top speed).",
      "m/s^2", 5.5f, 9.5f, 5.4f, 9.6f, STAT_1_RATING, STAT_99_RATING},
+    {DerivedLayer::FUTURE_GAME_STAT, "Technique", "Tec",
+     "Clean striking of the ball with either foot: how little his weaker "
+     "foot costs him.",
+     "", 0.0f, 0.0f, 0.0f, 0.0f},
     // ---- Match-engine-only stats ------------------------------------------
     // The fatigue plan (4.1): from the research ranges, a little wider.
     {DerivedLayer::MATCH_ENGINE_ONLY, "Endurance", "End",
@@ -215,6 +220,17 @@ constexpr DerivedRecipe firstTouchRecipe()
   return recipe;
 }
 
+constexpr DerivedRecipe techniqueRecipe()
+{
+  // A placeholder until the game carries Technique: the three stats that
+  // strike or touch the ball.
+  DerivedRecipe recipe;
+  recipe.weights[static_cast<std::size_t>(BaseAttribute::PASSING)] = 0.4f;
+  recipe.weights[static_cast<std::size_t>(BaseAttribute::DRIBBLING)] = 0.3f;
+  recipe.weights[static_cast<std::size_t>(BaseAttribute::SHOOTING)] = 0.3f;
+  return recipe;
+}
+
 constexpr DerivedRecipe burstRecipe()
 {
   // D' grows with the speed reserve above critical speed, so half Stamina,
@@ -229,12 +245,14 @@ constexpr DerivedRecipe burstRecipe()
 
 /** The recipes a handshake uses unless it has its own (the Aardvark's).
  * Future stats: agility and acceleration blend Pace and Physicality, first
- * touch Dribbling and Passing. Match-engine-only: the endurance stats echo
- * Stamina, except burst capacity (half Stamina, half Acceleration). */
+ * touch Dribbling and Passing, technique Passing, Dribbling and Shooting.
+ * Match-engine-only: the endurance stats echo Stamina, except burst
+ * capacity (half Stamina, half Acceleration). */
 inline constexpr DerivedRecipes DEFAULT_DERIVED_RECIPES{{
     DerivedStats::agilityRecipe(),
     DerivedStats::firstTouchRecipe(),
     DerivedStats::accelerationRecipe(),
+    DerivedStats::techniqueRecipe(),
     DerivedStats::only(BaseAttribute::STAMINA),
     DerivedStats::burstRecipe(),
     DerivedStats::only(BaseAttribute::STAMINA),

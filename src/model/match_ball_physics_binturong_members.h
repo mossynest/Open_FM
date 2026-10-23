@@ -17,5 +17,8 @@
   void integrateBallBinturong(float dt);
   static float groundLaunchSpeedBinturong(float distanceMetres, float arrivalSpeed);
   static float loftVerticalSpeedBinturong(float distanceMetres, float horizontalSpeed,
-                                   float startHeight, float arrivalHeight);
+                                   float startHeight, float arrivalHeight,
+                                   BallSpin spin = {});
+  static float curlAngleBinturong(float distanceMetres, float along, float up,
+                                  float startHeight, BallSpin spin);
 // clang-format on

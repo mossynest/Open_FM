@@ -45,7 +45,8 @@ std::array<BodyId, 2>& sandboxBodies();
 HandshakeId& sandboxHandshake();
 /** The referee, AI managers (home, away), ball physics and out-of-play
  * version new sandbox matches, checks and drills are played with: the
- * --referee, --managers, --ball and --out-of-play options, else Aardvark. */
+ * --referee, --managers, --ball and --out-of-play options, else Aardvark
+ * (the ball: Binturong). */
 RefereeId& sandboxReferee();
 std::array<ManagerId, 2>& sandboxManagers();
 BallPhysicsId& sandboxBallPhysics();

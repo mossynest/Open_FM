@@ -87,7 +87,13 @@ json toJson(const MatchCommandRecord& command)
           {"at_speed", command.atSpeed},
           {"feed_velocity", json{command.feedVelocity.x, command.feedVelocity.y}},
           {"feed_lift", command.feedLift},
-          {"pass_style", static_cast<int>(command.passStyle)}};
+          {"pass_style", static_cast<int>(command.passStyle)},
+          {"pass_spin", command.passSpin
+                            ? json{command.passSpin->side, command.passSpin->top}
+                            : json(nullptr)},
+          {"pass_arrival",
+           command.passArrival ? json(*command.passArrival) : json(nullptr)},
+          {"keep_urgency", command.keepUrgency}};
 }
 
 MatchCommandRecord commandFromJson(const json& value)
@@ -126,6 +132,16 @@ MatchCommandRecord commandFromJson(const json& value)
   command.feedLift = value.value("feed_lift", 0.0f);
   command.passStyle =
       static_cast<ForcedPassStyle>(value.value("pass_style", 0));
+  if (const auto spin = value.find("pass_spin");
+      spin != value.end() && spin->is_array())
+    command.passSpin = BallSpin{spin->at(0).get<float>(), spin->at(1).get<float>()};
+  else if (const float curve = value.value("pass_curve", 0.0f); curve != 0.0f)
+    // Older recordings: the curve as a heading turn, now sidespin.
+    command.passSpin = BallSpin{curve / MatchTuning::Ball::TURN_PER_SIDESPIN, 0.0f};
+  if (const auto arrival = value.find("pass_arrival");
+      arrival != value.end() && arrival->is_number())
+    command.passArrival = arrival->get<float>();
+  command.keepUrgency = value.value("keep_urgency", 1.0f);
   return command;
 }
 

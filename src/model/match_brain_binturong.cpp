@@ -296,7 +296,8 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
                                             ball.velocity.y / speed}
                                  : Vector2F{0.0f, 0.0f};
     FlightState flight{speed, ball.velocityZ,
-                       ball.z * MatchTuning::Units::BALL_Z_METRES, false};
+                       ball.z * MatchTuning::Units::BALL_Z_METRES, false,
+                       ball.spin};
     Vector2F at = toMetres(ball.position);
     constexpr int SUBSTEPS = MatchTuning::Timing::BALL_SUBSTEPS;
     constexpr float TICK = MatchTuning::Timing::FIXED_STEP_SECONDS;
@@ -2250,7 +2251,8 @@ bool MatchEngine::waitsForCloserBinturong(const MatchPlayer& player,
                                                       ball.velocity.y / speed}
                                            : Vector2F{0.0f, 0.0f};
   FlightState flight{speed, ball.velocityZ,
-                     ball.z * MatchTuning::Units::BALL_Z_METRES, false};
+                     ball.z * MatchTuning::Units::BALL_Z_METRES, false,
+                     ball.spin};
   const Vector2F ballStart = toMetres(ball.position);
   const Vector2F playerStart = toMetres(player.position);
   // He stands still through the rest of this step's ball sub-steps, then
@@ -4171,11 +4173,11 @@ float MatchEngine::carryUrgencyBinturong(const MatchPlayer& player) const
   // How urgently he carries it: open space along his way, a break on (an
   // attacking transition) and a side that takes risks push him on; with
   // nobody near he may stroll it out, with someone in front he slows to
-  // keep it. A drill's dribbler goes as hard as the drill asks: flat out.
+  // keep it. A drill's dribbler goes as hard as the drill asks.
   using R = MatchTuning::Dribble;
-  if (player.player && std::ranges::find(ballKeepers, player.player->getId()) !=
-                           ballKeepers.end())
-    return 1.0f;
+  if (player.player)
+    for (const auto& [keeper, urgency] : ballKeeperUrgency)
+      if (keeper == player.player->getId()) return std::clamp(urgency, 0.0f, 1.0f);
   const Vector2F at = toMetres(player.position);
   const Vector2F way = toMetres({ball.dribbleGoal.x - player.position.x,
                                  ball.dribbleGoal.y - player.position.y});

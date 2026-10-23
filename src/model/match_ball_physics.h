@@ -76,10 +76,28 @@ constexpr std::optional<BallPhysicsId> ballPhysicsFromKey(std::string_view key)
  * the launch solvers and every prediction, so predicted and real flights
  * match exactly.
  */
+/**
+ * The ball's spin (rad/s), about axes that turn with its heading:
+ * sidespin about the vertical (+ bends its heading the way a positive
+ * PassOption::curve does) and topspin about the horizontal across its path
+ * (+ topspin: it dips, and runs on at a bounce; - backspin: it lifts, and
+ * checks up).
+ */
+struct BallSpin
+{
+  float side = 0.0f;
+  float top = 0.0f;
+  friend bool operator==(const BallSpin&, const BallSpin&) = default;
+};
+
 struct FlightState
 {
   float horizontalSpeed = 0.0f;
   float verticalSpeed = 0.0f;
   float height = 0.0f;
   bool bounced = false;
+  /** Its spin (Binturong physics; the Aardvark flight ignores it). */
+  BallSpin spin{};
+  /** Out: how fast the sidespin turned its heading over the step (rad/s). */
+  float turnRate = 0.0f;
 };

@@ -69,10 +69,11 @@ enum class StrikeKnob : std::uint8_t
   OFF_GROUND_WEIGHT,
   PRESSURE_ANGLE,
   PRESSURE_WEIGHT,
-  FROM_BEHIND_ANGLE,
-  FROM_BEHIND_WEIGHT,
-  ACROSS_BODY_ANGLE,
-  ACROSS_BODY_WEIGHT,
+  APPROACH_ANGLE,
+  APPROACH_WEIGHT,
+  SPIN_ASKED_ANGLE,
+  SPIN_ASKED_WEIGHT,
+  SPIN_ASKED_SPIN,
   // How the conditions are measured.
   REFERENCE_SPEED,
   PRESSURE_RADIUS,
@@ -94,6 +95,13 @@ enum class StrikeKnob : std::uint8_t
   WEIGHT_JITTER,
   VERTICAL_SHARE,
   UP_SHARE,
+  ELEVATION_JITTER,
+  SPIN_FAIL_BASE,
+  SPIN_FAIL_RANGE,
+  SPIN_MISS_BASE,
+  SPIN_MISS_RANGE,
+  UNDER_SPIN_SHARE,
+  SPIN_JITTER,
   COUNT
 };
 inline constexpr std::size_t STRIKE_KNOB_COUNT =
@@ -126,10 +134,11 @@ inline constexpr std::array<StrikeKnobInfo, STRIKE_KNOB_COUNT> STRIKE_KNOBS{{
     {"Off the ground: weight", "Factors", 0.0f, 1.0f, ""},
     {"Pressure: angle", "Factors", 0.0f, 1.0f, ""},
     {"Pressure: weight", "Factors", 0.0f, 1.0f, ""},
-    {"From behind: angle", "Factors", 0.0f, 1.0f, ""},
-    {"From behind: weight", "Factors", 0.0f, 1.0f, ""},
-    {"Across body: angle", "Factors", 0.0f, 1.0f, ""},
-    {"Across body: weight", "Factors", 0.0f, 1.0f, ""},
+    {"Approach angle: angle", "Factors", 0.0f, 1.0f, ""},
+    {"Approach angle: weight", "Factors", 0.0f, 1.0f, ""},
+    {"Spin asked: angle", "Factors", 0.0f, 1.0f, ""},
+    {"Spin asked: weight", "Factors", 0.0f, 1.0f, ""},
+    {"Spin asked: spin", "Factors", 0.0f, 1.0f, ""},
     {"Reference speed", "Measures", 10.0f, 40.0f, "m/s"},
     {"Pressure radius", "Measures", 0.5f, 12.0f, "m"},
     {"Skill reduction", "Technique", 0.0f, 1.0f, "share"},
@@ -149,6 +158,13 @@ inline constexpr std::array<StrikeKnobInfo, STRIKE_KNOB_COUNT> STRIKE_KNOBS{{
     {"Weight jitter", "Technique", 0.0f, 0.2f, "share"},
     {"Vertical share", "Technique", 0.0f, 1.0f, "share"},
     {"Up share", "Technique", 0.0f, 1.0f, "share"},
+    {"Elevation jitter", "Technique", 0.0f, 0.3f, "rad"},
+    {"Spin fail base", "Technique", 0.0f, 0.3f, "chance"},
+    {"Spin fail range", "Technique", 0.0f, 1.0f, "chance"},
+    {"Spin miss base", "Technique", 0.0f, 1.0f, "share"},
+    {"Spin miss range", "Technique", 0.0f, 1.0f, "share"},
+    {"Under-spin share", "Technique", 0.0f, 1.0f, "share"},
+    {"Spin jitter", "Technique", 0.0f, 20.0f, "rad/s"},
 }};
 
 inline const StrikeKnobInfo& strikeKnobInfo(StrikeKnob knob)
@@ -179,12 +195,20 @@ constexpr float strikeProfileDefault(StrikeKnob knob)
     case StrikeKnob::OFF_GROUND_WEIGHT: return P::OFF_GROUND;
     case StrikeKnob::PRESSURE_ANGLE:
     case StrikeKnob::PRESSURE_WEIGHT: return P::PRESSURE;
-    // Coming from behind and across his body read his facing, which
-    // follows only his movement: no weight until facing has its own pass.
-    case StrikeKnob::FROM_BEHIND_ANGLE:
-    case StrikeKnob::FROM_BEHIND_WEIGHT:
-    case StrikeKnob::ACROSS_BODY_ANGLE:
-    case StrikeKnob::ACROSS_BODY_WEIGHT: return 0.0f;
+    // The approach angle (where it comes from against his facing) is the
+    // first touch's; for strikes no weight yet (first-time strikes, later).
+    case StrikeKnob::APPROACH_ANGLE:
+    case StrikeKnob::APPROACH_WEIGHT: return 0.0f;
+    // Spin: in the model, nothing set yet (it comes off as asked).
+    case StrikeKnob::SPIN_ASKED_ANGLE:
+    case StrikeKnob::SPIN_ASKED_WEIGHT:
+    case StrikeKnob::SPIN_ASKED_SPIN:
+    case StrikeKnob::SPIN_FAIL_BASE:
+    case StrikeKnob::SPIN_FAIL_RANGE:
+    case StrikeKnob::SPIN_MISS_BASE:
+    case StrikeKnob::SPIN_MISS_RANGE:
+    case StrikeKnob::SPIN_JITTER: return 0.0f;
+    case StrikeKnob::UNDER_SPIN_SHARE: return 1.0f;
     case StrikeKnob::REFERENCE_SPEED: return P::REFERENCE_SPEED;
     case StrikeKnob::PRESSURE_RADIUS: return P::PRESSURE_RADIUS_METRES;
     case StrikeKnob::SKILL_REDUCTION: return P::SKILL_REDUCTION;
@@ -206,6 +230,7 @@ constexpr float strikeProfileDefault(StrikeKnob knob)
     case StrikeKnob::WEIGHT_JITTER: return P::WEIGHT_JITTER;
     case StrikeKnob::VERTICAL_SHARE: return P::VERTICAL_SHARE;
     case StrikeKnob::UP_SHARE: return P::UP_SHARE;
+    case StrikeKnob::ELEVATION_JITTER: return P::ELEVATION_JITTER;
     case StrikeKnob::COUNT: break;
   }
   return 0.0f;

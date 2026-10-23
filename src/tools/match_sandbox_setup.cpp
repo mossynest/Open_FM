@@ -55,7 +55,7 @@ std::array<ManagerId, 2>& sandboxManagers()
 
 BallPhysicsId& sandboxBallPhysics()
 {
-  static BallPhysicsId physics = BallPhysicsId::AARDVARK;
+  static BallPhysicsId physics = BallPhysicsId::BINTURONG;
   return physics;
 }
 

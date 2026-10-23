@@ -47,7 +47,7 @@ enum class TouchKnob : std::uint8_t
   REBOUND_SHARE,
   MAX_TOUCH_SPEED,
   FATIGUE_ERROR_GAIN,
-  SHOWN_WEAK_FOOT_GAIN,
+  WEAKER_FOOT_ERROR_GAIN,
   // Difficulty (body): the jobs' sizes, then the conditions' angle and
   // weight weights.
   PACE_CHANGE_WEIGHT,
@@ -149,8 +149,8 @@ inline constexpr std::array<TouchKnobInfo, TOUCH_KNOB_COUNT> TOUCH_KNOBS{{
      2.0f, 15.0f, "m/s"},
     {"Fatigue error gain", "Technique",
      MatchTuning::Fatigue::SPENT_TECHNIQUE_ERROR, 0.0f, 1.5f, "x"},
-    {"Shown weak foot gain", "Technique",
-     TacticsTuning::WEAK_FOOT_ERROR_GAIN, 0.0f, 2.0f, "x"},
+    {"Weaker foot error gain", "Technique",
+     MatchTuning::Player::WEAKER_FOOT_ERROR_GAIN, 0.0f, 2.0f, "x"},
     // Factors
     {"Pace change: weight", "Factors",
      TouchKnobDefaults::F::PACE_CHANGE_WEIGHT, 0.0f, 1.5f, ""},
@@ -166,9 +166,9 @@ inline constexpr std::array<TouchKnobInfo, TOUCH_KNOB_COUNT> TOUCH_KNOBS{{
      TouchKnobDefaults::F::INCOMING_SPEED.angle, 0.0f, 1.0f, ""},
     {"Incoming pace: weight", "Factors",
      TouchKnobDefaults::F::INCOMING_SPEED.weight, 0.0f, 1.0f, ""},
-    {"From behind: angle", "Factors", TouchKnobDefaults::F::APPROACH.angle,
+    {"Approach angle: angle", "Factors", TouchKnobDefaults::F::APPROACH.angle,
      0.0f, 1.0f, ""},
-    {"From behind: weight", "Factors", TouchKnobDefaults::F::APPROACH.weight,
+    {"Approach angle: weight", "Factors", TouchKnobDefaults::F::APPROACH.weight,
      0.0f, 1.0f, ""},
     {"Own speed: angle", "Factors", TouchKnobDefaults::F::OWN_MOVEMENT.angle,
      0.0f, 1.0f, ""},

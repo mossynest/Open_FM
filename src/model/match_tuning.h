@@ -164,6 +164,10 @@ struct MatchTuning final
   struct Player final
   {
     static constexpr float DEFAULT_ATTRIBUTE = 0.5f;
+    /** Binturong body: a touch or strike with his weaker foot has its error
+     * (fail chances and jitter) raised by this share, at Technique 0, less
+     * the better his technique (none at 1). */
+    static constexpr float WEAKER_FOOT_ERROR_GAIN = 0.45f;
     static constexpr float RATING_SCALE = 100.0f;
     // Attributes are stretched around a typical professional level so that
     // quality differences between squads matter as much as in real results;
@@ -395,7 +399,7 @@ struct MatchTuning final
     static constexpr FactorWeights INCOMING_SPEED{0.15f, 0.10f};
     /** Where it comes from against where he faces (1 from behind). */
     static constexpr FactorWeights APPROACH{0.20f, 0.10f};
-    /** How "from behind" grows with the angle off his facing (degrees, the
+    /** How the approach angle grows with the angle off his facing (degrees, the
      * touch and every strike): nothing in front of him, a little towards
      * square, then steeply round to a full block behind him. */
     static constexpr float BEHIND_CLEAR_DEGREES = 45.0f;
@@ -443,12 +447,12 @@ struct MatchTuning final
 
     /** Chance a job goes wrong: (base + difficulty x range), cut by his
      * touch skill (a perfect one by SKILL_REDUCTION) and widened by
-     * tiredness and nerves. */
+     * tiredness and his weaker foot. */
     static constexpr float ANGLE_FAIL_BASE = 0.03f;
     static constexpr float ANGLE_FAIL_RANGE = 0.5f;
     static constexpr float WEIGHT_FAIL_BASE = 0.05f;
     static constexpr float WEIGHT_FAIL_RANGE = 0.5f;
-    static constexpr float SKILL_REDUCTION = 0.8f;
+    static constexpr float SKILL_REDUCTION = 0.9f;
     /** How badly a failed job misses: a share of the job, uniform up to
      * (base + difficulty x range). The skill decides how often; the ball
      * how badly. */
@@ -570,6 +574,17 @@ struct MatchTuning final
     /** After a strike at the meet he runs on this far along its line (the
      * corner's way out). */
     static constexpr float MEET_STRIKE_OUT_METRES = 2.0f;
+    /** Turning to pass (passing to-do, technique 2), Binturong body: a held
+     * pass turns his body toward its line, and one decided with the ball at
+     * his feet waits for the turn. It is struck once he is within
+     * TURN_TO_PASS_READY_DEGREES of the line (or as far round as the ball
+     * lets him), or when his time is up: before an opponent could get to
+     * the ball (read as for the meet's shaping), at most
+     * TURN_TO_PASS_MAX_SECONDS. He turns no further than leaves the ball
+     * this far inside his dead zone's edge (design choices). */
+    static constexpr float TURN_TO_PASS_READY_DEGREES = 10.0f;
+    static constexpr float TURN_TO_PASS_MAX_SECONDS = 1.0f;
+    static constexpr float TURN_TO_PASS_DEAD_ZONE_MARGIN_DEGREES = 15.0f;
     /** The carry's pace (2c, design choices): an urgency 0-1 (0 a walk, 1/3
      * a jog, 2/3 a run, 1 a sprint, the tops of his bands) from a base, the
      * space along his way (the nearest opponent within the cone ahead,
@@ -898,11 +913,33 @@ struct MatchTuning final
     static constexpr float ARRIVAL_SPEED_PASSING = 3.0f;
     static constexpr float ARRIVAL_SPEED_PER_METRE = 0.05f;
     static constexpr float MIN_GROUND_SPEED = 7.0f;
+    /** Aardvark body: every ground pass; Binturong body: throws only (his
+     * kicks are held to his kick power). */
     static constexpr float MAX_GROUND_SPEED = 24.0f;
     // Lofted balls: horizontal launch speed grows with the distance.
     static constexpr float LOFTED_BASE_SPEED = 11.0f;
     static constexpr float LOFTED_SPEED_PER_METRE = 0.22f;
+    /** Aardvark body only (Binturong: his kick power). */
     static constexpr float MAX_LOFTED_SPEED = 24.0f;
+    /** Binturong body: kick power, the fastest he can strike a pass (m/s,
+     * the ball's launch speed along the ground or through the air): from
+     * MIN_KICK_SPEED at Passing 1 (a Sunday-league player) to
+     * MAX_KICK_SPEED at Passing 99 (the world's best). A pass that needs
+     * more is struck at his limit and falls short. */
+    static constexpr float MIN_KICK_SPEED = 20.0f;
+    static constexpr float MAX_KICK_SPEED = 35.0f;
+    /** Binturong body: the most spin he can put on a pass (rev/s, sidespin
+     * and topspin together), from Passing 1 (a Sunday-league player) to
+     * Passing 99 (the world's best); a pass asking more gets this much.
+     * Skilled players' curled kicks: about 7-10 rev/s (Asai et al. 2007;
+     * Bray and Kerwin 2003). */
+    static constexpr float MIN_SPIN_REVS = 4.0f;
+    static constexpr float MAX_SPIN_REVS = 10.0f;
+    /** Binturong body: the spin a kick gets when the brain asks for none
+     * (rev/s; + topspin, - backspin): a lofted instep ball's backspin, a
+     * cross's a little less (first guesses; held to his capacity). */
+    static constexpr float DEFAULT_LOFTED_TOPSPIN_REVS = -5.0f;
+    static constexpr float DEFAULT_CROSS_TOPSPIN_REVS = -4.0f;
     static constexpr float LOFTED_ARRIVAL_HEIGHT_METRES = 1.1f;
     static constexpr float DELIVERY_HEIGHT_SPREAD = 0.6f;
     static constexpr float OFFSIDE_PERCEPTION_ERROR = 0.06f;
@@ -915,6 +952,16 @@ struct MatchTuning final
     /** Heading rotation (rad/s) of a curled ground pass. */
     static constexpr float MAX_CURVE = 0.12f;
     static constexpr float CURVE_SKILL_BASE = 0.4f;
+    /** Binturong body: a ground pass has no curve unless he means one; with
+     * this chance at Passing 0 (falling to none at 100) it picks one up by
+     * accident, up to MAX_CURVE the way his foot bends it (left foot: to
+     * his right; right foot: to his left). */
+    static constexpr float ACCIDENTAL_CURVE_CHANCE = 0.3f;
+    /** Binturong body: a lofted pass the same way, curling more than one
+     * along the ground (struck under and across the ball, with nothing but
+     * the air to work on its spin). */
+    static constexpr float LOFTED_ACCIDENTAL_CURVE_CHANCE = 0.3f;
+    static constexpr float LOFTED_MAX_CURVE = 0.15f;
     static constexpr float MIN_ACTION_COOLDOWN = 0.8f;
     static constexpr float MAX_ACTION_COOLDOWN = 1.4f;
     /** The kicker cannot touch his own kick again for this long. */
@@ -1034,7 +1081,7 @@ struct MatchTuning final
       /** As the touch's: a body in the way (1.5 m). */
       static constexpr float PRESSURE_RADIUS_METRES = 1.5f;
       // Technique: how often each job goes wrong, and how badly.
-      static constexpr float SKILL_REDUCTION = 0.8f;
+      static constexpr float SKILL_REDUCTION = 0.9f;
       static constexpr float ANGLE_FAIL_BASE = 0.05f;
       static constexpr float ANGLE_FAIL_RANGE = 0.5f;
       static constexpr float WEIGHT_FAIL_BASE = 0.05f;
@@ -1057,6 +1104,10 @@ struct MatchTuning final
        * elevation (0: along the ground), and of those the share up. */
       static constexpr float VERTICAL_SHARE = 0.0f;
       static constexpr float UP_SHARE = 0.5f;
+      /** Above 0: the elevation has its own jitter (rad), and a failed
+       * angle its own miss, independent of the line's, which then keeps
+       * all of its own (the vertical share is not used). */
+      static constexpr float ELEVATION_JITTER = 0.0f;
     };
 
     /** Ground passes (step 3a). Skill: Passing. Failed passes are more
@@ -1072,7 +1123,8 @@ struct MatchTuning final
      * reference for their power demand, so the usual long ball is not the
      * hardest there is. A failed weight misses by a smaller share (the
      * pace is two or three times a ground pass's). A long ball as often
-     * high as low. */
+     * high as low. Its line and its steepness each have their own error:
+     * the line as wide as a ground pass's, the steepness on top. */
     struct Lofted : Profile
     {
       static constexpr float PACE_CHANGE = 0.6f;
@@ -1081,23 +1133,27 @@ struct MatchTuning final
       static constexpr float WEIGHT_MISS_BASE = 0.05f;
       static constexpr float WEIGHT_MISS_RANGE = 0.15f;
       static constexpr float HEAVY_SHARE = 0.5f;
-      static constexpr float ANGLE_JITTER = 0.04f;
+      static constexpr float ANGLE_JITTER = 0.05f;
       static constexpr float WEIGHT_JITTER = 0.03f;
       static constexpr float VERTICAL_SHARE = 0.4f;
       static constexpr float UP_SHARE = 0.5f;
+      static constexpr float ELEVATION_JITTER = 0.02f;
     };
 
-    /** Crosses (step 3b): a lofted ball, more often over everyone. */
+    /** Crosses (step 3b): a lofted ball, more often over everyone. Still
+     * one error shared between the line and the steepness. */
     struct Cross final : Lofted
     {
+      static constexpr float ANGLE_JITTER = 0.04f;
       static constexpr float VERTICAL_SHARE = 0.5f;
       static constexpr float UP_SHARE = 0.65f;
+      static constexpr float ELEVATION_JITTER = 0.0f;
     };
 
     /** Shots (step 3c). Skill: Shooting. The jitter starts at the old
      * spread's size: about 0.27 rad sideways (3.45 + 2.4 x (1 - Shooting)
-     * m at 16 m), cut by Shooting as gently (0.41), with 0.6 of it
-     * vertical. On top, failures grow with the conditions: usually skied,
+     * m at 16 m), cut by Shooting as much as a pass by Passing (0.9; was
+     * 0.41, as gently as the old spread), with 0.6 of it vertical. On top, failures grow with the conditions: usually skied,
      * a failed weight scuffed. */
     struct Shot : Profile
     {
@@ -1108,7 +1164,7 @@ struct MatchTuning final
       static constexpr float OFF_GROUND = VERY_HIGH;
       static constexpr float PRESSURE = HIGH;
       static constexpr float PRESSURE_RADIUS_METRES = 1.5f;
-      static constexpr float SKILL_REDUCTION = 0.41f;
+      static constexpr float SKILL_REDUCTION = 0.9f;
       static constexpr float ANGLE_FAIL_BASE = 0.0f;
       static constexpr float ANGLE_FAIL_RANGE = 0.4f;
       static constexpr float WEIGHT_FAIL_BASE = 0.0f;
@@ -1147,7 +1203,7 @@ struct MatchTuning final
       static constexpr float REFERENCE_SPEED = 35.0f;
       static constexpr float WEAKER_FOOT = MEDIUM;
       static constexpr float OFF_GROUND = MEDIUM;
-      static constexpr float SKILL_REDUCTION = 0.6f;
+      static constexpr float SKILL_REDUCTION = 0.9f;
       static constexpr float ANGLE_MISS_ABSOLUTE_BASE = 0.1f;
       static constexpr float ANGLE_MISS_ABSOLUTE_RANGE = 0.3f;
       static constexpr float WEIGHT_MISS_BASE = 0.1f;
@@ -1239,8 +1295,8 @@ struct MatchTuning final
 
   /**
    * Ball physics in SI units: quadratic air drag with a drag crisis, gravity,
-   * a restitution bounce, rolling resistance on the grass and curve as a
-   * heading rotation (a Magnus-effect stand-in).
+   * a restitution bounce, rolling resistance on the grass and spin (sidespin
+   * and topspin/backspin) with its Magnus force.
    */
   struct Ball final
   {
@@ -1257,7 +1313,37 @@ struct MatchTuning final
     static constexpr float MIN_BOUNCE_SPEED = 1.0f;
     static constexpr float ROLLING_DECELERATION = 0.75f;
     static constexpr float ROLLING_VISCOUS_PER_SECOND = 0.05f;
-    static constexpr float CURVE_DECAY_PER_SECOND = 0.35f;
+    static constexpr float RADIUS_METRES = 0.11f;
+    /** Spin (Binturong physics): the Magnus force is
+     * 0.5 rho A C_L v^2 across the ball's path, its lift coefficient C_L
+     * this many times the spin ratio (r w / v), at most MAX_LIFT
+     * (footballs: about 0.25-0.3 at spin ratios of 0.2-0.3, Goff and Carre
+     * 2010; Asai et al. 2007). Below the cap a sidespin turns the heading
+     * at a steady TURN_PER_SIDESPIN rad/s per rad/s of spin, whatever the
+     * speed (the old curve's heading rotation). */
+    static constexpr float LIFT_PER_SPIN_RATIO = 1.0f;
+    static constexpr float MAX_LIFT_COEFFICIENT = 0.35f;
+    static constexpr float TURN_PER_SIDESPIN = 0.5f * AIR_DENSITY *
+                                               CROSS_SECTION_M2 / MASS_KG *
+                                               LIFT_PER_SPIN_RATIO *
+                                               RADIUS_METRES;
+    /** Spin fades slowly in flight (only the air works on it; a first
+     * guess, kept from the curve it replaced). */
+    static constexpr float SPIN_DECAY_PER_SECOND = 0.35f;
+    /** Binturong physics: on the ground the grass bleeds the sidespin off
+     * and holds the ball to its line, so a rolling ball's sidespin fades
+     * this much faster; a bounce keeps only this share of it. A rolling
+     * ball's topspin is its roll (no slipping). First guesses. */
+    static constexpr float SIDESPIN_DECAY_ROLLING_PER_SECOND = 2.0f;
+    static constexpr float SIDESPIN_RETAINED_ON_BOUNCE = 0.5f;
+    /** A bounce's grip (Binturong physics): the share of the way the
+     * contact's slip (the ball's speed against its spin's) is taken toward
+     * rolling, as for a hollow sphere (I = 2/3 m r^2). Set so a ball with
+     * no spin keeps BOUNCE_TANGENTIAL_RETAINED of its speed, as before;
+     * backspin then checks it up, topspin sends it on. */
+    static constexpr float BALL_INERTIA_SHARE = 2.0f / 3.0f;
+    static constexpr float BOUNCE_GRIP =
+        (1.0f - BOUNCE_TANGENTIAL_RETAINED) * (1.0f + BALL_INERTIA_SHARE);
     static constexpr float STOP_SPEED = 0.2f;
     /** A spent shot slower than this is a loose ball again. */
     static constexpr float DEAD_SHOT_SPEED = 6.0f;
