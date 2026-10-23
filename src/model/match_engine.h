@@ -782,6 +782,9 @@ struct MatchBall
    * largest gap so far. */
   float touchGap = 0.0f;
   float touchPeakGap = 0.0f;
+  /** Where the last contact sent it off from (normalised; for drills and
+   * reports, read by nothing in play). */
+  Vector2F sentFrom{};
   /** The current touch: what was tried, and how far from his centre (m)
    * he met the ball. */
   TouchIntent::Kind touchKind = TouchIntent::Kind::SET;
@@ -971,6 +974,24 @@ enum class ForcedPassStyle : std::uint8_t
   AS_CHOSEN,
   GROUND,
   LOFTED,
+  /** Low and hard (PassTechnique::DRIVEN). */
+  DRIVEN,
+  /** Steep, over someone close (PassTechnique::CHIP). */
+  CHIP,
+};
+
+/** How a pass is struck (Binturong body; the Aardvark one plays a driven
+ * pass along the ground and a chip as a lofted pass). */
+enum class PassTechnique : std::uint8_t
+{
+  /** Side-foot, along the ground, to arrive at a pace he can control. */
+  GROUND,
+  /** Instep, to drop at the target (chest height to a team-mate). */
+  LOFTED,
+  /** Instep, low and hard: down at the target, a long one in a flat arc. */
+  DRIVEN,
+  /** Stabbed up steeply with backspin, clearing someone close. */
+  CHIP,
 };
 
 /**
@@ -1024,6 +1045,8 @@ struct MatchCommandRecord
    * pace it is to arrive at (PassOption::arrivalSpeed). */
   std::optional<BallSpin> passSpin;
   std::optional<float> passArrival;
+  /** FORCE_PASS: played first time, off a pass to him (forcePassTo). */
+  bool passFirstTime = false;
   /** KEEP_BALL: how hard he carries it (older recordings: flat out). */
   float keepUrgency = 1.0f;
 };
@@ -1833,11 +1856,15 @@ class MatchEngine
                  ForcedPassStyle style);
   /** Drills: the player passes to `spot` (normalised), with nobody there,
    * as soon as he has the ball and can act: weighted as for a man standing
-   * on it, and a lofted pass is aimed to land on it; `curve` is the curve
-   * he means (PassOption::curve). Logged and replayed. */
+   * on it, and a lofted pass is aimed to land on it; `spin` is the spin he
+   * means (PassOption::spin), `arrivalSpeed` its pace there. `firstTime`:
+   * a pass played to him he plays on as it reaches him, without a touch (a
+   * ground ball, Binturong body; otherwise after his touch, as usual).
+   * Logged and replayed. */
   void forcePassTo(PlayerID playerId, Vector2F spot, ForcedPassStyle style,
                    std::optional<BallSpin> spin = std::nullopt,
-                   std::optional<float> arrivalSpeed = std::nullopt);
+                   std::optional<float> arrivalSpeed = std::nullopt,
+                   bool firstTime = false);
   /** Drills: while he has the ball, the player only carries it (no pass,
    * shot, clearance or take-on), so a drill measures his dribbling alone;
    * `keep` off releases him. `urgency` is how hard he carries it (the
@@ -1914,6 +1941,8 @@ class MatchEngine
     std::optional<Vector2F> spot;
     std::optional<BallSpin> spin;
     std::optional<float> arrivalSpeed;
+    /** Off a pass to him, played as it reaches him (decideFirstTimePass). */
+    bool firstTime = false;
   };
   ForcedPass forcedPass;
   /** Players who only carry the ball (keepBall), and how hard each does. */
@@ -2283,6 +2312,9 @@ class MatchEngine
     /** The pace (m/s) he wants a ground pass to reach the receiver (or its
      * target) at; none, the body's default weighting. */
     std::optional<float> arrivalSpeed;
+    /** How he strikes it; none, along the ground or lofted by `lofted`. A
+     * chip is lofted, a driven pass not. */
+    std::optional<PassTechnique> technique;
   };
 
   /** A strike decided at the step's start on a loose ball at his feet,
@@ -2312,8 +2344,38 @@ class MatchEngine
      * turnSeconds. */
     bool turning = false;
     float turnSeconds = 0.0f;
+    /** A pass he means to play first time off a ball still coming to him
+     * (`meetPoint`: where he reads he will meet it), struck in the sweep
+     * instead of a touch while it holds. */
+    bool firstTime = false;
   };
   std::optional<PendingStrike> pendingStrike;
+  /** Where and when the ball, as it is moving, first comes within his feet's
+   * reach, him on at his pace, within the first-time horizon. */
+  struct FirstTimeMeet
+  {
+    float seconds = 0.0f;
+    float heightMetres = 0.0f;
+    Vector2F point{};
+  };
+  [[nodiscard]] std::optional<FirstTimeMeet> firstTimeMeet(
+      const MatchPlayer& player) const;
+  /** Each step, before the ball moves: a player with a pass coming to him
+   * who is to play it first time (a drill's forced pass, for now) holds
+   * that pass for the sweep once the ball is within the horizon and stays on
+   * the ground; it is re-read every step, and dropped (he takes a touch)
+   * when it no longer holds. */
+  void decideFirstTimePass();
+  /** A drill's forced pass as he would play it now: the option, and
+   * whether it is forced lofted; none when its receiver is gone. */
+  std::optional<std::pair<PassOption, bool>> forcedPassOption(
+      MatchPlayer& carrier, const ForcedPass& pass);
+  /** Whether he plays the ball first time where he meets it now. */
+  [[nodiscard]] bool playsFirstTime(const MatchPlayer& player, bool hands,
+                                    float heightMetres) const;
+  /** The pass to him is completed and his held pass played on from where
+   * he met it, the ball as it was moving. */
+  void playFirstTimePass(MatchPlayer& player, const TouchMoment& moment);
   /** True while the carrier decides what to do with a loose ball at his
    * feet: a pass, shot or clearance then waits for the sweep. */
   bool strikesWaitForSweep = false;
@@ -2630,7 +2692,8 @@ class MatchEngine
   Kick kickPass(const MatchPlayer& passer, const MatchPlayer* receiver,
                 Vector2F target, float passDistance, bool lofted,
                 bool delivery, std::optional<BallSpin> spin,
-                std::optional<float> arrivalSpeed);
+                std::optional<float> arrivalSpeed,
+                std::optional<PassTechnique> technique = std::nullopt);
   /** How long a player needs after an action before he can act again. */
   enum class Recovery
   {

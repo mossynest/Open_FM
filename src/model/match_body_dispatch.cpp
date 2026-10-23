@@ -157,7 +157,8 @@ MatchEngine::Kick MatchEngine::kickPass(const MatchPlayer& passer,
                                         Vector2F target, float passDistance,
                                         bool lofted, bool delivery,
                                         std::optional<BallSpin> spin,
-                                        std::optional<float> arrivalSpeed)
+                                        std::optional<float> arrivalSpeed,
+                                        std::optional<PassTechnique> technique)
 {
   switch (bodyOf(passer.isHomeTeam))
   {
@@ -165,7 +166,7 @@ MatchEngine::Kick MatchEngine::kickPass(const MatchPlayer& passer,
       break;
     case BodyId::BINTURONG:
       return kickPassBinturong(passer, receiver, target, passDistance, lofted,
-                               delivery, spin, arrivalSpeed);
+                               delivery, spin, arrivalSpeed, technique);
   }
   return kickPassAardvark(passer, receiver, target, passDistance, lofted,
                           delivery, spin, arrivalSpeed);

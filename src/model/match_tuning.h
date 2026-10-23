@@ -940,6 +940,35 @@ struct MatchTuning final
      * cross's a little less (first guesses; held to his capacity). */
     static constexpr float DEFAULT_LOFTED_TOPSPIN_REVS = -5.0f;
     static constexpr float DEFAULT_CROSS_TOPSPIN_REVS = -4.0f;
+    /** Pass types (Binturong body, 2026-10-23; first guesses). The share of
+     * his kick power each can use, by the part of the foot: the side of
+     * the foot (a ground pass) can't strike at full power; the instep
+     * (lofted, driven, crosses) can; a chip is a stab. */
+    static constexpr float SIDE_FOOT_POWER_SHARE = 0.75f;
+    static constexpr float CHIP_POWER_SHARE = 0.6f;
+    /** A driven pass is struck at this share of his kick power, low enough
+     * to come down at the target (a long one in a flat arc), with a little
+     * topspin (rev/s). */
+    static constexpr float DRIVEN_SPEED_SHARE = 0.85f;
+    /** Steeper than this (deg) at that share, he hits it at full power. */
+    static constexpr float DRIVEN_MAX_ANGLE_DEGREES = 12.0f;
+    static constexpr float DEFAULT_DRIVEN_TOPSPIN_REVS = 2.0f;
+    /** A chip: the flattest launch, between these angles (deg), that comes
+     * down at the target and clears this height this far out (or halfway,
+     * for a short one), with heavy backspin (rev/s, held to his
+     * capacity). */
+    static constexpr float CHIP_CLEAR_HEIGHT_METRES = 2.5f;
+    static constexpr float CHIP_CLEAR_DISTANCE_METRES = 4.0f;
+    static constexpr float CHIP_MIN_ANGLE_DEGREES = 30.0f;
+    static constexpr float CHIP_MAX_ANGLE_DEGREES = 70.0f;
+    static constexpr float DEFAULT_CHIP_TOPSPIN_REVS = -9.0f;
+    /** A first-time pass (Binturong body; drills only until the brain
+     * judges it): he means to play it on as it reaches him once it is this
+     * close (s), re-read every step until he meets it... */
+    static constexpr float FIRST_TIME_DECISION_HORIZON_SECONDS = 0.5f;
+    /** ...a ground ball only: no higher than this when he meets it (m);
+     * otherwise he takes a first touch. */
+    static constexpr float FIRST_TIME_MAX_BALL_HEIGHT_METRES = 0.1f;
     static constexpr float LOFTED_ARRIVAL_HEIGHT_METRES = 1.1f;
     static constexpr float DELIVERY_HEIGHT_SPREAD = 0.6f;
     static constexpr float OFFSIDE_PERCEPTION_ERROR = 0.06f;
@@ -1138,6 +1167,34 @@ struct MatchTuning final
       static constexpr float VERTICAL_SHARE = 0.4f;
       static constexpr float UP_SHARE = 0.5f;
       static constexpr float ELEVATION_JITTER = 0.02f;
+    };
+
+    /** Driven passes (pass types, 2026-10-23; first guesses): struck hard
+     * with the instep, so their power demand is read as a lofted ball's,
+     * and a failed weight misses by a smaller share. A wider line than a
+     * ground pass, and some of its error in its height (more often too
+     * high than too low). */
+    struct DrivenPass final : Profile
+    {
+      static constexpr float PACE_CHANGE = 0.6f;
+      static constexpr float REFERENCE_SPEED = 35.0f;
+      static constexpr float WEIGHT_MISS_BASE = 0.05f;
+      static constexpr float WEIGHT_MISS_RANGE = 0.15f;
+      static constexpr float ANGLE_JITTER = 0.06f;
+      static constexpr float WEIGHT_JITTER = 0.03f;
+      static constexpr float UP_SHARE = 0.6f;
+      static constexpr float ELEVATION_JITTER = 0.015f;
+    };
+
+    /** Chips (pass types, 2026-10-23; first guesses): a lofted ball
+     * stabbed at, hardest on its weight and its steepness. */
+    struct Chip final : Lofted
+    {
+      static constexpr float WEIGHT_FAIL_BASE = 0.1f;
+      static constexpr float WEIGHT_MISS_BASE = 0.1f;
+      static constexpr float WEIGHT_MISS_RANGE = 0.3f;
+      static constexpr float WEIGHT_JITTER = 0.06f;
+      static constexpr float ELEVATION_JITTER = 0.04f;
     };
 
     /** Crosses (step 3b): a lofted ball, more often over everyone. Still

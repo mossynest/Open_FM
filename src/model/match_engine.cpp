@@ -447,7 +447,8 @@ bool MatchEngine::executeCommand(const MatchCommandRecord& command)
         return false;
       forcedPass = {command.player, command.incoming, command.passStyle,
                     command.incoming != 0 ? std::nullopt : command.target,
-                    command.passSpin, command.passArrival};
+                    command.passSpin, command.passArrival,
+                    command.passFirstTime};
       ++inputRevision;
       return true;
     case MatchCommandType::KEEP_BALL:
@@ -1198,13 +1199,16 @@ void MatchEngine::simulateStepBody(float dt)
     stats.ballInPlayMinutes +=
         dt * (matchClockRate()) / MatchTuning::Timing::SECONDS_PER_MINUTE;
     resolvePossessionAndActions(dt);
+    decideFirstTimePass();
     trackPressures();
     if ((!ball.possessedBy || ball.inTouch) && state == MatchState::PLAYING)
       updateBall(dt);
     // A strike he never got to in the sweep is dropped: he decides again.
     // One decided for his next meet waits for it while it holds, and one
-    // he is turning to while he still can.
-    if (pendingStrike && (pendingStrike->atMeet || pendingStrike->turning))
+    // he is turning to while he still can, and one he means to play first
+    // time while the ball still comes to him.
+    if (pendingStrike && (pendingStrike->atMeet || pendingStrike->turning ||
+                          pendingStrike->firstTime))
       ageHeldStrike(dt);
     else
       pendingStrike.reset();
@@ -2288,30 +2292,11 @@ void MatchEngine::resolvePossessionAndActions(float dt)
              carrier->player->getId() == forcedPass.passer)
     {
       // A drill's forced pass: the AI's own pass to the team-mate named.
+      // (One meant first time he did not get to play so: after his touch.)
       const ForcedPass pass = forcedPass;
       forcedPass = {};
-      if (pass.spot)
-      {
-        // To a spot with nobody there: weighted as for a man standing on
-        // it, and a lofted one lands on it.
-        PassOption option;
-        option.targetPoint = *pass.spot;
-        option.passDistance = distance(carrier->position, *pass.spot);
-        option.spin = pass.spin;
-        option.arrivalSpeed = pass.arrivalSpeed;
-        option.lofted =
-            pass.style == ForcedPassStyle::LOFTED ||
-            (pass.style == ForcedPassStyle::AS_CHOSEN &&
-             option.passDistance > MatchTuning::Passing::LOFTED_DISTANCE_METRES);
-        passBall(*carrier, option, pass.style == ForcedPassStyle::LOFTED);
-      }
-      else if (MatchPlayer* receiver = drillPlayer(pass.receiver);
-               receiver && active(*receiver))
-      {
-        PassOption option = evaluatePassOption(*carrier, *receiver);
-        if (pass.style == ForcedPassStyle::GROUND) option.lofted = false;
-        passBall(*carrier, option, pass.style == ForcedPassStyle::LOFTED);
-      }
+      if (const auto chosen = forcedPassOption(*carrier, pass))
+        passBall(*carrier, chosen->first, chosen->second);
     }
     else if (forMeet)
     {
@@ -2323,6 +2308,45 @@ void MatchEngine::resolvePossessionAndActions(float dt)
     }
     strikesWaitForSweep = false;
   }
+}
+
+std::optional<std::pair<MatchEngine::PassOption, bool>>
+MatchEngine::forcedPassOption(MatchPlayer& carrier, const ForcedPass& pass)
+{
+  // A chip is lofted, a driven pass along the ground's side of the choice.
+  const bool lofted = pass.style == ForcedPassStyle::LOFTED ||
+                      pass.style == ForcedPassStyle::CHIP;
+  const std::optional<PassTechnique> technique =
+      pass.style == ForcedPassStyle::DRIVEN ? std::optional(PassTechnique::DRIVEN)
+      : pass.style == ForcedPassStyle::CHIP ? std::optional(PassTechnique::CHIP)
+                                            : std::nullopt;
+  if (pass.spot)
+  {
+    // To a spot with nobody there: weighted as for a man standing on it,
+    // and a lofted one lands on it.
+    PassOption option;
+    option.targetPoint = *pass.spot;
+    option.passDistance = distance(carrier.position, *pass.spot);
+    option.spin = pass.spin;
+    option.arrivalSpeed = pass.arrivalSpeed;
+    option.lofted =
+        lofted ||
+        (pass.style == ForcedPassStyle::AS_CHOSEN &&
+         option.passDistance > MatchTuning::Passing::LOFTED_DISTANCE_METRES);
+    option.technique = technique;
+    return std::pair{option, lofted};
+  }
+  if (MatchPlayer* receiver = drillPlayer(pass.receiver);
+      receiver && active(*receiver))
+  {
+    PassOption option = evaluatePassOption(carrier, *receiver);
+    if (pass.style == ForcedPassStyle::GROUND ||
+        pass.style == ForcedPassStyle::DRIVEN)
+      option.lofted = false;
+    option.technique = technique;
+    return std::pair{option, lofted};
+  }
+  return std::nullopt;
 }
 
 float MatchEngine::dribbleExposureShare() const
@@ -2780,7 +2804,8 @@ void MatchEngine::passBall(MatchPlayer& passer, const PassOption& option,
                         (state == MatchState::FREE_KICK && lofted);
   // The passer's body strikes it: where it really goes, how hard, how high.
   const Kick kick = kickPass(passer, receiver, target, passDistance, lofted,
-                             delivery, option.spin, option.arrivalSpeed);
+                             delivery, option.spin, option.arrivalSpeed,
+                             option.technique);
   target = kick.target;
   ball.passTarget = {std::clamp(target.x, 0.0f, 1.0f),
                      std::clamp(target.y, 0.0f, 1.0f)};
@@ -3567,6 +3592,14 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
       return true;
     };
 
+    // A pass he means to play first time: struck here, instead of a touch.
+    if (playsFirstTime(player, hands, moment.height))
+    {
+      if (whistledOffside()) return;
+      playFirstTimePass(player, moment);
+      return;
+    }
+
     if (playsFirstTouch(player, hands, contact.height))
     {
       // The new first touch: no success roll; the ball is played on from
@@ -4030,6 +4063,7 @@ void MatchEngine::sendBallOff(const MatchPlayer& kicker, Vector2F position,
                               BallSpin spin, float kickerLockout)
 {
   ball.position = position;
+  ball.sentFrom = position;
   ball.z = z;
   ball.velocity = velocity;
   ball.velocityZ = velocityZ;
@@ -4072,6 +4106,14 @@ void MatchEngine::ageHeldStrike(float dt)
   using R = MatchTuning::Dribble;
   PendingStrike& strike = *pendingStrike;
   strike.heldSeconds += dt;
+  if (strike.firstTime)
+  {
+    // Held while the pass still comes to him (re-read each step).
+    if (!strike.striker || state != MatchState::PLAYING || ball.possessedBy ||
+        !ball.isPass || ball.intendedReceiver != strike.striker->player)
+      pendingStrike.reset();
+    return;
+  }
   if (strike.turning)
   {
     // Held while he turns: until he loses it, or well past his time.
@@ -4142,6 +4184,104 @@ void MatchEngine::decideActionAtMeet(MatchPlayer& carrier)
   decidingAtMeet = true;
   executeBallAction(carrier, action);
   decidingAtMeet = false;
+}
+
+std::optional<MatchEngine::FirstTimeMeet> MatchEngine::firstTimeMeet(
+    const MatchPlayer& player) const
+{
+  // The ball on under its physics (its curl too), him on as he is going, to
+  // the first moment it is within his feet's reach.
+  constexpr float DT = MatchTuning::Timing::FIXED_STEP_SECONDS /
+                       static_cast<float>(MatchTuning::Timing::BALL_SUBSTEPS);
+  constexpr float HORIZON = MatchTuning::Passing::FIRST_TIME_DECISION_HORIZON_SECONDS;
+  const float speed = length(ball.velocity);
+  if (speed <= EPSILON) return std::nullopt;
+  Vector2F heading{ball.velocity.x / speed, ball.velocity.y / speed};
+  FlightState flight{speed, ball.velocityZ,
+                     ball.z * MatchTuning::Units::BALL_Z_METRES, false,
+                     ball.spin};
+  Vector2F at = toMetres(ball.position);
+  const Vector2F him = toMetres(player.position);
+  const float reach = feetReach(player);
+  for (float seconds = 0.0f; seconds <= HORIZON + 0.5f * DT; seconds += DT)
+  {
+    const Vector2F he{him.x + player.velocity.x * seconds,
+                      him.y + player.velocity.y * seconds};
+    if (std::hypot(at.x - he.x, at.y - he.y) <= reach)
+      return FirstTimeMeet{seconds, flight.height, toPitch(at)};
+    if (flight.horizontalSpeed <= 0.0f) return std::nullopt;
+    const float moved = stepFlight(flight, DT);
+    at = {at.x + heading.x * moved, at.y + heading.y * moved};
+    const float turn = flight.turnRate * DT;
+    heading = {heading.x * std::cos(turn) - heading.y * std::sin(turn),
+               heading.x * std::sin(turn) + heading.y * std::cos(turn)};
+  }
+  return std::nullopt;
+}
+
+void MatchEngine::decideFirstTimePass()
+{
+  // Drills only until the brain judges it: a forced pass marked first time.
+  const bool mine = pendingStrike && pendingStrike->firstTime;
+  if (pendingStrike && !mine) return;
+  const auto drop = [&]
+  {
+    if (mine) pendingStrike.reset();
+  };
+  MatchPlayer* player =
+      forcedPass.firstTime ? drillPlayer(forcedPass.passer) : nullptr;
+  if (!player || !active(*player) || state != MatchState::PLAYING ||
+      getBody(player->isHomeTeam) != BodyId::BINTURONG ||
+      isControlled(*player) || ball.possessedBy ||
+      !ball.isPass || ball.intendedReceiver != player->player)
+  {
+    drop();
+    return;
+  }
+  // Within the horizon, and along the ground when he gets to it.
+  const std::optional<FirstTimeMeet> meet = firstTimeMeet(*player);
+  if (!meet ||
+      meet->heightMetres > MatchTuning::Passing::FIRST_TIME_MAX_BALL_HEIGHT_METRES)
+  {
+    drop();
+    return;
+  }
+  const auto chosen = forcedPassOption(*player, forcedPass);
+  if (!chosen)
+  {
+    drop();
+    return;
+  }
+  PendingStrike strike{PendingStrike::Kind::PASS, player, chosen->first,
+                       chosen->second};
+  strike.firstTime = true;
+  strike.heldSeconds = mine ? pendingStrike->heldSeconds : 0.0f;
+  strike.meetPoint = meet->point;
+  pendingStrike = strike;
+}
+
+bool MatchEngine::playsFirstTime(const MatchPlayer& player, bool hands,
+                                 float heightMetres) const
+{
+  return pendingStrike && pendingStrike->firstTime &&
+         pendingStrike->striker == &player && !hands && ball.isPass &&
+         ball.intendedReceiver == player.player &&
+         heightMetres <= MatchTuning::Passing::FIRST_TIME_MAX_BALL_HEIGHT_METRES;
+}
+
+void MatchEngine::playFirstTimePass(MatchPlayer& player,
+                                    const TouchMoment& moment)
+{
+  // The pass to him is completed as he plays it on. He owns the ball for
+  // the strike (phases, his touch), and it is struck from where he met it,
+  // moving as it was: the strike reads its pace and line.
+  recordPassCompletion(player);
+  const BallMotion motion = ballMotion();
+  setPossession(player);
+  setBallMotion(motion);
+  if (player.player && forcedPass.passer == player.player->getId())
+    forcedPass = {};
+  playPendingStrike(moment);
 }
 
 void MatchEngine::playPendingStrike(const TouchMoment& moment)

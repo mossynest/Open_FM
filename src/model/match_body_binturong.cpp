@@ -2480,6 +2480,8 @@ float MatchEngine::strikeSkillBinturong(const MatchPlayer& striker,
     case StrikeKind::LOFTED_PASS:
     case StrikeKind::CROSS:
     case StrikeKind::THROW:
+    case StrikeKind::DRIVEN_PASS:
+    case StrikeKind::CHIP:
       break;
   }
   return striker.passing;
@@ -3212,6 +3214,103 @@ std::pair<float, float> MatchEngine::fullPowerLoftBinturong(
   return {speed * std::cos(best), speed * std::sin(best)};
 }
 
+MatchEngine::LoftFlight MatchEngine::flyLoftBinturong(
+    float along, float up, float startHeight, float arrivalHeight,
+    BallSpin spin, float probeMetres) const
+{
+  constexpr float DT = MatchTuning::Timing::FIXED_STEP_SECONDS /
+                       static_cast<float>(MatchTuning::Timing::BALL_SUBSTEPS);
+  FlightState flight{along, up, startHeight, false, spin};
+  LoftFlight result;
+  float x = 0.0f;
+  float y = 0.0f;
+  float heading = 0.0f;
+  for (float time = 0.0f; time < MatchTuning::Ball::MAX_FLIGHT_SECONDS &&
+                          flight.horizontalSpeed > 0.0f;
+       time += DT)
+  {
+    const float previousHeight = flight.height;
+    const float before = std::hypot(x, y);
+    const float moved = stepFlight(flight, DT);
+    heading += flight.turnRate * DT;
+    x += std::cos(heading) * moved;
+    y += std::sin(heading) * moved;
+    const float now = std::hypot(x, y);
+    const auto at = [&](float out)
+    {
+      const float share = (out - before) / std::max(now - before, EPSILON);
+      return previousHeight + (flight.height - previousHeight) * share;
+    };
+    if (result.probeHeight < 0.0f && now >= probeMetres && !flight.bounced)
+      result.probeHeight = std::max(at(probeMetres), 0.0f);
+    if (flight.bounced)
+    {
+      result.reach = now;
+      return result;
+    }
+    if (flight.verticalSpeed < 0.0f && flight.height <= arrivalHeight)
+    {
+      const float share = (previousHeight - arrivalHeight) /
+                          std::max(previousHeight - flight.height, EPSILON);
+      result.reach = before + (now - before) * share;
+      return result;
+    }
+  }
+  result.reach = std::hypot(x, y);
+  return result;
+}
+
+std::pair<float, float> MatchEngine::chipLaunchBinturong(
+    float distanceMetres, float maxSpeed, float startHeight,
+    float arrivalHeight, BallSpin spin) const
+{
+  using P = MatchTuning::Passing;
+  constexpr float DEGREE = std::numbers::pi_v<float> / 180.0f;
+  const float probe =
+      std::min(P::CHIP_CLEAR_DISTANCE_METRES, 0.5f * distanceMetres);
+  const auto fly = [&](float speed, float angle)
+  {
+    return flyLoftBinturong(speed * std::cos(angle), speed * std::sin(angle),
+                            startHeight, arrivalHeight, spin, probe);
+  };
+  // The pace that gets it there at this angle (his limit, if none does).
+  const auto speedFor = [&](float angle)
+  {
+    if (fly(maxSpeed, angle).reach < distanceMetres) return maxSpeed;
+    float slow = 0.0f;
+    float fast = maxSpeed;
+    for (int round = 0; round < 14; ++round)
+    {
+      const float middle = 0.5f * (slow + fast);
+      (fly(middle, angle).reach >= distanceMetres ? fast : slow) = middle;
+    }
+    return fast;
+  };
+  const auto clears = [&](float angle)
+  {
+    return fly(speedFor(angle), angle).probeHeight >= P::CHIP_CLEAR_HEIGHT_METRES;
+  };
+  // The flattest angle that clears (bisection; steeper clears higher).
+  float flat = P::CHIP_MIN_ANGLE_DEGREES * DEGREE;
+  float steep = P::CHIP_MAX_ANGLE_DEGREES * DEGREE;
+  float angle = steep;
+  if (clears(flat))
+  {
+    angle = flat;
+  }
+  else if (clears(steep))
+  {
+    for (int round = 0; round < 10; ++round)
+    {
+      const float middle = 0.5f * (flat + steep);
+      (clears(middle) ? steep : flat) = middle;
+    }
+    angle = steep;
+  }
+  const float speed = speedFor(angle);
+  return {speed * std::cos(angle), speed * std::sin(angle)};
+}
+
 Vector2F MatchEngine::curlAimBinturong(Vector2F target, float curl) const
 {
   // Aimed off by the curl, the other way: as far out, turned round the ball.
@@ -3240,31 +3339,37 @@ MatchEngine::Kick MatchEngine::kickPassBinturong(const MatchPlayer& passer,
                                                  float /*passDistance*/,
                                                  bool lofted, bool delivery,
                                                  std::optional<BallSpin> spin,
-                                                 std::optional<float> arrivalSpeed)
+                                                 std::optional<float> arrivalSpeed,
+                                                 std::optional<PassTechnique> technique)
 {
   // Every pass is a contact (contact plan step 3), struck where the ball
-  // lies. A kick: a ground pass, a lofted pass or a cross; a keeper's punt
-  // from his hands is a lofted kick. A throw: a throw-in, or a keeper
-  // rolling it out.
+  // lies. A kick: a ground pass, a lofted pass, a cross, a driven pass or a
+  // chip; a keeper's punt from his hands is a lofted kick. A throw: a
+  // throw-in, or a keeper rolling it out.
   const bool fromHands =
       passer.isGoalkeeper && inPenaltyArea(passer.position, passer.isHomeTeam);
   const bool thrown = state == MatchState::THROW_IN || (fromHands && !lofted);
-  const StrikeKind kind = thrown     ? StrikeKind::THROW
-                          : !lofted  ? StrikeKind::GROUND_PASS
-                          : delivery ? StrikeKind::CROSS
-                                     : StrikeKind::LOFTED_PASS;
+  const PassTechnique how = technique.value_or(
+      lofted ? PassTechnique::LOFTED : PassTechnique::GROUND);
+  const StrikeKind kind = thrown ? StrikeKind::THROW
+                          : how == PassTechnique::DRIVEN ? StrikeKind::DRIVEN_PASS
+                          : how == PassTechnique::CHIP   ? StrikeKind::CHIP
+                          : !lofted                      ? StrikeKind::GROUND_PASS
+                          : delivery                     ? StrikeKind::CROSS
+                                                         : StrikeKind::LOFTED_PASS;
   const float passDistance = distance(ball.position, target);
   // The spin he means: what the brain asks for, else the kind's natural
   // spin; no more than he can put on. A throw has none.
   constexpr float REV = 2.0f * std::numbers::pi_v<float>;
   const float spinCapacity = thrown ? 0.0f : spinCapacityBinturong(passer);
-  BallSpin meant = spin.value_or(BallSpin{
-      0.0f, (kind == StrikeKind::CROSS
-                 ? MatchTuning::Passing::DEFAULT_CROSS_TOPSPIN_REVS
-             : kind == StrikeKind::LOFTED_PASS
-                 ? MatchTuning::Passing::DEFAULT_LOFTED_TOPSPIN_REVS
-                 : 0.0f) *
-                REV});
+  using P = MatchTuning::Passing;
+  const float naturalTopspin =
+      kind == StrikeKind::CROSS         ? P::DEFAULT_CROSS_TOPSPIN_REVS
+      : kind == StrikeKind::LOFTED_PASS ? P::DEFAULT_LOFTED_TOPSPIN_REVS
+      : kind == StrikeKind::DRIVEN_PASS ? P::DEFAULT_DRIVEN_TOPSPIN_REVS
+      : kind == StrikeKind::CHIP        ? P::DEFAULT_CHIP_TOPSPIN_REVS
+                                        : 0.0f;
+  BallSpin meant = spin.value_or(BallSpin{0.0f, naturalTopspin * REV});
   if (const float asked = std::hypot(meant.side, meant.top);
       asked > spinCapacity)
   {
@@ -3287,13 +3392,54 @@ MatchEngine::Kick MatchEngine::kickPassBinturong(const MatchPlayer& passer,
   // His kick power: the fastest he can send it, along the ground or through
   // the air. A pass that needs more is struck at his limit and falls short.
   const float power = kickPowerBinturong(passer);
+  const float startMetres = ball.z * MatchTuning::Units::BALL_Z_METRES;
+  // Struck at, and aimed off for its curl; it curls by accident as a
+  // ground pass does, or (`moreCurl`) as a lofted one.
+  const auto strike = [&](float along, float up, bool moreCurl)
+  {
+    Kick kick = strikeContactBinturong(
+        passer, kind,
+        curlAimBinturong(target, curlAngle(passDistance, along, up,
+                                           startMetres, meant)),
+        along, up, 1.0f, meant, spinCapacity);
+    kick.spin = moreCurl ? curveOf(kick, P::LOFTED_ACCIDENTAL_CURVE_CHANCE,
+                                   P::LOFTED_MAX_CURVE)
+                         : curveOf(kick, P::ACCIDENTAL_CURVE_CHANCE,
+                                   P::MAX_CURVE);
+    return kick;
+  };
+  if (kind == StrikeKind::DRIVEN_PASS)
+  {
+    // Low and hard with the instep: at a set share of his power, launched
+    // just enough to come down at the target; a long one, needing more
+    // than the driven angle at that pace, at his limit as flat as gets it
+    // there (a flat arc).
+    float along = power * P::DRIVEN_SPEED_SHARE;
+    float up = loftVerticalSpeed(passDistance, along, startMetres, 0.0f, meant);
+    if (std::atan2(up, along) >
+            P::DRIVEN_MAX_ANGLE_DEGREES * std::numbers::pi_v<float> / 180.0f ||
+        std::hypot(along, up) > power)
+      std::tie(along, up) =
+          fullPowerLoftBinturong(passDistance, power, startMetres, 0.0f, meant);
+    return strike(along, up, false);
+  }
+  if (kind == StrikeKind::CHIP)
+  {
+    // Stabbed up steeply: to drop at the target (chest height to a
+    // team-mate), clearing someone close, at no more than a stab's power.
+    const float arrivalMetres =
+        receiver ? P::LOFTED_ARRIVAL_HEIGHT_METRES : 0.0f;
+    const auto [along, up] =
+        chipLaunchBinturong(passDistance, power * P::CHIP_POWER_SHARE,
+                            startMetres, arrivalMetres, meant);
+    return strike(along, up, true);
+  }
   if (lofted)
   {
     // Launched to drop at the target: long passes at chest height to be
     // controlled, crosses at head height to be attacked, a pass to a spot
     // with nobody there (a drill's) onto the ground; from the height the
     // ball is struck at.
-    const float startMetres = ball.z * MatchTuning::Units::BALL_Z_METRES;
     const float arrivalMetres =
         !receiver  ? 0.0f
         : delivery ? MatchTuning::Aerial::ARRIVAL_HEIGHT_METRES
@@ -3328,11 +3474,12 @@ MatchEngine::Kick MatchEngine::kickPassBinturong(const MatchPlayer& passer,
       MatchTuning::Passing::ARRIVAL_SPEED_BASE +
       passer.passing * MatchTuning::Passing::ARRIVAL_SPEED_PASSING +
       passDistance * MatchTuning::Passing::ARRIVAL_SPEED_PER_METRE);
-  // A kick is held to his kick power, a throw to the throw's own limit.
+  // A kick is held to what the side of his foot can do with his kick
+  // power, a throw to the throw's own limit.
   const float speed = std::clamp(groundLaunchSpeed(passDistance, arrival),
                                  MatchTuning::Passing::MIN_GROUND_SPEED,
                                  thrown ? MatchTuning::Passing::MAX_GROUND_SPEED
-                                        : power);
+                                        : power * P::SIDE_FOOT_POWER_SHARE);
   Kick kick = strikeContactBinturong(
       passer, kind,
       curlAimBinturong(target, curlAngle(passDistance, speed, 0.0f, 0.0f, meant)),
@@ -4567,18 +4714,22 @@ float MatchEngine::opponentArrivalSecondsBinturong(const MatchPlayer& owner,
 std::optional<float> MatchEngine::turnToPassFacingBinturong(
     const MatchPlayer& player) const
 {
-  // Along the pass's line from the ball; but with the ball beyond his
-  // comfort gap he turns only so far that it stays in front of his dead
-  // zone's edge (to send it further round he would have to step round it).
+  // Along the pass's line from the ball (a first-time ball: from where he
+  // will meet it); but with the ball beyond his comfort gap he turns only so
+  // far that it stays in front of his dead zone's edge (to send it further
+  // round he would have to step round it).
   if (!pendingStrike || pendingStrike->striker != &player ||
       pendingStrike->kind != PendingStrike::Kind::PASS)
     return std::nullopt;
-  const Vector2F ballAt = toMetres(ball.position);
+  const Vector2F ballAt = toMetres(pendingStrike->firstTime
+                                       ? pendingStrike->meetPoint
+                                       : ball.position);
   const Vector2F target = toMetres(pendingStrike->pass.targetPoint);
   Vector2F line = unitOf({target.x - ballAt.x, target.y - ballAt.y});
   if (line.x == 0.0f && line.y == 0.0f) return std::nullopt;
   const Vector2F at = toMetres(player.position);
-  const Vector2F gap{ballAt.x - at.x, ballAt.y - at.y};
+  const Vector2F ballNow = toMetres(ball.position);
+  const Vector2F gap{ballNow.x - at.x, ballNow.y - at.y};
   if (length(gap) > touchKnobs[TouchKnob::COMFORT_GAP])
   {
     const Vector2F toBall = unitOf(gap);

@@ -43,11 +43,16 @@ enum class StrikeKind : std::uint8_t
   CLEARANCE,
   /** Throw-ins, and a keeper rolling or throwing it from his hands. */
   THROW,
+  /** A pass struck low and hard with the instep. */
+  DRIVEN_PASS,
+  /** A pass stabbed up steeply with backspin, over someone close. */
+  CHIP,
 };
-inline constexpr std::size_t STRIKE_KIND_COUNT = 7;
+inline constexpr std::size_t STRIKE_KIND_COUNT = 9;
 inline constexpr std::array<std::string_view, STRIKE_KIND_COUNT>
-    STRIKE_KIND_NAMES = {"Ground pass", "Lofted pass", "Cross",    "Shot",
-                         "Header",      "Clearance",   "Throw"};
+    STRIKE_KIND_NAMES = {"Ground pass", "Lofted pass", "Cross",
+                         "Shot",        "Header",      "Clearance",
+                         "Throw",       "Driven pass", "Chip"};
 
 enum class StrikeKnob : std::uint8_t
 {
@@ -250,6 +255,9 @@ constexpr float strikeKnobDefault(StrikeKind kind, StrikeKnob knob)
     case StrikeKind::HEADER: return strikeProfileDefault<S::Header>(knob);
     case StrikeKind::CLEARANCE: return strikeProfileDefault<S::Clearance>(knob);
     case StrikeKind::THROW: return strikeProfileDefault<S::Throw>(knob);
+    case StrikeKind::DRIVEN_PASS:
+      return strikeProfileDefault<S::DrivenPass>(knob);
+    case StrikeKind::CHIP: return strikeProfileDefault<S::Chip>(knob);
   }
   return 0.0f;
 }

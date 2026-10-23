@@ -129,7 +129,29 @@
   Kick kickPassBinturong(const MatchPlayer& passer, const MatchPlayer* receiver,
                 Vector2F target, float passDistance, bool lofted,
                 bool delivery, std::optional<BallSpin> spin,
-                std::optional<float> arrivalSpeed);
+                std::optional<float> arrivalSpeed,
+                std::optional<PassTechnique> technique);
+  /** A ball launched `along` and `up` (m/s) from `startHeight` (m) with
+   * `spin`, flown with the live physics: how far out it is when it comes
+   * down through `arrivalHeight` (or first lands), and how high it is as
+   * it passes `probeMetres` out (-1 if it is down before then). */
+  struct LoftFlight
+  {
+    float reach = 0.0f;
+    float probeHeight = -1.0f;
+  };
+  LoftFlight flyLoftBinturong(float along, float up, float startHeight,
+                              float arrivalHeight, BallSpin spin,
+                              float probeMetres) const;
+  /** A chip of `distanceMetres` struck at no more than `maxSpeed` (m/s):
+   * (along, up) m/s, the flattest launch between the chip's angles that
+   * comes down through `arrivalHeight` there and clears the chip's height
+   * on the way (the steepest, if none does); short at his limit. */
+  std::pair<float, float> chipLaunchBinturong(float distanceMetres,
+                                              float maxSpeed,
+                                              float startHeight,
+                                              float arrivalHeight,
+                                              BallSpin spin) const;
   float recoverySecondsBinturong(const MatchPlayer& player, Recovery after);
   /** A shot's execution error (metres, one standard deviation). */
   float shotSpreadBinturong(const MatchPlayer& shooter, bool header, bool penalty,

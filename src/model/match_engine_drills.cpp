@@ -219,7 +219,8 @@ void MatchEngine::forcePass(PlayerID playerId, PlayerID receiverId,
 void MatchEngine::forcePassTo(PlayerID playerId, Vector2F spot,
                               ForcedPassStyle style,
                               std::optional<BallSpin> spin,
-                              std::optional<float> arrivalSpeed)
+                              std::optional<float> arrivalSpeed,
+                              bool firstTime)
 {
   MatchCommandRecord command;
   command.type = MatchCommandType::FORCE_PASS;
@@ -228,6 +229,7 @@ void MatchEngine::forcePassTo(PlayerID playerId, Vector2F spot,
   command.passStyle = style;
   command.passSpin = spin;
   command.passArrival = arrivalSpeed;
+  command.passFirstTime = firstTime;
   recordCommand(command);
 }
 

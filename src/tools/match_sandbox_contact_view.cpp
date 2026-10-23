@@ -120,7 +120,7 @@ float compassOf(ImVec2 offset)
 
 /** Typical intended pace for each contact (m/s). */
 constexpr std::array<float, 1 + STRIKE_KIND_COUNT> TYPICAL_PACE{
-    3.0f, 15.0f, 20.0f, 20.0f, 25.0f, 10.0f, 22.0f, 12.0f};
+    3.0f, 15.0f, 20.0f, 20.0f, 25.0f, 10.0f, 22.0f, 12.0f, 24.0f, 12.0f};
 
 constexpr std::array<const char*, 4> EXPECTATIONS{
     "A pass to him", "A loose ball", "A pass for someone else",

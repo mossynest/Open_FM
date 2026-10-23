@@ -93,6 +93,7 @@ json toJson(const MatchCommandRecord& command)
                             : json(nullptr)},
           {"pass_arrival",
            command.passArrival ? json(*command.passArrival) : json(nullptr)},
+          {"pass_first_time", command.passFirstTime},
           {"keep_urgency", command.keepUrgency}};
 }
 
@@ -141,6 +142,7 @@ MatchCommandRecord commandFromJson(const json& value)
   if (const auto arrival = value.find("pass_arrival");
       arrival != value.end() && arrival->is_number())
     command.passArrival = arrival->get<float>();
+  command.passFirstTime = value.value("pass_first_time", false);
   command.keepUrgency = value.value("keep_urgency", 1.0f);
   return command;
 }
