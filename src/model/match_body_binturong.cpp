@@ -513,34 +513,48 @@ inline float tierSpeed(float fresh, const std::array<float, 4>& losses,
   return exhausted + (spent - exhausted) * (TIER_FUEL[2] - left) / TIER_FUEL[2];
 }
 
+/** The Agility or Acceleration rating his body moves by: `freeShare` of
+ * his own whatever his Dribbling, and of the rest only the share his
+ * Dribbling unlocks (1 without the ball: all of it; with it, as his pace:
+ * freeShareBinturong). Every Agility and Acceleration read below goes
+ * through here, so his body and his dribble's plan move him alike. */
+inline float movementRating(const MatchPlayer& player, DerivedStat stat,
+                            float freeShare)
+{
+  const float free = std::clamp(freeShare, 0.0f, 1.0f);
+  return player.derivedStat(stat) *
+         (free + (1.0f - free) * std::clamp(player.dribbling, 0.0f, 1.0f));
+}
+
 /** His grip: the Agility stat's multiplier on the lateral limit every
  * player has (0.9 for a part-timer, 1.1 for the elite). One value for both
  * feet: the body does not know which foot is down, so the outside foot's
  * stronger cut and the inside foot's weaker one average out. */
-inline float playerGrip(const MatchPlayer& player)
+inline float playerGrip(const MatchPlayer& player, float freeShare)
 {
   return derivedPhysicalValue(DerivedStat::AGILITY,
-                              player.derivedStat(DerivedStat::AGILITY));
+                              movementRating(player, DerivedStat::AGILITY, freeShare));
 }
 
 /** How fast his body turns (rad/s): his Agility rating, from the
  * part-timer to the elite anchor, across the range (orientation plan). */
-inline float bodyTurnRate(const MatchPlayer& player)
+inline float bodyTurnRate(const MatchPlayer& player, float freeShare)
 {
   using P = MatchTuning::Player;
   const DerivedStatInfo& info = derivedStatInfo(DerivedStat::AGILITY);
   const float share = std::clamp(
-      (player.derivedStat(DerivedStat::AGILITY) - info.lowRating) /
+      (movementRating(player, DerivedStat::AGILITY, freeShare) - info.lowRating) /
           (info.highRating - info.lowRating),
       0.0f, 1.0f);
   return P::BODY_TURN_RATE_LOW +
          (P::BODY_TURN_RATE_HIGH - P::BODY_TURN_RATE_LOW) * share;
 }
 
-/** Where a derived stat's rating sits from 1 (0) to 99 (1). */
-inline float statShare(const MatchPlayer& player, DerivedStat stat)
+/** Where his Agility or Acceleration rating (movementRating) sits from 1
+ * (0) to 99 (1). */
+inline float statShare(const MatchPlayer& player, DerivedStat stat, float freeShare)
 {
-  return std::clamp((player.derivedStat(stat) - STAT_1_RATING) /
+  return std::clamp((movementRating(player, stat, freeShare) - STAT_1_RATING) /
                         (STAT_99_RATING - STAT_1_RATING),
                     0.0f, 1.0f);
 }
@@ -548,27 +562,28 @@ inline float statShare(const MatchPlayer& player, DerivedStat stat)
 /** His fresh maximum acceleration A0 (m/s^2): the Acceleration stat, plus
  * Agility's boost (a share of the stat's range, the same for everyone at
  * the same Agility). */
-inline float playerAcceleration(const MatchPlayer& player)
+inline float playerAcceleration(const MatchPlayer& player, float freeShare)
 {
   const DerivedStatInfo& info = derivedStatInfo(DerivedStat::ACCELERATION);
-  return derivedPhysicalValue(DerivedStat::ACCELERATION,
-                              player.derivedStat(DerivedStat::ACCELERATION)) +
+  return derivedPhysicalValue(
+             DerivedStat::ACCELERATION,
+             movementRating(player, DerivedStat::ACCELERATION, freeShare)) +
          MatchTuning::Player::AGILITY_ACCELERATION_BOOST *
              (info.highValue - info.lowValue) *
-             statShare(player, DerivedStat::AGILITY);
+             statShare(player, DerivedStat::AGILITY, freeShare);
 }
 
 /** His fresh hardest braking (m/s^2): Agility, plus Acceleration's boost
  * (a share of the braking range). The handshake's braking (from
  * Physicality) is the Aardvark body's. */
-inline float playerBraking(const MatchPlayer& player)
+inline float playerBraking(const MatchPlayer& player, float freeShare)
 {
   using P = MatchTuning::Player;
   const float range = P::BRAKING_AT_AGILITY_99 - P::BRAKING_AT_AGILITY_1;
   return P::BRAKING_AT_AGILITY_1 +
-         range * statShare(player, DerivedStat::AGILITY) +
+         range * statShare(player, DerivedStat::AGILITY, freeShare) +
          P::ACCELERATION_BRAKING_BOOST * range *
-             statShare(player, DerivedStat::ACCELERATION);
+             statShare(player, DerivedStat::ACCELERATION, freeShare);
 }
 
 // Energy: two tanks (critical speed and D', the W' balance model of Skiba et
@@ -849,11 +864,12 @@ std::vector<LineLeg> lineLegsOf(const MatchPlayer& player, Vector2F end)
 }
 
 /** The fastest he can run a curve of `radius` (m): where his lateral limit
- * holds him on it, as the movement kernel has it. */
-float cornerSpeedOf(const MatchPlayer& player, float radius)
+ * holds him on it, as the movement kernel has it (with the ball, by the
+ * grip his Dribbling unlocks: movementRating). */
+float cornerSpeedOf(const MatchPlayer& player, float radius, float freeShare)
 {
   using P = MatchTuning::Player;
-  const float grip = playerGrip(player) * tieredMovement(player.stamina);
+  const float grip = playerGrip(player, freeShare) * tieredMovement(player.stamina);
   const float b = (P::LATERAL_ACCELERATION_SLOW - P::LATERAL_ACCELERATION_FAST) *
                   grip * radius / std::max(player.maxSpeed, EPSILON);
   const float c = P::LATERAL_ACCELERATION_SLOW * grip * radius;
@@ -866,7 +882,7 @@ float cornerSpeedOf(const MatchPlayer& player, float radius)
  * turned within the room before the line's turn, at least
  * HEADING_ROOM_MIN_METRES), at `speed` otherwise. */
 float joinSecondsOf(const MatchPlayer& player, Vector2F from, Vector2F heading,
-                    float speed, const LineLeg& leg)
+                    float speed, const LineLeg& leg, float freeShare)
 {
   const Turn turn = turnThrough(leg.from, leg.waypoint, leg.next,
                                 player.routeApexOffset, player.routeOutwardRoom);
@@ -880,7 +896,7 @@ float joinSecondsOf(const MatchPlayer& player, Vector2F from, Vector2F heading,
       heading.x * aim.direction.x + heading.y * aim.direction.y, -1.0f, 1.0f));
   if (off <= HEADING_TURN_MIN_RADIANS) return metres / speed;
   const float room = std::max(aim.toTurn, HEADING_ROOM_MIN_METRES);
-  const float joining = std::min(speed, cornerSpeedOf(player, room / off));
+  const float joining = std::min(speed, cornerSpeedOf(player, room / off, freeShare));
   const float slowMetres = std::min(metres, room);
   return slowMetres / joining + (metres - slowMetres) / speed;
 }
@@ -897,7 +913,8 @@ float joinSecondsOf(const MatchPlayer& player, Vector2F from, Vector2F heading,
  * round onto his line, allow. */
 std::optional<Vector2F> holdTurnHandoverOf(const MatchPlayer& player,
                                            const LineLeg& held, Vector2F waypoint,
-                                           Vector2F next, Vector2F switchFrom)
+                                           Vector2F next, Vector2F switchFrom,
+                                           float freeShare)
 {
   const float speed = length(player.velocity);
   if (speed < HOLD_TURN_MIN_SPEED) return std::nullopt;
@@ -928,11 +945,12 @@ std::optional<Vector2F> holdTurnHandoverOf(const MatchPlayer& player,
                  : turn.radiusIn * round(turn.centre, at, turn.apex) +
                        turn.radiusOut * round(turn.centreOut, turn.apex, turn.end);
     const float holding =
-        (aim.toTurn + rest) / std::min(speed, cornerSpeedOf(player, turn.radius)) +
-        joinSecondsOf(player, aim.exit, aim.exitHeading, speed, onwardLeg);
+        (aim.toTurn + rest) / std::min(speed, cornerSpeedOf(player, turn.radius, freeShare)) +
+        joinSecondsOf(player, aim.exit, aim.exitHeading, speed, onwardLeg,
+                      freeShare);
     const float switching =
         joinSecondsOf(player, at, unitOf(player.velocity), speed,
-                      {switchFrom, waypoint, next, false});
+                      {switchFrom, waypoint, next, false}, freeShare);
     if (holding >= switching) return std::nullopt;
     return aim.exit;
   }
@@ -978,11 +996,11 @@ std::optional<Vector2F> holdTurnHandoverOf(const MatchPlayer& player,
     point = {turn.centre.x + radial.x * r, turn.centre.y + radial.y * r};
     heading = {-radial.y * turn.sense, radial.x * turn.sense};
   }
-  const float holding = arcMetres / std::min(speed, cornerSpeedOf(player, r)) +
-                        joinSecondsOf(player, point, heading, speed, onward);
+  const float holding = arcMetres / std::min(speed, cornerSpeedOf(player, r, freeShare)) +
+                        joinSecondsOf(player, point, heading, speed, onward, freeShare);
   const float switching =
       joinSecondsOf(player, at, unitOf(player.velocity), speed,
-                    {switchFrom, waypoint, next, false});
+                    {switchFrom, waypoint, next, false}, freeShare);
   if (holding >= switching) return std::nullopt;
   return point;
 }
@@ -1158,6 +1176,10 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     if (player.routeWaypoints == 0) player.holdingTurn = false;
     if (player.routeWaypoints == 1) player.nextTarget = routeEnd;
     const float speedNow = length(player.velocity);
+    // With the ball, he moves by what his Dribbling unlocks of his Agility
+    // and Acceleration (movementRating).
+    const float freeShare =
+        freeShareBinturong(player, !walking && carryingBinturong(player));
     // His route moving on before the curve he is on ends (a new route given
     // him, or his waypoint reached at the curve's middle): he holds that
     // curve to its end if that gets him to his new waypoint sooner than
@@ -1168,7 +1190,7 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     {
       const std::optional<Vector2F> handover =
           holdTurnHandoverOf(player, curve, toMetres(player.movementTarget),
-                             toMetres(player.nextTarget), switchFrom);
+                             toMetres(player.nextTarget), switchFrom, freeShare);
       if (!handover) return false;
       player.holdingTurn = true;
       player.heldUntil = toPitch(*handover);
@@ -1284,7 +1306,7 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
         const float twist =
             (P::PLANT_TWIST_DEGREES_LOW +
              (P::PLANT_TWIST_DEGREES_HIGH - P::PLANT_TWIST_DEGREES_LOW) *
-                 statShare(player, DerivedStat::AGILITY)) *
+                 statShare(player, DerivedStat::AGILITY, freeShare)) *
             PI / 180.0f;
         const Vector2F body = rotatedBy(run, std::clamp(wanted, -twist, twist));
         plantFacing = std::atan2(body.y / Pitch::WIDTH_METRES,
@@ -1495,8 +1517,8 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     reserve[lane] = player.sprintReserve;
     injury[lane] =
         player.isInjured ? MatchTuning::Injury::INJURED_SPEED_SCALE : 1.0f;
-    acceleration[lane] = playerAcceleration(player);
-    braking[lane] = playerBraking(player);
+    acceleration[lane] = playerAcceleration(player, freeShare);
+    braking[lane] = playerBraking(player, freeShare);
     // How hard he chooses to run is his side's brain's.
     const MovementStyle& style = movementStyle(player.isHomeTeam);
     intentScale[lane] =
@@ -1527,21 +1549,21 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     transition[lane] = MatchRules::walkRunTransitionSpeed(player.heightMetres);
     talk[lane] = talkOf(player.isHomeTeam);
     shout[lane] = shoutWorkRate(player.isHomeTeam);
-    turnRate[lane] = bodyTurnRate(player);
+    turnRate[lane] = bodyTurnRate(player, freeShare);
     // Turning to a pass he holds comes before anything else asked of him.
     bodyRequested[lane] =
         passFacing || player.facingRequested || planting ? 1 : 0;
     bodyRequest[lane] = passFacing ? *passFacing
                         : planting ? plantFacing
                                    : player.facingRequest;
-    const float agility = statShare(player, DerivedStat::AGILITY);
+    const float agility = statShare(player, DerivedStat::AGILITY, freeShare);
     plantGain[lane] = P::PLANT_BRAKING_GAIN_LOW +
                       (P::PLANT_BRAKING_GAIN_HIGH - P::PLANT_BRAKING_GAIN_LOW) * agility;
     pushOffGain[lane] =
         player.sinceStopSeconds < P::PUSH_OFF_SECONDS
             ? P::PUSH_OFF_GAIN_LOW + (P::PUSH_OFF_GAIN_HIGH - P::PUSH_OFF_GAIN_LOW) * agility
             : 0.0f;
-    grip[lane] = playerGrip(player);
+    grip[lane] = playerGrip(player, freeShare);
   }
 
   for (std::size_t lane = 0; lane < moving; ++lane)
@@ -1902,8 +1924,9 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
   // down to turn sharply. Tired legs push, brake and turn less sharply (the
   // fatigue tiers).
   const float legs = tieredMovement(fuel);
-  const float acceleration = playerAcceleration(player) * legs;
-  const float braking = playerBraking(player) * legs;
+  const float freeShare = freeShareBinturong(player, carryingBinturong(player));
+  const float acceleration = playerAcceleration(player, freeShare) * legs;
+  const float braking = playerBraking(player, freeShare) * legs;
   Vector2F velocity = player.velocity;
   const float speed = length(velocity);
   const Vector2F change{desired.x - velocity.x, desired.y - velocity.y};
@@ -1953,7 +1976,7 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
           (P::LATERAL_ACCELERATION_SLOW +
            (P::LATERAL_ACCELERATION_FAST - P::LATERAL_ACCELERATION_SLOW) *
                speedShare) *
-          playerGrip(player) * legs * dt;
+          playerGrip(player, freeShare) * legs * dt;
       across = std::clamp(across, -lateral, lateral);
       run = {velocity.x + tangent.x * along + normal.x * across,
              velocity.y + tangent.y * along + normal.y * across};
@@ -4402,7 +4425,9 @@ bool MatchEngine::ballBehindReachBinturong(const MatchPlayer& player,
         difference -= TWO_PI;
       else if (difference < -std::numbers::pi_v<float>)
         difference += TWO_PI;
-      const float turn = bodyTurnRate(player) * turnSeconds;
+      const float turn =
+          bodyTurnRate(player, freeShareBinturong(player, carryingBinturong(player))) *
+          turnSeconds;
       angle += std::clamp(difference, -turn, turn);
     }
   }
@@ -4484,6 +4509,23 @@ bool MatchEngine::followsRoutesBinturong(const MatchPlayer& /*player*/) const
 {
   // Routes (waypoints on the way) are this body's.
   return true;
+}
+
+bool MatchEngine::carryingBinturong(const MatchPlayer& player) const
+{
+  return ball.inTouch && ball.possessedBy == player.player;
+}
+
+float MatchEngine::freeShareBinturong(const MatchPlayer& player, bool withBall) const
+{
+  // With the ball, the share of his Agility and Acceleration his Dribbling
+  // cannot take away: his run band's top as a share of his top speed, as it
+  // is of his pace (carryPaceBinturong). As fuel leaves both, it moves with
+  // them. Without the ball, all of it.
+  if (!withBall) return 1.0f;
+  return std::clamp(speedBandBinturong(player, MovementMode::RUN).high /
+                        std::max(currentTopSpeedBinturong(player), EPSILON),
+                    0.0f, 1.0f);
 }
 
 std::optional<Vector2F> MatchEngine::dribbleOutAlongBinturong(
@@ -4780,7 +4822,8 @@ namespace
  * (stepKinematicsBinturong): a(v) = A0 (1 - v / top) and his braking on
  * tired legs, held to his critical speed's power as his burst reserve
  * runs out. */
-AccelerationRange legLimitsOf(const MatchPlayer& player, float speed, float top)
+AccelerationRange legLimitsOf(const MatchPlayer& player, float speed, float top,
+                              float freeShare)
 {
   const float fuel = player.stamina;
   const float legs = tieredMovement(fuel);
@@ -4789,9 +4832,9 @@ AccelerationRange legLimitsOf(const MatchPlayer& player, float speed, float top)
       1.0f);
   const float transition = MatchRules::walkRunTransitionSpeed(player.heightMetres);
   return burstLimits(
-      playerAcceleration(player) * legs *
+      playerAcceleration(player, freeShare) * legs *
           std::max(0.05f, 1.0f - speed / std::max(top, EPSILON)),
-      playerBraking(player) * legs, speed, fullness,
+      playerBraking(player, freeShare) * legs, speed, fullness,
       tieredCriticalSpeed(
           derivedPhysicalValue(DerivedStat::ENDURANCE,
                                player.derivedStat(DerivedStat::ENDURANCE)),
@@ -4815,9 +4858,11 @@ float MatchEngine::dribbleReachablePaceBinturong(const MatchPlayer& player,
   float speed = startSpeed;
   float covered = 0.0f;
   float rising = 0.0f;
+  const float freeShare = freeShareBinturong(player, true);
   for (int step = 0; step < STEPS; ++step)
   {
-    const float gain = std::max(legLimitsOf(player, speed, top).high, 0.0f) * dt;
+    const float gain =
+        std::max(legLimitsOf(player, speed, top, freeShare).high, 0.0f) * dt;
     const float next = std::min(target, speed + gain);
     // Up to the target part way through the step: only that part of it.
     if (speed < target)
@@ -4840,7 +4885,6 @@ MatchEngine::DribbleTurnAhead MatchEngine::dribbleTurnAheadBinturong(
   // allowed deviation.
   DribbleTurnAhead ahead;
   if (player.routeWaypoints == 0) return ahead;
-  using P = MatchTuning::Player;
   const Vector2F at = toMetres(from);
   const std::vector<LineLeg> legs = lineLegsOf(player, toMetres(ball.dribbleGoal));
   Turn turn = turnThrough(legs[0].from, legs[0].waypoint, legs[0].next,
@@ -4857,13 +4901,9 @@ MatchEngine::DribbleTurnAhead MatchEngine::dribbleTurnAheadBinturong(
     if (line.exited) return ahead;
   }
   if (turn.straight) return ahead;
-  const float grip = playerGrip(player) * tieredMovement(player.stamina);
   const float radius = std::max(turn.radius, 0.0f);
-  const float b = (P::LATERAL_ACCELERATION_SLOW - P::LATERAL_ACCELERATION_FAST) *
-                  grip * radius / std::max(player.maxSpeed, EPSILON);
-  const float c = P::LATERAL_ACCELERATION_SLOW * grip * radius;
   ahead.toTurn = std::max(line.toTurn, 0.0f);
-  ahead.turnSpeed = 0.5f * (std::sqrt(b * b + 4.0f * c) - b);
+  ahead.turnSpeed = cornerSpeedOf(player, radius, freeShareBinturong(player, true));
   // A stop (a sharp reversal): it gets there with pace left for his touch
   // to stop it, the more the better his Dribbling.
   if (radius <= 0.0f)
@@ -4881,7 +4921,8 @@ MatchEngine::DribbleTurnAhead MatchEngine::dribbleTurnAheadBinturong(
   // full effort: on tired legs, and less once his burst reserve is empty.
   const float speedNow = length(player.velocity);
   const float canBrake = std::max(
-      -legLimitsOf(player, speedNow, currentTopSpeedBinturong(player)).low, EPSILON);
+      -legLimitsOf(player, speedNow, currentTopSpeedBinturong(player),
+                  freeShareBinturong(player, true)).low, EPSILON);
   ahead.braking = std::min(
       std::max(MatchTuning::Player::ARRIVAL_DECELERATION,
                ARRIVAL_BRAKING_SHARE * canBrake),

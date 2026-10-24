@@ -240,6 +240,13 @@
   BallRelease releaseFromBinturong(const MatchPlayer& kicker, ReleaseKind kind) const;
   void meetWithHeadBinturong(const MatchPlayer& header);
   bool followsRoutesBinturong(const MatchPlayer& player) const;
+  /** He has the ball at his feet (in touch, his): he moves by what his
+   * Dribbling unlocks of his Agility and Acceleration. */
+  bool carryingBinturong(const MatchPlayer& player) const;
+  /** The share of his Agility and Acceleration he keeps whatever his
+   * Dribbling (movementRating): with the ball, his run band's top over his
+   * top speed; without it, 1. */
+  float freeShareBinturong(const MatchPlayer& player, bool withBall) const;
   /** Where a dribble touch at `from` (normalised pitch) sends his ball
    * (dribble meet plan): along his route's line from there, else toward
    * ball.dribbleGoal. Metric unit; none when he is at his goal. */
