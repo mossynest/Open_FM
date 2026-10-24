@@ -47,12 +47,21 @@ enum class StrikeKind : std::uint8_t
   DRIVEN_PASS,
   /** A pass stabbed up steeply with backspin, over someone close. */
   CHIP,
+  /** Shot types (shooting technique plan step 5; SHOT is the driven one):
+   * side-footed, placed; bent with the instep's wrap; chipped over the
+   * keeper; poked with the toe. */
+  PLACED_SHOT,
+  CURLED_SHOT,
+  CHIP_SHOT,
+  TOE_POKE,
 };
-inline constexpr std::size_t STRIKE_KIND_COUNT = 9;
+inline constexpr std::size_t STRIKE_KIND_COUNT = 13;
 inline constexpr std::array<std::string_view, STRIKE_KIND_COUNT>
     STRIKE_KIND_NAMES = {"Ground pass", "Lofted pass", "Cross",
                          "Shot",        "Header",      "Clearance",
-                         "Throw",       "Driven pass", "Chip"};
+                         "Throw",       "Driven pass", "Chip",
+                         "Placed shot", "Curled shot", "Chip shot",
+                         "Toe-poke"};
 
 enum class StrikeKnob : std::uint8_t
 {
@@ -107,6 +116,16 @@ enum class StrikeKnob : std::uint8_t
   SPIN_MISS_RANGE,
   UNDER_SPIN_SHARE,
   SPIN_JITTER,
+  // Power asked (shooting technique plan step 3): its weights, where it
+  // starts to cost, and how much of the jitter grows with difficulty.
+  POWER_ASKED_ANGLE,
+  POWER_ASKED_WEIGHT,
+  POWER_COMFORT_SHARE,
+  JITTER_DIFFICULTY_SHARE,
+  // Power by the angle of the strike off his body (step 4).
+  POWER_INWARD_SQUARE,
+  POWER_OUTWARD_SQUARE,
+  POWER_BEHIND,
   COUNT
 };
 inline constexpr std::size_t STRIKE_KNOB_COUNT =
@@ -170,6 +189,13 @@ inline constexpr std::array<StrikeKnobInfo, STRIKE_KNOB_COUNT> STRIKE_KNOBS{{
     {"Spin miss range", "Technique", 0.0f, 1.0f, "share"},
     {"Under-spin share", "Technique", 0.0f, 1.0f, "share"},
     {"Spin jitter", "Technique", 0.0f, 20.0f, "rad/s"},
+    {"Power asked: angle", "Factors", 0.0f, 1.5f, ""},
+    {"Power asked: weight", "Factors", 0.0f, 1.5f, ""},
+    {"Power comfort share", "Measures", 0.0f, 0.99f, "share"},
+    {"Jitter difficulty share", "Technique", 0.0f, 1.0f, "share"},
+    {"Power square, inward", "Measures", 0.0f, 1.0f, "share"},
+    {"Power square, outward", "Measures", 0.0f, 1.0f, "share"},
+    {"Power behind", "Measures", 0.0f, 1.0f, "share"},
 }};
 
 inline const StrikeKnobInfo& strikeKnobInfo(StrikeKnob knob)
@@ -236,6 +262,14 @@ constexpr float strikeProfileDefault(StrikeKnob knob)
     case StrikeKnob::VERTICAL_SHARE: return P::VERTICAL_SHARE;
     case StrikeKnob::UP_SHARE: return P::UP_SHARE;
     case StrikeKnob::ELEVATION_JITTER: return P::ELEVATION_JITTER;
+    case StrikeKnob::POWER_ASKED_ANGLE: return P::POWER_ASKED_ANGLE;
+    case StrikeKnob::POWER_ASKED_WEIGHT: return P::POWER_ASKED_WEIGHT;
+    case StrikeKnob::POWER_COMFORT_SHARE: return P::POWER_COMFORT_SHARE;
+    case StrikeKnob::JITTER_DIFFICULTY_SHARE:
+      return P::JITTER_DIFFICULTY_SHARE;
+    case StrikeKnob::POWER_INWARD_SQUARE: return P::POWER_INWARD_SQUARE;
+    case StrikeKnob::POWER_OUTWARD_SQUARE: return P::POWER_OUTWARD_SQUARE;
+    case StrikeKnob::POWER_BEHIND: return P::POWER_BEHIND;
     case StrikeKnob::COUNT: break;
   }
   return 0.0f;
@@ -258,6 +292,12 @@ constexpr float strikeKnobDefault(StrikeKind kind, StrikeKnob knob)
     case StrikeKind::DRIVEN_PASS:
       return strikeProfileDefault<S::DrivenPass>(knob);
     case StrikeKind::CHIP: return strikeProfileDefault<S::Chip>(knob);
+    case StrikeKind::PLACED_SHOT:
+      return strikeProfileDefault<S::PlacedShot>(knob);
+    case StrikeKind::CURLED_SHOT:
+      return strikeProfileDefault<S::CurledShot>(knob);
+    case StrikeKind::CHIP_SHOT: return strikeProfileDefault<S::ChipShot>(knob);
+    case StrikeKind::TOE_POKE: return strikeProfileDefault<S::ToePoke>(knob);
   }
   return 0.0f;
 }

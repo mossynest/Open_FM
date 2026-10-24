@@ -5291,6 +5291,692 @@ class ChipTargetDrill final : public BullseyePassDrill
   StrikeKind kind() const override { return StrikeKind::CHIP; }
   ForcedPassStyle style() const override { return ForcedPassStyle::CHIP; }
 };
+
+// --- Shot target ---------------------------------------------------------------
+
+/**
+ * A dead-ball shot at a chosen spot in an empty goal (Notes and plans/
+ * match_engine_shooting_technique_plan.md): the pace off his foot and at
+ * the line, where it crosses the line against the spot, and how the strike
+ * came off, with his Shooting and every shot strike knob as settings.
+ */
+class ShotTargetDrill final : public Drill
+{
+ public:
+  static constexpr float GOAL_HALF_WIDTH = MatchTuning::Shooting::GOAL_HALF_WIDTH_METRES;
+  static constexpr float BALL_RADIUS = MatchTuning::Units::BALL_RADIUS_METRES;
+  static constexpr float CROSSBAR = MatchTuning::Units::CROSSBAR_HEIGHT_METRES;
+
+  const char* name() const override { return "Shot target"; }
+  const char* summary() const override
+  {
+    return "A shot from a dead ball at a spot you choose in an empty goal, "
+           "nobody else on the pitch. Measures the pace off his foot and at "
+           "the line, where it crosses the line against the spot (on target, "
+           "wide or over), and how the strike came off, with his Shooting and "
+           "every shot strike knob as settings.";
+  }
+  std::vector<DrillPreset> presets() const override
+  {
+    return {
+        {"Penalty spot", "11 m, central.",
+         {{"Out from goal line (m)", 11.0f}, {"Off centre (m)", 0.0f}}},
+        {"Edge of the box", "18 m, central.",
+         {{"Out from goal line (m)", 18.0f}, {"Off centre (m)", 0.0f}}},
+        {"From range", "25 m, central.",
+         {{"Out from goal line (m)", 25.0f}, {"Off centre (m)", 0.0f}}},
+        {"Cutback, first time",
+         "12 m out, central: a 12 m/s ball pulled back from the byline on his "
+         "right, struck first time.",
+         {{"Out from goal line (m)", 12.0f},
+          {"Off centre (m)", 0.0f},
+          {"Ball comes in", 1.0f},
+          {"Ball speed (m/s)", 12.0f},
+          {"Comes from (deg)", 45.0f},
+          {"Feed distance (m)", 15.0f}}},
+        {"Cutback, after a touch", "The same, controlled first.",
+         {{"Out from goal line (m)", 12.0f},
+          {"Off centre (m)", 0.0f},
+          {"Ball comes in", 2.0f},
+          {"Ball speed (m/s)", 12.0f},
+          {"Comes from (deg)", 45.0f},
+          {"Feed distance (m)", 15.0f}}},
+        {"Lay-off, first time",
+         "18 m out: a 10 m/s ball rolled back to him from in front, struck "
+         "first time.",
+         {{"Out from goal line (m)", 18.0f},
+          {"Off centre (m)", 0.0f},
+          {"Ball comes in", 1.0f},
+          {"Ball speed (m/s)", 10.0f},
+          {"Comes from (deg)", 0.0f},
+          {"Feed distance (m)", 10.0f}}},
+    };
+  }
+
+  std::vector<DrillParameter> parameters() override
+  {
+    std::vector<DrillParameter> list;
+    const auto add = [&list](DrillParameter parameter, const char* section)
+    {
+      parameter.section = section;
+      list.push_back(std::move(parameter));
+    };
+    add(setting("Out from goal line (m)", &line, 3.0f, 40.0f, false,
+                "Distance of the ball from the goal line."),
+        "Shot");
+    add(setting("Off centre (m)", &side, -25.0f, 25.0f, false,
+                "Sideways from the middle of the goal (+ towards the bottom "
+                "touchline)."),
+        "Shot");
+    add(setting("Aim across (m)", &aimAcross, -3.66f, 3.66f, false,
+                "Where in the goal he aims: from its middle (+ towards the "
+                "bottom touchline; a post is 3.66 m out)."),
+        "Shot");
+    add(setting("Aim height (m)", &aimHeight, 0.1f, 2.44f, false,
+                "How high he aims to cross the line (the bar is at 2.44 m)."),
+        "Shot");
+    DrillParameter power =
+        setting("Power share", &powerShare, 0.0f, 1.0f, false,
+                "The share of his shot power he strikes it with. 0: as the "
+                "engine strikes a shot (Shooting::DEFAULT_POWER_SHARE).");
+    power.automatic = [] { return MatchTuning::Shooting::DEFAULT_POWER_SHARE; };
+    add(power, "Shot");
+    DrillParameter how = setting(
+        "Technique", &techniqueChoice, 0.0f, 4.0f, true,
+        "Driven: the instep, hard, a little topspin (every shot's until the "
+        "brain chooses).\nPlaced: the side of the foot, slower.\nCurled: "
+        "the instep's wrap, sidespin bending it in towards the middle.\n"
+        "Chip: stabbed under, backspin, over the keeper.\nToe-poke.");
+    how.choices = {"Driven", "Placed", "Curled", "Chip", "Toe-poke"};
+    add(how, "Shot");
+    DrillParameter keeper = setting(
+        "Keeper", &keeperChoice, 0.0f, 1.0f, true,
+        "None: an empty goal.\nOff his line: a keeper held on the line from "
+        "the goal's middle to the ball, this far out (a chip goes over his "
+        "reach).");
+    keeper.choices = {"None", "Off his line"};
+    add(keeper, "Keeper");
+    add(setting("Keeper off his line (m)", &keeperOff, 0.0f, 12.0f, false),
+        "Keeper");
+    add(setting("Keeper height (cm)", &keeperHeight, 165.0f, 205.0f, true),
+        "Keeper");
+    add(setting("Goalkeeping", &goalkeeping, 1.0f, 100.0f, true), "Keeper");
+    DrillParameter feed = setting(
+        "Ball comes in", &feedChoice, 0.0f, 2.0f, true,
+        "On his feet: a dead ball (or his run-up's).\nFirst time: played to "
+        "him on the spot, and struck as it reaches him.\nAfter a touch: "
+        "played to him, controlled, then struck.");
+    feed.choices = {"On his feet", "First time", "After a touch"};
+    add(feed, "Ball");
+    add(setting("Ball speed (m/s)", &ballSpeed, 2.0f, 30.0f, false,
+                "Pace when it is played to him."),
+        "Ball");
+    add(setting("Comes from (deg)", &fromAngle, -180.0f, 180.0f, true,
+                "Where it is played from, against the way to goal: 0 from "
+                "the goal's side, 90 from the bottom touchline's side, -90 "
+                "from the top's, 180 from behind him."),
+        "Ball");
+    add(setting("Feed distance (m)", &feedDistance, 5.0f, 40.0f, false), "Ball");
+    add(setting("Bounce (m/s up)", &bounce, 0.0f, 3.0f, false,
+                "Upward speed when played: 0 along the ground. A ball off "
+                "the ground when it reaches him is taken with a touch."),
+        "Ball");
+    add(setting("Run-up (m)", &runUp, 0.0f, 30.0f, false,
+                "0: he shoots standing. Otherwise he runs with the ball this "
+                "far, ending on the spot, then shoots on the move (a ball on "
+                "his feet only)."),
+        "Shooter");
+    add(setting("Run-up direction (deg)", &runDirection, -180.0f, 180.0f, true,
+                "Which way he runs onto the spot against the way to goal: 0 "
+                "straight at it, 90 across it towards the bottom touchline, "
+                "-90 towards the top, 180 away from goal."),
+        "Shooter");
+    DrillParameter pace =
+        setting("Run-up pace", &paceChoice, 0.0f, 2.0f, true,
+                "How hard he carries it on the run-up: a jog, a run or a "
+                "sprint (as his Dribbling allows).");
+    pace.choices = {"Jog", "Run", "Sprint"};
+    add(pace, "Shooter");
+    add(setting("Shooting", &shooting, 1.0f, 100.0f, true), "Shooter");
+    add(setting("Condition", &condition, 30.0f, 100.0f, true,
+                "How fresh he is at the start (tiredness widens the errors)."),
+        "Shooter");
+    DrillParameter foot = setting("Foot", &footChoice, 0.0f, 1.0f, true);
+    foot.choices = {"Right", "Left"};
+    add(foot, "Shooter");
+    // Names live as long as the drill: the settings point at them.
+    const auto kindName = STRIKE_KIND_NAMES[static_cast<std::size_t>(StrikeKind::SHOT)];
+    for (std::size_t index = 0; index < STRIKE_KNOB_COUNT; ++index)
+    {
+      knobNames[index] =
+          strikeKnobName(StrikeKind::SHOT, static_cast<StrikeKnob>(index));
+      knobSections[index] = std::string(kindName) + " knobs: " +
+                            std::string(STRIKE_KNOBS[index].group);
+    }
+    for (std::size_t index = 0; index < STRIKE_KNOB_COUNT; ++index)
+    {
+      const StrikeKnobInfo& info = STRIKE_KNOBS[index];
+      DrillParameter knob =
+          setting(knobNames[index].c_str(),
+                  &knobs.at(StrikeKind::SHOT, static_cast<StrikeKnob>(index)),
+                  info.min, info.max, false);
+      knob.collapsible = true;
+      knob.label = info.name.data();
+      add(knob, knobSections[index].c_str());
+    }
+    return list;
+  }
+
+  std::vector<DrillPlayerSpec> players() const override
+  {
+    DrillPlayerSpec shooter{"Shooter", PlayerRole::ST, true,
+                            {{"Shooting", shooting}}, 180};
+    shooter.foot = footChoice < 0.5f ? Foot::Right : Foot::Left;
+    shooter.condition = condition;
+    std::vector<DrillPlayerSpec> list{shooter};
+    if (keeperChoice > 0.5f)
+      list.push_back({"Keeper", PlayerRole::GK, false,
+                      {{"Goalkeeping", goalkeeping}},
+                      static_cast<int>(keeperHeight)});
+    return list;
+  }
+
+  /** The technique asked (none: driven, as the engine strikes a shot). */
+  [[nodiscard]] std::optional<ShotTechnique> technique() const
+  {
+    if (techniqueChoice < 0.5f) return std::nullopt;
+    return static_cast<ShotTechnique>(static_cast<int>(techniqueChoice + 0.5f));
+  }
+
+  /** The keeper, held on his spot until the shot. */
+  void placeKeeper(MatchEngine& engine, MatchScenario& scenario,
+                   const std::vector<PlayerID>& ids)
+  {
+    hasKeeper = keeperChoice > 0.5f && ids.size() > 1;
+    keeperId = hasKeeper ? ids[1] : 0;
+    if (!hasKeeper) return;
+    const Vector2F goal{1.0f, 0.5f};
+    keeperAt = along(goal, directionBetween(goal, spot),
+                     std::min(keeperOff, std::max(metresBetween(goal, spot) - 1.0f,
+                                                  0.0f)));
+    keeperAt.x = std::min(keeperAt.x, 0.995f);
+    scenario.players.push_back({keeperId, keeperAt, false});
+    (void)engine;
+  }
+
+  void begin(MatchEngine& engine, const std::vector<PlayerID>& ids) override
+  {
+    shooterId = ids[0];
+    engine.setStrikeKnobs(knobs);
+    spot = {std::clamp(1.0f - line / LENGTH, 0.5f, 0.995f),
+            std::clamp(0.5f + side / WIDTH, 0.01f, 0.99f)};
+    ordered = false;
+    orderedAt = {};
+    touchedFirst = false;
+    strike.reset();
+    outcome.clear();
+    endAt.reset();
+    ballPath.clear();
+    if (feedChoice > 0.5f)
+    {
+      // Played to him on the spot from `fromAngle` round from the goal's
+      // side; the shot is ordered as it is played (first time, or after his
+      // touch).
+      const Vector2F from = rotated({1.0f, 0.0f}, fromAngle * PI / 180.0f);
+      feedFrom = along(spot, from, feedDistance);
+      feedFrom = {std::clamp(feedFrom.x, 0.01f, 0.99f),
+                  std::clamp(feedFrom.y, 0.01f, 0.99f)};
+      start = spot;
+      MatchScenario scenario;
+      scenario.players.push_back({shooterId, spot, false});
+      placeKeeper(engine, scenario, ids);
+      scenario.carrierId = 0;
+      scenario.ballPosition = feedFrom;
+      engine.startDrill(scenario);
+      if (hasKeeper) engine.setDrillTarget(keeperId, keeperAt, false);
+      engine.forceShot(shooterId, Vector2F{aimAcross, aimHeight},
+                       powerShare > 0.0f ? std::optional<float>(powerShare)
+                                         : std::nullopt,
+                       feedChoice < 1.5f, technique());
+      const Vector2F travel = toMetres({spot.x - feedFrom.x, spot.y - feedFrom.y});
+      const float metres = std::hypot(travel.x, travel.y);
+      lastBallVelocity = metres > 0.0f ? Vector2F{travel.x / metres * ballSpeed,
+                                                  travel.y / metres * ballSpeed}
+                                       : Vector2F{};
+      engine.feedBall(feedFrom, lastBallVelocity, bounce, shooterId);
+      before = engine.getStrikeContacts();
+      ordered = true;
+      if (const MatchPlayer* shooter = slotOf(engine, shooterId))
+        orderedAt = Moment{secondsOf(engine),
+                           bodyAngleTo(*shooter, lineToAim(spot)),
+                           speedOf(*shooter)};
+      ballPath.push_back(feedFrom);
+      return;
+    }
+    // His run-up ends on the spot, along `runDirection` from the way to goal.
+    const Vector2F runWay = rotated({1.0f, 0.0f}, runDirection * PI / 180.0f);
+    start = along(spot, runWay, -runUp);
+    start = {std::clamp(start.x, 0.01f, 0.99f), std::clamp(start.y, 0.01f, 0.99f)};
+    MatchScenario scenario;
+    scenario.players.push_back({shooterId, start, false});
+    placeKeeper(engine, scenario, ids);
+    scenario.carrierId = shooterId;
+    scenario.ballPosition = start;
+    engine.startDrill(scenario);
+    if (hasKeeper) engine.setDrillTarget(keeperId, keeperAt, false);
+    // He keeps it (deciding nothing) until the shot is ordered: alone in
+    // front of goal, he would otherwise shoot as he pleased. On a run-up he
+    // carries it through the spot.
+    if (runUp > 0.0f)
+    {
+      engine.keepBall(shooterId, true, (paceChoice + 1.0f) / 3.0f);
+      engine.setDrillTarget(shooterId, along(spot, runWay, RUN_THROUGH_METRES),
+                            true);
+    }
+    else
+    {
+      engine.keepBall(shooterId, true);
+      engine.setDrillTarget(shooterId, spot, false);
+    }
+  }
+
+  bool afterStep(MatchEngine& engine) override
+  {
+    const double now = secondsOf(engine);
+    const MatchBall& ball = engine.getBall();
+    if (engine.getSimulatedSteps() % 2 == 0) ballPath.push_back(ball.position);
+    const MatchPlayer* shooter = slotOf(engine, shooterId);
+    if (!ordered && engine.getState() == MatchState::PLAYING && shooter &&
+        (runUp <= 0.0f || metresBetween(start, shooter->position) >= runUp ||
+         now >= 6.0))
+    {
+      // Once play is running (a shot struck before then is a dead ball,
+      // which the contact tallies leave out), and his run-up is done: his
+      // body against the shot's line then, and his speed.
+      orderedAt = Moment{now, bodyAngleTo(*shooter, lineToAim(ball.position)),
+                         speedOf(*shooter)};
+      engine.keepBall(shooterId, false);
+      engine.forceShot(shooterId, Vector2F{aimAcross, aimHeight},
+                       powerShare > 0.0f ? std::optional<float>(powerShare)
+                                         : std::nullopt,
+                       false, technique());
+      before = engine.getStrikeContacts();
+      ordered = true;
+    }
+    else if (ordered && !strike)
+    {
+      // A ball played to him: his touch, if he takes one, before the shot.
+      if (ball.possessedBy && ball.possessedBy->getId() == shooterId)
+        touchedFirst = true;
+      readStrike(engine, now);
+      if (strike && shooter)
+      {
+        strike->bodyAngle = bodyAngleTo(*shooter, ball.velocity);
+        strike->shooterSpeed = speedOf(*shooter);
+        // The ball as it came in (a step before), against where it went.
+        strike->firstTime = feedChoice > 0.5f && !touchedFirst;
+        strike->incoming = std::hypot(lastBallVelocity.x, lastBallVelocity.y);
+        const float out = std::hypot(ball.velocity.x, ball.velocity.y);
+        if (strike->incoming > 0.1f && out > 0.1f)
+          strike->redirect = turnDegrees(
+              {lastBallVelocity.x / strike->incoming,
+               lastBallVelocity.y / strike->incoming},
+              {ball.velocity.x / out, ball.velocity.y / out});
+        // He stays where he struck it; the keeper is free to save it.
+        engine.setDrillTarget(shooterId, shooter->position, false);
+        if (hasKeeper) engine.setDrillTarget(keeperId, std::nullopt, false);
+        eventsAtStrike = engine.getEvents().size();
+      }
+      else
+      {
+        lastBallVelocity = ball.velocity;
+      }
+    }
+    if (!strike && outcome.empty() && now >= 10.0) outcome = "no shot";
+    else if (strike && outcome.empty() && hasKeeper)
+    {
+      // Over the keeper: its height as it passes where he stood.
+      if (strike->overKeeper < 0.0f && ball.position.x >= keeperAt.x)
+        strike->overKeeper = ball.z * MatchTuning::Units::BALL_Z_METRES;
+      const auto& events = engine.getEvents();
+      for (std::size_t index = eventsAtStrike; index < events.size(); ++index)
+        if (events[index].type == MatchEventType::SAVE) outcome = "saved";
+      if (ball.possessedBy && ball.possessedBy->getId() == keeperId)
+        outcome = "saved";
+    }
+    if (strike && outcome.empty())
+    {
+      // The last reading before it crosses the line: its pace there.
+      if (ball.isShot && ball.position.x < 1.0f)
+      {
+        strike->lineSpeed = std::sqrt(ball.velocity.x * ball.velocity.x +
+                                      ball.velocity.y * ball.velocity.y +
+                                      ball.velocityZ * ball.velocityZ);
+        strike->lineSeconds = now - strike->at;
+      }
+      if (ball.position.x >= 1.0f || engine.getState() != MatchState::PLAYING)
+        outcome = result();
+      else if (!ball.isShot || now >= strike->at + 6.0)
+        outcome = "short";
+    }
+    if (!outcome.empty() && !endAt) endAt = now;
+    return !(endAt && now >= *endAt + 0.5);
+  }
+
+  void drawOverlay(const IMatchRenderer& renderer, ImDrawList& draw) const override
+  {
+    const float scale = Theme::scale();
+    DrillDraw::path(renderer, draw, ballPath, IM_COL32(255, 255, 255, 120),
+                    1.5f * scale);
+    const Vector2F aimAt{1.0f, 0.5f + aimAcross / WIDTH};
+    DrillDraw::marker(renderer, draw, aimAt, 3.0f * scale,
+                      IM_COL32(90, 220, 120, 255), "aim");
+    if (strike)
+      DrillDraw::marker(renderer, draw, {1.0f, 0.5f + strike->crossingY / WIDTH},
+                        3.0f * scale,
+                        outcome == "on target" ? IM_COL32(90, 220, 120, 255)
+                                               : IM_COL32(240, 140, 60, 255));
+  }
+
+  std::vector<std::string> report() const override
+  {
+    std::vector<std::string> lines;
+    constexpr float DEGREES = 180.0f / PI;
+    lines.push_back(std::format(
+        "{:.1f} m out, {:+.1f} m off centre · aim {:+.2f} m across, {:.2f} m up "
+        "· {:.0f}% of his power",
+        line, side, aimAcross, aimHeight,
+        100.0f * (powerShare > 0.0f ? powerShare
+                                    : MatchTuning::Shooting::DEFAULT_POWER_SHARE)));
+    lines.push_back(std::format("Shooter: Shooting {:.0f}, condition {:.0f}, {} foot",
+                                shooting, condition,
+                                footChoice < 0.5f ? "right" : "left"));
+    if (feedChoice > 0.5f)
+      lines.push_back(std::format(
+          "Played in at {:.0f} m/s from {:+.0f} deg, {:.0f} m out{} · {}{}",
+          ballSpeed, fromAngle, feedDistance,
+          bounce > 0.0f ? std::format(", {:.1f} m/s up", bounce) : std::string(),
+          feedChoice < 1.5f ? "first time" : "after a touch",
+          strike ? std::format(": {} (in at {:.1f} m/s, turned {:.0f} deg)",
+                               strike->firstTime ? "struck first time"
+                                                 : "struck after a touch",
+                               strike->incoming, strike->redirect)
+                 : std::string()));
+    else if (runUp > 0.0f)
+      lines.push_back(std::format("Run-up: {:.0f} m at {:+.0f} deg to the goal, {}",
+                                  runUp, runDirection,
+                                  paceChoice < 0.5f   ? "jogging"
+                                  : paceChoice < 1.5f ? "running"
+                                                      : "sprinting"));
+    if (orderedAt && strike)
+      lines.push_back(std::format(
+          "Body off the shot: {:.0f} deg at the order, {:.0f} deg at the strike "
+          "({:.2f} s later); speed {:.1f} -> {:.1f} m/s",
+          orderedAt->body, strike->bodyAngle, strike->at - orderedAt->at,
+          orderedAt->speed, strike->shooterSpeed));
+    if (strike)
+    {
+      lines.push_back(std::format(
+          "{} at {:.2f} s: {:.1f} m/s ({:.1f} up), spin {:+.1f} side, {:+.1f} top "
+          "rev/s{}",
+          STRIKE_KIND_NAMES[static_cast<std::size_t>(strike->kind)], strike->at,
+          strike->speed, strike->lift, strike->spin.side / (2.0f * PI),
+          strike->spin.top / (2.0f * PI),
+          strike->overKeeper >= 0.0f
+              ? std::format(" · {:.2f} m up over the keeper", strike->overKeeper)
+              : std::string()));
+      lines.push_back(std::format(
+          "{}  angle: {:.1f} deg off (elevation {:+.1f} deg)",
+          strike->angleFailed ? "FAIL" : "PASS", strike->angleError * DEGREES,
+          strike->elevationError * DEGREES));
+      lines.push_back(std::format("{}  weight: {:+.2f} m/s",
+                                  strike->weightFailed ? "FAIL" : "PASS",
+                                  strike->weightError));
+      lines.push_back(std::format(
+          "Crosses the line {:+.2f} m across, {:.2f} m up: missed the spot by "
+          "{:+.2f} m across, {:+.2f} m up",
+          strike->crossingY, strike->crossingZ, strike->crossingY - aimAcross,
+          strike->crossingZ - aimHeight));
+      if (strike->lineSpeed > 0.0f)
+        lines.push_back(std::format("At the line: {:.1f} m/s after {:.2f} s",
+                                    strike->lineSpeed, strike->lineSeconds));
+    }
+    if (!outcome.empty()) lines.push_back("OUTCOME  " + outcome);
+    return lines;
+  }
+
+  std::vector<DrillMetric> metrics() const override
+  {
+    if (outcome.empty() || !strike) return {};
+    const auto flag = [](bool value) { return value ? 1.0 : 0.0; };
+    constexpr float DEGREES = 180.0f / PI;
+    std::vector<DrillMetric> out{
+        {"Launch speed (m/s)", strike->speed},
+        {"Launch lift (m/s)", strike->lift},
+        {"Speed at the line (m/s)", strike->lineSpeed},
+        {"Seconds to the line", strike->lineSeconds},
+        {"On target", flag(outcome == "on target")},
+        {"Wide", flag(outcome == "wide")},
+        {"Over", flag(outcome == "over")},
+        {"Short", flag(outcome == "short")},
+        {"Miss across (m)", strike->crossingY - aimAcross},
+        {"Abs miss across (m)", std::abs(strike->crossingY - aimAcross)},
+        {"Miss height (m, + higher)", strike->crossingZ - aimHeight},
+        {"Power asked (condition)", strike->factors[POWER_ASKED_FACTOR]},
+        {"Saved", flag(outcome == "saved")},
+        {"Height over the keeper (m)", strike->overKeeper},
+        {"Sidespin (rev/s)", strike->spin.side / (2.0f * PI)},
+        {"Topspin (rev/s, - backspin)", strike->spin.top / (2.0f * PI)},
+        {"First time", flag(strike->firstTime)},
+        {"Ball in (m/s)", strike->incoming},
+        {"Turned (deg)", strike->redirect},
+        {"Body off the shot at order (deg)", orderedAt ? orderedAt->body : 0.0f},
+        {"Body off the shot at strike (deg)", strike->bodyAngle},
+        {"Order to strike (s)", orderedAt ? strike->at - orderedAt->at : 0.0},
+        {"Speed at order (m/s)", orderedAt ? orderedAt->speed : 0.0f},
+        {"Speed lost (m/s)",
+         orderedAt ? orderedAt->speed - strike->shooterSpeed : 0.0f},
+        {"Angle difficulty", strike->angleDifficulty},
+        {"Weight difficulty", strike->weightDifficulty},
+        {"Angle failed", flag(strike->angleFailed)},
+        {"Weight failed", flag(strike->weightFailed)},
+        {"Abs angle error (deg)", strike->angleError * DEGREES},
+        {"Weight error (m/s)", strike->weightError},
+        {"Elevation error (deg, + higher)", strike->elevationError * DEGREES},
+    };
+    // Every condition's value (0-1).
+    for (std::size_t index = 0; index < CONTACT_FACTOR_COUNT; ++index)
+      out.push_back({"Condition: " + std::string(CONTACT_FACTOR_LABELS[index]),
+                     strike->factors[index]});
+    return out;
+  }
+
+  void renderAfterSettings() const override
+  {
+    ImGui::SeparatorText("Difficulty of the last shot");
+    if (!strike)
+    {
+      ImGui::TextDisabled("No shot yet.");
+      return;
+    }
+    if (!ImGui::BeginTable("##difficulty", 2, ImGuiTableFlags_SizingStretchProp))
+      return;
+    const auto row = [](const char* name, float value, bool strong)
+    {
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn();
+      if (strong)
+        ImGui::TextUnformatted(name);
+      else
+        ImGui::TextDisabled("%s", name);
+      ImGui::TableNextColumn();
+      ImGui::Text("%.3f", static_cast<double>(value));
+    };
+    row("Angle difficulty", strike->angleDifficulty, true);
+    row("Weight difficulty", strike->weightDifficulty, true);
+    for (std::size_t index = 0; index < CONTACT_FACTOR_COUNT; ++index)
+      if (strike->factors[index] > 0.0005f)
+        row(std::string(CONTACT_FACTOR_LABELS[index]).c_str(),
+            strike->factors[index], false);
+    ImGui::EndTable();
+  }
+
+ private:
+  struct Strike
+  {
+    double at = 0.0;
+    bool angleFailed = false;
+    bool weightFailed = false;
+    float angleError = 0.0f;
+    float weightError = 0.0f;
+    float elevationError = 0.0f;
+    float angleDifficulty = 0.0f;
+    float weightDifficulty = 0.0f;
+    std::array<float, CONTACT_FACTOR_COUNT> factors{};
+    /** Off his foot: along the ground and upward (m/s). */
+    float speed = 0.0f;
+    float lift = 0.0f;
+    /** Where its flight crosses the goal line (m from the goal's middle,
+     * and height), as the engine launched it. */
+    float crossingY = 0.0f;
+    float crossingZ = 0.0f;
+    /** Its pace (m/s, in 3D) at the last step before the line, and when. */
+    float lineSpeed = 0.0f;
+    double lineSeconds = 0.0;
+    /** Where it went against where his body faced (deg), and his speed. */
+    float bodyAngle = 0.0f;
+    float shooterSpeed = 0.0f;
+    /** A ball played to him: struck first time (no touch), the pace it came
+     * in at (m/s) and how far it was turned (deg). */
+    bool firstTime = false;
+    float incoming = 0.0f;
+    float redirect = 0.0f;
+    /** The kind it was struck as, and the spin it left with (rad/s). */
+    StrikeKind kind = StrikeKind::SHOT;
+    BallSpin spin{};
+    /** Its height as it passed the keeper (m; -1 not yet). */
+    float overKeeper = -1.0f;
+  };
+  /** When the shot was ordered: his body against its line (deg), his
+   * speed. */
+  struct Moment
+  {
+    double at = 0.0;
+    float body = 0.0f;
+    float speed = 0.0f;
+  };
+
+  /** From the ball to the spot he aims at (metres). */
+  [[nodiscard]] Vector2F lineToAim(Vector2F ballAt) const
+  {
+    return {(1.0f - ballAt.x) * LENGTH,
+            (0.5f + aimAcross / WIDTH - ballAt.y) * WIDTH};
+  }
+  /** His body's angle (deg) to a direction (metres). */
+  static float bodyAngleTo(const MatchPlayer& player, Vector2F line)
+  {
+    const Vector2F body{
+        std::cos(player.facingAngle) * MatchTuning::Pitch::LENGTH_METRES,
+        std::sin(player.facingAngle) * MatchTuning::Pitch::WIDTH_METRES};
+    const float lengths = std::hypot(body.x, body.y) * std::hypot(line.x, line.y);
+    if (lengths <= 0.0f) return 0.0f;
+    return std::acos(std::clamp((body.x * line.x + body.y * line.y) / lengths,
+                                -1.0f, 1.0f)) *
+           180.0f / PI;
+  }
+
+  /** The shot: a shot strike the contact model has read since the start. */
+  void readStrike(const MatchEngine& engine, double now)
+  {
+    // Whichever kind of shot it was struck as.
+    static constexpr std::array<StrikeKind, 5> SHOTS = {
+        StrikeKind::SHOT, StrikeKind::PLACED_SHOT, StrikeKind::CURLED_SHOT,
+        StrikeKind::CHIP_SHOT, StrikeKind::TOE_POKE};
+    std::size_t index = STRIKE_KIND_COUNT;
+    for (const StrikeKind kind : SHOTS)
+    {
+      const auto at = static_cast<std::size_t>(kind);
+      if (engine.getStrikeContacts().byKind[at].strikes > before.byKind[at].strikes)
+        index = at;
+    }
+    if (index == STRIKE_KIND_COUNT) return;
+    const auto& a = before.byKind[index];
+    const auto& b = engine.getStrikeContacts().byKind[index];
+    const MatchBall& ball = engine.getBall();
+    Strike reading;
+    reading.at = now;
+    reading.kind = static_cast<StrikeKind>(index);
+    reading.spin = ball.spin;
+    reading.angleFailed = b.angleFailed > a.angleFailed;
+    reading.weightFailed = b.weightFailed > a.weightFailed;
+    reading.angleError = static_cast<float>(b.angleErrorSum - a.angleErrorSum);
+    reading.weightError = static_cast<float>(b.weightErrorSum - a.weightErrorSum);
+    reading.elevationError =
+        static_cast<float>(b.elevationErrorSum - a.elevationErrorSum);
+    reading.angleDifficulty = static_cast<float>(b.angleDifficulty - a.angleDifficulty);
+    reading.weightDifficulty =
+        static_cast<float>(b.weightDifficulty - a.weightDifficulty);
+    for (std::size_t factor = 0; factor < CONTACT_FACTOR_COUNT; ++factor)
+      reading.factors[factor] =
+          static_cast<float>(b.factorSum[factor] - a.factorSum[factor]);
+    reading.speed = std::hypot(ball.velocity.x, ball.velocity.y);
+    reading.lift = ball.velocityZ;
+    reading.crossingY = (ball.shotTargetY - 0.5f) * WIDTH;
+    reading.crossingZ = ball.shotTargetHeightMetres;
+    strike = reading;
+  }
+
+  /** Where it crossed the line, against the frame. */
+  [[nodiscard]] std::string result() const
+  {
+    if (std::abs(strike->crossingY) >= GOAL_HALF_WIDTH - BALL_RADIUS) return "wide";
+    if (strike->crossingZ >= CROSSBAR - BALL_RADIUS) return "over";
+    return "on target";
+  }
+
+  float line = 18.0f;
+  float side = 0.0f;
+  float aimAcross = 2.5f;
+  float aimHeight = 0.5f;
+  float powerShare = 0.0f;
+  float techniqueChoice = 0.0f;
+  float keeperChoice = 0.0f;
+  float keeperOff = 6.0f;
+  float keeperHeight = 188.0f;
+  float goalkeeping = 70.0f;
+  float feedChoice = 0.0f;
+  float ballSpeed = 12.0f;
+  float fromAngle = 90.0f;
+  float feedDistance = 20.0f;
+  float bounce = 0.0f;
+  float runUp = 0.0f;
+  float runDirection = 0.0f;
+  float paceChoice = 1.0f;
+  float shooting = 70.0f;
+  float condition = 100.0f;
+  float footChoice = 0.0f;
+  StrikeKnobs knobs;
+
+  PlayerID shooterId = 0;
+  Vector2F spot{};
+  Vector2F start{};
+  Vector2F feedFrom{};
+  Vector2F lastBallVelocity{};
+  bool touchedFirst = false;
+  bool hasKeeper = false;
+  PlayerID keeperId = 0;
+  Vector2F keeperAt{};
+  std::size_t eventsAtStrike = 0;
+  bool ordered = false;
+  std::optional<Moment> orderedAt;
+  StrikeContactStats before;
+  std::optional<Strike> strike;
+  std::string outcome;
+  std::optional<double> endAt;
+  std::vector<Vector2F> ballPath;
+  std::array<std::string, STRIKE_KNOB_COUNT> knobNames;
+  std::array<std::string, STRIKE_KNOB_COUNT> knobSections;
+};
 }  // namespace
 
 std::vector<std::unique_ptr<Drill>> makeDrills()
@@ -5305,6 +5991,7 @@ std::vector<std::unique_ptr<Drill>> makeDrills()
   drills.push_back(std::make_unique<OvertakeDrill>());
   drills.push_back(std::make_unique<LooseBallDrill>());
   drills.push_back(std::make_unique<ShotDrill>());
+  drills.push_back(std::make_unique<ShotTargetDrill>());
   drills.push_back(std::make_unique<FirstTouchDrill>());
   drills.push_back(std::make_unique<PassDrill>());
   drills.push_back(std::make_unique<FirstTimePassDrill>());

@@ -463,6 +463,16 @@ struct ContactProfile
    * adds to the angle and weight jobs, and to the spin job. */
   Weights spinAsked;
   float spinAskedSpin = 0.0f;
+  /** The pace he asks for against his power for it (strikes): what it
+   * adds to the angle and weight jobs, and the share of his power below
+   * which it adds nothing. */
+  Weights powerAsked;
+  float powerComfortShare = 0.7f;
+  /** The share of his power left for a strike square to his body, inward
+   * (across it) and outward, and straight behind him (powerByAngleShare). */
+  float powerInwardSquare = 1.0f;
+  float powerOutwardSquare = 1.0f;
+  float powerBehind = 1.0f;
   // How the conditions are measured.
   float referenceSpeed = 25.0f;
   float pressureRadius = 3.0f;
@@ -502,6 +512,9 @@ struct ContactProfile
    * (verticalShare unused). */
   float elevationJitter = 0.0f;
   float angleJitter = 0.0f;
+  /** The share of the angle jitter that grows with the angle job's
+   * difficulty: angleJitter x (1 - share + share x difficulty). */
+  float jitterDifficultyShare = 0.0f;
   float weightJitter = 0.0f;
   /** The spin job (strikes): how often the spin he asks for comes off
    * wrong, by what share of it, the share of failures that put on less
@@ -522,7 +535,7 @@ enum class TermSource : std::uint8_t;
 
 /** A contact's conditions, in ContactAssessment::factors order, with short
  * labels for tables. */
-inline constexpr std::size_t CONTACT_FACTOR_COUNT = 12;
+inline constexpr std::size_t CONTACT_FACTOR_COUNT = 13;
 /** The weaker-foot condition's place in the list: it scales the other
  * conditions' sum rather than adding to it. */
 inline constexpr std::size_t WEAK_FOOT_FACTOR = 6;
@@ -530,12 +543,15 @@ inline constexpr std::size_t WEAK_FOOT_FACTOR = 6;
 inline constexpr std::size_t VERTICAL_TURN_FACTOR = 10;
 /** The spin he asks for against what he can put on. */
 inline constexpr std::size_t SPIN_ASKED_FACTOR = 11;
+/** The pace he asks for against his power (strikes). */
+inline constexpr std::size_t POWER_ASKED_FACTOR = 12;
 inline constexpr std::array<std::string_view, CONTACT_FACTOR_COUNT>
     CONTACT_FACTOR_LABELS = {
         "Pace change",     "Turn off its line",  "Incoming pace",
         "Approach angle",  "His own speed",      "Stretching",
         "Weaker foot",     "Off the ground",     "Surprise",
-        "Pressure",        "Turn up or down",    "Spin asked"};
+        "Pressure",        "Turn up or down",    "Spin asked",
+        "Power asked"};
 
 /** A contact's three jobs (vertical contact plan): the turn seen from
  * above, the pace (in 3D), and the turn in steepness. */
@@ -654,6 +670,9 @@ struct StrikeContactStats
     double weightErrorSum = 0.0;
     /** Sum of the elevation error (rad, + higher than meant). */
     double elevationErrorSum = 0.0;
+    /** Held strikes dropped where his foot met the ball, because it was
+     * above foot height (shots: no volleys yet); not in `strikes`. */
+    std::uint32_t droppedOffGround = 0;
   };
   std::array<ByKind, STRIKE_KIND_COUNT> byKind{};
 };
@@ -714,6 +733,8 @@ struct ContactRequest
    * (rad/s, his skill's). */
   BallSpin spin{};
   float spinCapacity = 0.0f;
+  /** A strike: his power for it (m/s; 0, the body's for the kind). */
+  float powerCapacity = 0.0f;
 };
 
 /** A contact assessed and carried out, and the skill it was carried out
@@ -994,6 +1015,22 @@ enum class PassTechnique : std::uint8_t
   CHIP,
 };
 
+/** How a foot shot is struck (shooting technique plan step 5). Without
+ * one asked: driven, as every shot was. */
+enum class ShotTechnique : std::uint8_t
+{
+  /** The instep, hard and low, with a little topspin. */
+  DRIVEN,
+  /** The side of the foot, at a lower pace, for the line. */
+  PLACED,
+  /** The instep's wrap, with sidespin, bent in towards the middle. */
+  CURLED,
+  /** Stabbed under it with backspin, over the keeper. */
+  CHIP,
+  /** The toe: quick, with little control. */
+  TOE_POKE,
+};
+
 /**
  * A tactical change made from outside the engine (the touchline), stamped
  * with the fixed step it was made after. Only the fields of its type are
@@ -1047,6 +1084,13 @@ struct MatchCommandRecord
   std::optional<float> passArrival;
   /** FORCE_PASS: played first time, off a pass to him (forcePassTo). */
   bool passFirstTime = false;
+  /** FORCE_SHOT: the spot in the goal he strikes at, and the share of his
+   * power (forceShot), if any. */
+  std::optional<Vector2F> shotAim;
+  std::optional<float> shotPower;
+  /** FORCE_SHOT: struck first time off a pass to him, and how (forceShot). */
+  bool shotFirstTime = false;
+  std::optional<ShotTechnique> shotTechnique;
   /** KEEP_BALL: how hard he carries it (older recordings: flat out). */
   float keepUrgency = 1.0f;
 };
@@ -1847,8 +1891,16 @@ class MatchEngine
   void setDerivedStat(PlayerID playerId, DerivedStat stat, float rating);
 
   /** Drills: the player shoots, through the AI's own shot, as soon as he
-   * has the ball and can act. Logged and replayed. */
-  void forceShot(PlayerID playerId);
+   * has the ball and can act; with `aim`, at that spot in the goal instead
+   * of one he picks (metres: across from the goal's centre, + toward pitch
+   * y = 1, and height); with `powerShare`, struck at that share of his
+   * shot power (Binturong body) instead of the usual; `firstTime`: off a
+   * pass to him, struck as it reaches him without a touch (a ground ball,
+   * Binturong body; otherwise after his touch). Logged and replayed. */
+  void forceShot(PlayerID playerId, std::optional<Vector2F> aim = std::nullopt,
+                 std::optional<float> powerShare = std::nullopt,
+                 bool firstTime = false,
+                 std::optional<ShotTechnique> technique = std::nullopt);
   /** Drills: the player passes to `receiverId`, through the AI's own pass
    * (its target, lead and weight), as soon as he has the ball and can act;
    * `style` can force it along the ground or lofted. Logged and replayed. */
@@ -1930,6 +1982,14 @@ class MatchEngine
   void holdDrillTarget(MatchPlayer& player, const DrillTarget& held);
   /** A forced shot waiting for its shooter to be able to act (0: none). */
   PlayerID forcedShooter = 0;
+  /** A forced shot's spot in the goal and share of his power (forceShot),
+   * used by its strike. */
+  std::optional<Vector2F> forcedShotAim;
+  std::optional<float> forcedShotPower;
+  /** The forced shot is struck first time off a pass to him. */
+  bool forcedShotFirstTime = false;
+  /** The forced shot's technique (forceShot), used by its strike. */
+  std::optional<ShotTechnique> forcedShotTechnique;
   /** A forced pass waiting for its passer to be able to act (passer 0:
    * none). */
   struct ForcedPass
@@ -2324,6 +2384,15 @@ class MatchEngine
    * decided for his next meet with the ball (dribble meet plan 2a) waits
    * for that meet, over steps, while it holds (`atMeet`: how long so far,
    * and the meet it was decided for). */
+  /** Where a shot is aimed, in metres across and up the goal mouth. */
+  struct ShotAim
+  {
+    /** Across the goal from its centre (positive toward pitch y = 1). */
+    float aimY = 0.0f;
+    float aimZ = 0.0f;
+    /** How far inside the post he aimed (the controlled shot uses it). */
+    float inset = 0.0f;
+  };
   struct PendingStrike
   {
     enum class Kind : std::uint8_t
@@ -2337,11 +2406,19 @@ class MatchEngine
     PassOption pass;
     bool forceLofted = false;
     float forcedXG = -1.0f;
+    /** A shot: the spot he picked when he decided on it (shooting
+     * technique plan step 4), struck at when his foot meets the ball. */
+    std::optional<ShotAim> shotAim;
+    /** The striker's slot in `players`, and the pass's receiver's: an
+     * engine copy re-points `striker` and `pass.receiver` by them
+     * (rebindPendingStrike). */
+    std::size_t strikerSlot = 0;
+    std::optional<std::size_t> receiverSlot;
     bool atMeet = false;
     float heldSeconds = 0.0f;
     Vector2F meetPoint{};
-    /** A pass held while his body turns to it (Binturong body), for at most
-     * turnSeconds. */
+    /** A pass or shot held while his body turns to it (Binturong body),
+     * for at most turnSeconds. */
     bool turning = false;
     float turnSeconds = 0.0f;
     /** A pass he means to play first time off a ball still coming to him
@@ -2398,6 +2475,11 @@ class MatchEngine
   bool holdStrikeForSweep(const PendingStrike& strike);
   /** Plays the held strike where he meets the ball (`moment`). */
   void playPendingStrike(const TouchMoment& moment);
+  /** Notes the held strike's players' slots, as it is held. */
+  void notePendingStrikeSlots();
+  /** At each step's start: the held strike's players by their slots (an
+   * engine copied with one held still points into the original). */
+  void rebindPendingStrike();
 
   // --- Brain: decisions ------------------------------------------------------
   // What a side's players choose to do. Each choice returns an intention that
@@ -2471,15 +2553,6 @@ class MatchEngine
   void planOvertake(std::size_t slot);
   /** The team's off-ball intents the moment a pass is released. */
   void afterPassReleased(const MatchPlayer& passer, const MatchPlayer& receiver);
-  /** Where a shot is aimed, in metres across and up the goal mouth. */
-  struct ShotAim
-  {
-    /** Across the goal from its centre (positive toward pitch y = 1). */
-    float aimY = 0.0f;
-    float aimZ = 0.0f;
-    /** How far inside the post he aimed (the controlled shot uses it). */
-    float inset = 0.0f;
-  };
   ShotAim chooseShotAim(const MatchPlayer& shooter, bool header, bool penalty,
                         bool freeKick);
   /** A keeper's guess at a penalty: -1 or 1 (side of pitch y), 0 to stay. */
@@ -2715,10 +2788,17 @@ class MatchEngine
     float speed = 0.0f;
     float verticalSpeed = 0.0f;
     bool launchSet = false;
+    /** The spin it leaves with, and a point (normalised) along the way it
+     * leaves when that isn't straight at where it crosses the line (a
+     * curled shot). */
+    BallSpin spin{};
+    std::optional<Vector2F> launchToward;
   };
-  /** @param powerScale Play mode's power (1 for the AI). */
+  /** @param powerScale Play mode's power (1 for the AI).
+   * @param technique How it is struck (Binturong body; none: driven). */
   ShotStrike strikeShotBody(const MatchPlayer& shooter, float aimY, float aimZ,
-                            float spread, bool header, float powerScale);
+                            float spread, bool header, float powerScale,
+                            std::optional<ShotTechnique> technique = std::nullopt);
   float clearanceSpeed(const MatchPlayer& defender);
   float headerClearanceSpeed(const MatchPlayer& header);
   /** Where a knock-down meant for `aim` really goes. */
@@ -2979,12 +3059,20 @@ class MatchEngine
   float switchSeconds(const MatchPlayer& candidate) const;
   void passBall(MatchPlayer& passer, const PassOption& option,
                 bool forceLofted = false);
+  /** `aim`: the spot he picked when he decided (a held shot); none, he
+   * picks it now. */
   void takeShot(MatchPlayer& shooter, float forcedXG = -1.0f,
-                bool header = false, bool freeKick = false);
+                bool header = false, bool freeKick = false,
+                std::optional<ShotAim> aim = std::nullopt);
   /** Strikes a shot at goal (aim, execution error, launch) and returns its
    * xG; takeShot() adds the statistics and the event. */
   float strikeShot(MatchPlayer& shooter, float forcedXG, bool header,
-                   bool penalty, bool freeKick = false);
+                   bool penalty, bool freeKick = false,
+                   std::optional<ShotAim> aim = std::nullopt);
+  /** The spot in the goal for a shot he is deciding on now (a drill's
+   * forced spot replaces his pick). */
+  ShotAim pickShotAim(MatchPlayer& shooter, bool header, bool penalty,
+                      bool freeKick);
   struct SaveAttempt
   {
     bool saved = false;

@@ -94,6 +94,15 @@ json toJson(const MatchCommandRecord& command)
           {"pass_arrival",
            command.passArrival ? json(*command.passArrival) : json(nullptr)},
           {"pass_first_time", command.passFirstTime},
+          {"shot_aim", command.shotAim
+                           ? json{command.shotAim->x, command.shotAim->y}
+                           : json(nullptr)},
+          {"shot_power",
+           command.shotPower ? json(*command.shotPower) : json(nullptr)},
+          {"shot_first_time", command.shotFirstTime},
+          {"shot_technique", command.shotTechnique
+                                 ? json(static_cast<int>(*command.shotTechnique))
+                                 : json(nullptr)},
           {"keep_urgency", command.keepUrgency}};
 }
 
@@ -143,6 +152,15 @@ MatchCommandRecord commandFromJson(const json& value)
       arrival != value.end() && arrival->is_number())
     command.passArrival = arrival->get<float>();
   command.passFirstTime = value.value("pass_first_time", false);
+  if (const auto aim = value.find("shot_aim"); aim != value.end() && aim->is_array())
+    command.shotAim = Vector2F{aim->at(0).get<float>(), aim->at(1).get<float>()};
+  if (const auto power = value.find("shot_power");
+      power != value.end() && power->is_number())
+    command.shotPower = power->get<float>();
+  command.shotFirstTime = value.value("shot_first_time", false);
+  if (const auto how = value.find("shot_technique");
+      how != value.end() && how->is_number())
+    command.shotTechnique = static_cast<ShotTechnique>(how->get<int>());
   command.keepUrgency = value.value("keep_urgency", 1.0f);
   return command;
 }

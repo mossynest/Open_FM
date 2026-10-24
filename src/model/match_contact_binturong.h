@@ -52,7 +52,38 @@ struct ContactSituation
    * spin to ask of him). */
   BallSpin intendedSpin{};
   float spinCapacity = 0.0f;
+  /** His power for the strike (m/s; 0, none to ask of him: a touch). */
+  float powerCapacity = 0.0f;
 };
+
+/** The share of his power he can put into a strike `degrees` off the way
+ * his body faces (0-180): all of it straight ahead, falling as the square
+ * to `square` at 90 degrees (inward or outward, which may differ), then in
+ * a straight line to `behind` at 180. */
+inline float powerByAngleShare(float degrees, float square, float behind)
+{
+  const float off = std::clamp(degrees, 0.0f, 180.0f);
+  if (off <= 90.0f)
+  {
+    const float into = off / 90.0f;
+    return 1.0f - (1.0f - square) * into * into;
+  }
+  return square + (behind - square) * (off - 90.0f) / 90.0f;
+}
+
+/** How much of his power `speed` asks (0-1 as a condition): nothing up to
+ * `comfortShare` of `capacity`, then the square of how far into the rest
+ * (1 at all of it, and beyond). 0 without a capacity. */
+inline float powerAskedValue(float speed, float capacity, float comfortShare)
+{
+  if (capacity <= 0.0f) return 0.0f;
+  const float share = speed / capacity;
+  if (share <= comfortShare) return 0.0f;
+  const float into =
+      std::min((share - comfortShare) / std::max(1.0f - comfortShare, 1.0e-3f),
+               1.0f);
+  return into * into;
+}
 
 /** Whether a ball met `gap` metres from his centre, in direction `toBall`
  * (metric unit), is in his dead zone: beyond the comfort gap and more than

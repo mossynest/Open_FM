@@ -197,11 +197,17 @@ std::optional<Vector2F> MatchEngine::getDrillTarget(PlayerID playerId) const
   return std::nullopt;
 }
 
-void MatchEngine::forceShot(PlayerID playerId)
+void MatchEngine::forceShot(PlayerID playerId, std::optional<Vector2F> aim,
+                            std::optional<float> powerShare, bool firstTime,
+                            std::optional<ShotTechnique> technique)
 {
   MatchCommandRecord command;
   command.type = MatchCommandType::FORCE_SHOT;
   command.player = playerId;
+  command.shotAim = aim;
+  command.shotPower = powerShare;
+  command.shotFirstTime = firstTime;
+  command.shotTechnique = technique;
   recordCommand(command);
 }
 

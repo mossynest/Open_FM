@@ -437,6 +437,10 @@ bool MatchEngine::executeCommand(const MatchCommandRecord& command)
     case MatchCommandType::FORCE_SHOT:
       if (!drillPlayer(command.player)) return false;
       forcedShooter = command.player;
+      forcedShotAim = command.shotAim;
+      forcedShotPower = command.shotPower;
+      forcedShotFirstTime = command.shotFirstTime;
+      forcedShotTechnique = command.shotTechnique;
       ++inputRevision;
       return true;
     case MatchCommandType::FORCE_PASS:
@@ -1072,8 +1076,39 @@ void MatchEngine::simulateStep(float dt)
   if (MatchRecorder* recorder = getRecorder()) recorder->onStepEnd(*this);
 }
 
+void MatchEngine::rebindPendingStrike()
+{
+  // An engine copy (a rewind's saved state) keeps the held strike's
+  // pointers into the engine it was copied from: point them at this one's
+  // players again, by their slots.
+  if (!pendingStrike) return;
+  PendingStrike& strike = *pendingStrike;
+  strike.striker =
+      strike.strikerSlot < players.size() ? &players[strike.strikerSlot] : nullptr;
+  if (strike.receiverSlot)
+    strike.pass.receiver =
+        *strike.receiverSlot < players.size() ? &players[*strike.receiverSlot]
+                                              : nullptr;
+}
+
+void MatchEngine::notePendingStrikeSlots()
+{
+  if (!pendingStrike) return;
+  PendingStrike& strike = *pendingStrike;
+  const auto slotOf = [this](const MatchPlayer* player) -> std::optional<std::size_t>
+  {
+    if (!player || players.empty() || player < players.data() ||
+        player >= players.data() + players.size())
+      return std::nullopt;
+    return static_cast<std::size_t>(player - players.data());
+  };
+  strike.strikerSlot = slotOf(strike.striker).value_or(players.size());
+  strike.receiverSlot = slotOf(strike.pass.receiver);
+}
+
 void MatchEngine::simulateStepBody(float dt)
 {
+  rebindPendingStrike();
   // This is the authoritative tick order. First apply external changes and
   // age timers, then dispatch exactly one match-state branch. In live play,
   // move bodies before resolving touches/actions, and advance a newly kicked
@@ -2864,8 +2899,23 @@ void MatchEngine::passBall(MatchPlayer& passer, const PassOption& option,
   passer.actionCooldown = recoverySeconds(passer, Recovery::PASS);
 }
 
+MatchEngine::ShotAim MatchEngine::pickShotAim(MatchPlayer& shooter, bool header,
+                                              bool penalty, bool freeKick)
+{
+  ShotAim aim = chooseShotAim(shooter, header, penalty, freeKick);
+  if (forcedShotAim)
+  {
+    // A drill's spot in the goal (forceShot).
+    aim.aimY = forcedShotAim->x;
+    aim.aimZ = forcedShotAim->y;
+    forcedShotAim.reset();
+  }
+  return aim;
+}
+
 float MatchEngine::strikeShot(MatchPlayer& shooter, float forcedXG, bool header,
-                              bool penalty, bool freeKick)
+                              bool penalty, bool freeKick,
+                              std::optional<ShotAim> heldAim)
 {
   const float goalX = shooter.isHomeTeam ? 1.0f : 0.0f;
   const Vector2F origin = strikePoint(shooter);
@@ -2879,20 +2929,34 @@ float MatchEngine::strikeShot(MatchPlayer& shooter, float forcedXG, bool header,
   // The brain picks the spot; the shooter's body then misses it by an error
   // that grows with distance, pressure, weak technique, fatigue and headers.
   constexpr float HALF_GOAL = MatchTuning::Shooting::GOAL_HALF_WIDTH_METRES;
-  const ShotAim aim = chooseShotAim(shooter, header, penalty, freeKick);
-  float aimY = aim.aimY;
-  float aimZ = aim.aimZ;
-  const float inset = aim.inset;
+  const ShotAim shotAim =
+      heldAim ? *heldAim : pickShotAim(shooter, header, penalty, freeKick);
+  float aimY = shotAim.aimY;
+  float aimZ = shotAim.aimZ;
+  const float inset = shotAim.inset;
   float spread = shotSpread(shooter, header, penalty, freeKick, metres);
   // Play mode: the human's aim and power (no effect on AI shots).
   if (controlledShot.active)
     shapeControlledShot(shooter, HALF_GOAL, inset, aimY, aimZ, spread);
-  const ShotStrike strike = strikeShotBody(
-      shooter, aimY, aimZ, spread, header,
-      controlledShot.active ? MatchTuning::Control::SHOT_SPEED_MIN_SCALE +
-                                  MatchTuning::Control::SHOT_SPEED_POWER_GAIN *
-                                      controlledShot.power
-                            : 1.0f);
+  // Play mode's power, or a drill's share of his power (as a scale on the
+  // usual share).
+  float powerScale = controlledShot.active
+                         ? MatchTuning::Control::SHOT_SPEED_MIN_SCALE +
+                               MatchTuning::Control::SHOT_SPEED_POWER_GAIN *
+                                   controlledShot.power
+                         : 1.0f;
+  if (forcedShotPower)
+  {
+    powerScale = *forcedShotPower / MatchTuning::Shooting::DEFAULT_POWER_SHARE;
+    forcedShotPower.reset();
+  }
+  // How it is struck: a drill's technique, else driven (the brain doesn't
+  // choose yet).
+  const std::optional<ShotTechnique> technique =
+      header ? std::nullopt : forcedShotTechnique;
+  forcedShotTechnique.reset();
+  const ShotStrike strike = strikeShotBody(shooter, aimY, aimZ, spread, header,
+                                           powerScale, technique);
   const float crossingY = strike.crossingY;
   const float crossingZ = strike.crossingZ;
   const bool onTarget =
@@ -2911,12 +2975,12 @@ float MatchEngine::strikeShot(MatchPlayer& shooter, float forcedXG, bool header,
   const float startHeight = from.heightMetres;
   const float goalDistance = distance(origin, goalPoint);
   clearFlightState();
-  launchBall(shooter, from, goalPoint, speed,
+  launchBall(shooter, from, strike.launchToward.value_or(goalPoint), speed,
              strike.launchSet
                  ? strike.verticalSpeed
                  : loftVerticalSpeed(goalDistance, speed, startHeight,
                                      crossingZ),
-             BallSpin{});
+             strike.spin);
   ball.isShot = true;
   ball.shotByHome = shooter.isHomeTeam;
   ball.shotOnTarget = onTarget;
@@ -2932,14 +2996,23 @@ float MatchEngine::strikeShot(MatchPlayer& shooter, float forcedXG, bool header,
 }
 
 void MatchEngine::takeShot(MatchPlayer& shooter, float forcedXG, bool header,
-                           bool freeKick)
+                           bool freeKick, std::optional<ShotAim> aim)
 {
-  if (!header && !freeKick &&
-      holdStrikeForSweep(
-          {PendingStrike::Kind::SHOT, &shooter, {}, false, forcedXG}))
-    return;
+  if (!header && !freeKick && strikesWaitForSweep)
+  {
+    // Held for the sweep. The Binturong body picks his spot now, as he
+    // decides (his body turns to it while it is held); the Aardvark body
+    // when it is struck.
+    PendingStrike held{PendingStrike::Kind::SHOT, &shooter, {}, false, forcedXG};
+    if (getBody(shooter.isHomeTeam) == BodyId::BINTURONG)
+      held.shotAim = pickShotAim(shooter, false, false, false);
+    if (holdStrikeForSweep(held)) return;
+    // Not held after all: struck now (at the spot just picked, if any).
+    aim = held.shotAim;
+  }
   const bool penalty = state == MatchState::PENALTY;
-  const float xg = strikeShot(shooter, forcedXG, header, penalty, freeKick);
+  const float xg =
+      strikeShot(shooter, forcedXG, header, penalty, freeKick, aim);
 
   PlayerMatchStats& shooterStats = statsOf(shooter);
   ++shooterStats.shots;
@@ -3478,6 +3551,17 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     if (&player == touchOwner)
     {
       const std::uint32_t bit = 1U << contact.slot;
+      // A shot meets the ball at foot height or not at all (no volleys
+      // yet): above it, it is dropped, he plays the ball as he would, and
+      // decides again.
+      if (pendingStrike && pendingStrike->striker == &player &&
+          pendingStrike->kind == PendingStrike::Kind::SHOT &&
+          moment.height > MatchTuning::Ball::LOW_BALL_METRES)
+      {
+        pendingStrike.reset();
+        ++strikeContacts.byKind[static_cast<std::size_t>(StrikeKind::SHOT)]
+              .droppedOffGround;
+      }
       // A pass, shot or clearance he chose at the step's start: struck here
       // (a pass he is turning to, once he has turned or his time is up;
       // until then he keeps the ball as he would).
@@ -4082,16 +4166,18 @@ bool MatchEngine::holdStrikeForSweep(const PendingStrike& strike)
       ball.possessedBy != strike.striker->player)
     return false;
   pendingStrike = strike;
+  notePendingStrikeSlots();
   if (decidingAtMeet)
   {
     pendingStrike->atMeet = true;
     pendingStrike->meetPoint = ball.meetPoint;
   }
-  else if (strike.kind == PendingStrike::Kind::PASS &&
+  else if ((strike.kind == PendingStrike::Kind::PASS ||
+            strike.kind == PendingStrike::Kind::SHOT) &&
            getBody(strike.striker->isHomeTeam) == BodyId::BINTURONG)
   {
-    // Turning to pass: he turns his body to it first, for as long as he
-    // has before an opponent could get to the ball.
+    // Turning to pass or shoot: he turns his body to it first, for as long
+    // as he has before an opponent could get to the ball.
     pendingStrike->turning = true;
     pendingStrike->turnSeconds =
         std::min(opponentArrivalSecondsBinturong(*strike.striker, ball.position),
@@ -4221,15 +4307,18 @@ std::optional<MatchEngine::FirstTimeMeet> MatchEngine::firstTimeMeet(
 
 void MatchEngine::decideFirstTimePass()
 {
-  // Drills only until the brain judges it: a forced pass marked first time.
+  // Drills only until the brain judges it: a forced pass, or a forced shot,
+  // marked first time.
   const bool mine = pendingStrike && pendingStrike->firstTime;
   if (pendingStrike && !mine) return;
   const auto drop = [&]
   {
     if (mine) pendingStrike.reset();
   };
-  MatchPlayer* player =
-      forcedPass.firstTime ? drillPlayer(forcedPass.passer) : nullptr;
+  const bool shot = !forcedPass.firstTime && forcedShooter != 0 && forcedShotFirstTime;
+  MatchPlayer* player = forcedPass.firstTime ? drillPlayer(forcedPass.passer)
+                        : shot               ? drillPlayer(forcedShooter)
+                                             : nullptr;
   if (!player || !active(*player) || state != MatchState::PLAYING ||
       getBody(player->isHomeTeam) != BodyId::BINTURONG ||
       isControlled(*player) || ball.possessedBy ||
@@ -4246,18 +4335,34 @@ void MatchEngine::decideFirstTimePass()
     drop();
     return;
   }
-  const auto chosen = forcedPassOption(*player, forcedPass);
-  if (!chosen)
+  PendingStrike strike;
+  if (shot)
   {
-    drop();
-    return;
+    // The spot is kept from one reading to the next (a drill's forced spot,
+    // else his pick); the forced spot is used up when it is struck.
+    strike = {PendingStrike::Kind::SHOT, player};
+    if (mine && pendingStrike->shotAim)
+      strike.shotAim = pendingStrike->shotAim;
+    else if (forcedShotAim)
+      strike.shotAim = ShotAim{forcedShotAim->x, forcedShotAim->y, 0.0f};
+    else
+      strike.shotAim = chooseShotAim(*player, false, false, false);
   }
-  PendingStrike strike{PendingStrike::Kind::PASS, player, chosen->first,
-                       chosen->second};
+  else
+  {
+    const auto chosen = forcedPassOption(*player, forcedPass);
+    if (!chosen)
+    {
+      drop();
+      return;
+    }
+    strike = {PendingStrike::Kind::PASS, player, chosen->first, chosen->second};
+  }
   strike.firstTime = true;
   strike.heldSeconds = mine ? pendingStrike->heldSeconds : 0.0f;
   strike.meetPoint = meet->point;
   pendingStrike = strike;
+  notePendingStrikeSlots();
 }
 
 bool MatchEngine::playsFirstTime(const MatchPlayer& player, bool hands,
@@ -4281,6 +4386,12 @@ void MatchEngine::playFirstTimePass(MatchPlayer& player,
   setBallMotion(motion);
   if (player.player && forcedPass.passer == player.player->getId())
     forcedPass = {};
+  if (player.player && forcedShooter == player.player->getId())
+  {
+    forcedShooter = 0;
+    forcedShotFirstTime = false;
+    forcedShotAim.reset();
+  }
   playPendingStrike(moment);
 }
 
@@ -4299,7 +4410,7 @@ void MatchEngine::playPendingStrike(const TouchMoment& moment)
       passBall(striker, strike.pass, strike.forceLofted);
       break;
     case PendingStrike::Kind::SHOT:
-      takeShot(striker, strike.forcedXG);
+      takeShot(striker, strike.forcedXG, false, false, strike.shotAim);
       break;
     case PendingStrike::Kind::CLEAR:
       clearBall(striker);

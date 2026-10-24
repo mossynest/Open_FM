@@ -1151,6 +1151,7 @@ std::vector<TextTable> matchTables(std::span<const MatchSample> samples)
       to.angleErrorSum += from.angleErrorSum;
       to.weightErrorSum += from.weightErrorSum;
       to.elevationErrorSum += from.elevationErrorSum;
+      to.droppedOffGround += from.droppedOffGround;
       to.angleDifficulty += from.angleDifficulty;
       to.weightDifficulty += from.weightDifficulty;
       for (std::size_t index = 0; index < CONTACT_FACTOR_COUNT; ++index)
@@ -1180,6 +1181,13 @@ std::vector<TextTable> matchTables(std::span<const MatchSample> samples)
             {
               return std::format("{:.1f}", static_cast<double>(kind.strikes) /
                                                (2.0 * static_cast<double>(n)));
+            });
+  strikeRow("Dropped off the ground per team",
+            [&](const StrikeContactStats::ByKind& kind)
+            {
+              return std::format("{:.2f}",
+                                 static_cast<double>(kind.droppedOffGround) /
+                                     (2.0 * static_cast<double>(n)));
             });
   const auto carriedRow = [&](std::string label, auto cell)
   {

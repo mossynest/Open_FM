@@ -54,7 +54,8 @@ constexpr std::array<const char*, CONTACT_FACTOR_COUNT> DEPENDS_ON = {
     "the brain: a pass meant for someone else",
     "nearest opponent",
     "his lift against the ball's steepness (side view)",
-    "the spin he asks for against what he can put on (strikes)"};
+    "the spin he asks for against what he can put on (strikes)",
+    "the pace he asks for against his power (strikes)"};
 
 /** Which conditions colour each part of the circle in the zones view. */
 // Weaker foot is left off the disc so stretch reads clearly (it can still
@@ -120,7 +121,8 @@ float compassOf(ImVec2 offset)
 
 /** Typical intended pace for each contact (m/s). */
 constexpr std::array<float, 1 + STRIKE_KIND_COUNT> TYPICAL_PACE{
-    3.0f, 15.0f, 20.0f, 20.0f, 25.0f, 10.0f, 22.0f, 12.0f, 24.0f, 12.0f};
+    3.0f, 15.0f, 20.0f, 20.0f, 25.0f, 10.0f, 22.0f, 12.0f, 24.0f, 12.0f,
+    17.0f, 21.0f, 12.0f, 18.0f};
 
 constexpr std::array<const char*, 4> EXPECTATIONS{
     "A pass to him", "A loose ball", "A pass for someone else",

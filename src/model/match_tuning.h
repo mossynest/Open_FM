@@ -928,6 +928,18 @@ struct MatchTuning final
      * more is struck at his limit and falls short. */
     static constexpr float MIN_KICK_SPEED = 20.0f;
     static constexpr float MAX_KICK_SPEED = 35.0f;
+    /** Binturong body: the power budget with an incoming ball (agreed in
+     * the passing to-do, built in shooting technique plan step 6; first
+     * guesses). Kick power is what his foot gives the ball. Of the ball's
+     * pace across the line he strikes, this share stays on it and his foot
+     * aims against it; of its pace along the line, this share adds to the
+     * strike (coming at him) or takes from it (running away). The fastest
+     * he can send it: sqrt(P^2 - (across share x across pace)^2) - along
+     * share x along pace, and never under the floor share of P. Passes and
+     * shots alike (throws: their own limit). */
+    static constexpr float INCOMING_ACROSS_SHARE = 0.7f;
+    static constexpr float INCOMING_ALONG_SHARE = 0.1f;
+    static constexpr float INCOMING_BUDGET_FLOOR = 0.25f;
     /** Binturong body: the most spin he can put on a pass (rev/s, sidespin
      * and topspin together), from Passing 1 (a Sunday-league player) to
      * Passing 99 (the world's best); a pass asking more gets this much.
@@ -1060,10 +1072,50 @@ struct MatchTuning final
     static constexpr float MIN_CROSSING_HEIGHT_METRES = 0.12f;
     static constexpr float MAX_CROSSING_HEIGHT_METRES = 6.0f;
     // Struck shots leave the foot at 21-33 m/s (lab instep kicks ~28 m/s).
+    // Aardvark body, and Binturong headers; a Binturong foot shot is struck
+    // at a share of his shot power instead.
     static constexpr float BASE_BALL_SPEED = 21.0f;
     static constexpr float SHOOTING_SPEED_BONUS = 9.0f;
     static constexpr float POWER_SPEED_BONUS = 3.0f;
     static constexpr float MIN_SPEED_VARIATION = 0.88f;
+    /** Binturong body (shooting technique plan step 1): shot power, the
+     * fastest he can strike a shot, is his kick power with Shooting in
+     * place of Passing (Passing::MIN_KICK_SPEED at 1 to MAX_KICK_SPEED at
+     * 99). A foot shot is struck at this share of it: about the old shot's
+     * pace for a typical shooter (26.5 m/s at Shooting 60, Physicality 60). */
+    static constexpr float DEFAULT_POWER_SHARE = 0.9f;
+    /** Binturong body: a foot shot's launch, the share of his power as the
+     * ball's whole launch speed, is solved to cross the line at the height
+     * he aimed for; a strike that would need more than this (deg) up, or
+     * more than its pace, is too weak for a shot's line and is flown as a
+     * pass beyond his power (the flattest angle that gets there, or the one
+     * that gets furthest). */
+    static constexpr float MAX_LAUNCH_DEGREES = 30.0f;
+    /** Shot types (Binturong body, shooting technique plan step 5; first
+     * guesses). The share of his shot power each part of the foot can use
+     * (the driven shot, the instep: all of it), and the share of his shot
+     * power each is struck at unless a drill says otherwise (the driven
+     * one: DEFAULT_POWER_SHARE; a chip: what gets it there). */
+    static constexpr float PLACED_FOOT_SHARE = 0.75f;
+    static constexpr float CURLED_FOOT_SHARE = 0.85f;
+    static constexpr float CHIP_FOOT_SHARE = 0.6f;
+    static constexpr float TOE_FOOT_SHARE = 0.7f;
+    static constexpr float PLACED_POWER_SHARE = 0.6f;
+    static constexpr float CURLED_POWER_SHARE = 0.75f;
+    static constexpr float TOE_POWER_SHARE = 0.65f;
+    /** The spin each is struck with (rev/s; held to his spin capacity, by
+     * Shooting as a pass's is by Passing): a little topspin on a driven
+     * shot to dip it, sidespin on a curled one (bent in towards the middle
+     * of the goal), backspin on a chip. */
+    static constexpr float DRIVEN_TOPSPIN_REVS = 2.0f;
+    static constexpr float CURLED_SIDESPIN_REVS = 7.0f;
+    static constexpr float CHIP_BACKSPIN_REVS = 9.0f;
+    /** A chip clears the keeper's standing reach by this much where he is;
+     * with no keeper off his line, a chip pass's clearance. It comes down
+     * through the height he aimed for on the goal line. */
+    static constexpr float CHIP_KEEPER_MARGIN_METRES = 0.3f;
+    /** Aardvark body only: a shot leaves at this height (Binturong: the
+     * height the ball is at). */
     static constexpr float RELEASE_HEIGHT_METRES = 0.2f;
     static constexpr float WOODWORK_BAND_METRES = 0.10f;
     static constexpr float WOODWORK_REBOUND = 0.35f;
@@ -1100,6 +1152,22 @@ struct MatchTuning final
        * in proportion below it: a ball barely rolling has no line worth
        * the name. */
       static constexpr float TURN_PACE_REFERENCE = 10.0f;
+      /** Power asked (shooting technique plan step 3): the pace he asks
+       * for against his power for the kind (shot power for shots, kick
+       * power for kicks). Nothing below the comfort share; above it, the
+       * square of how far into the rest he goes (1 at all of it). What it
+       * adds to the angle and weight jobs: none unless a kind says so. */
+      static constexpr float POWER_ASKED_ANGLE = 0.0f;
+      static constexpr float POWER_ASKED_WEIGHT = 0.0f;
+      static constexpr float POWER_COMFORT_SHARE = 0.7f;
+      /** Power by angle (shooting technique plan step 4; first guesses):
+       * the share of his power left for a strike square to his body, across
+       * it (inward: the instep swings through) and away from it (outward:
+       * the outside of the foot), and straight behind him. Only read
+       * through power asked. */
+      static constexpr float POWER_INWARD_SQUARE = 0.8f;
+      static constexpr float POWER_OUTWARD_SQUARE = 0.6f;
+      static constexpr float POWER_BEHIND = 0.3f;
       // The conditions' levels (both jobs).
       static constexpr float INCOMING_PACE = MEDIUM;
       static constexpr float OWN_SPEED = MEDIUM;
@@ -1129,6 +1197,11 @@ struct MatchTuning final
       /** A clean strike's jitter: radians, and a share of the pace. */
       static constexpr float ANGLE_JITTER = 0.05f;
       static constexpr float WEIGHT_JITTER = 0.04f;
+      /** The share of the angle jitter that grows with the angle job's
+       * difficulty (shooting technique plan step 3): the jitter is
+       * ANGLE_JITTER x (1 - share + share x difficulty). 0: all of it, at
+       * any difficulty. */
+      static constexpr float JITTER_DIFFICULTY_SHARE = 0.0f;
       /** The share of an angle miss and jitter that goes into the
        * elevation (0: along the ground), and of those the share up. */
       static constexpr float VERTICAL_SHARE = 0.0f;
@@ -1207,14 +1280,22 @@ struct MatchTuning final
       static constexpr float ELEVATION_JITTER = 0.0f;
     };
 
-    /** Shots (step 3c). Skill: Shooting. The jitter starts at the old
-     * spread's size: about 0.27 rad sideways (3.45 + 2.4 x (1 - Shooting)
-     * m at 16 m), cut by Shooting as much as a pass by Passing (0.9; was
-     * 0.41, as gently as the old spread), with 0.6 of it vertical. On top, failures grow with the conditions: usually skied,
-     * a failed weight scuffed. */
+    /** Shots (step 3c; shooting technique plan step 3, 2026-10-24: first
+     * guesses). Skill: Shooting, cutting the errors as a pass's by Passing
+     * (0.9). Power costs precision: the power asked (pace against his shot
+     * power, nothing up to 70% of it, steeply beyond) adds to the angle job
+     * and the weight job, in place of the pace change against a fixed
+     * 40 m/s. The jitter grows with the angle job's difficulty from a
+     * small floor (15%), so an easy strike is tight and the spread comes
+     * from power, pressure and the rest; 0.375 of it vertical. On top,
+     * failures grow with the conditions: usually skied, a failed weight
+     * scuffed. */
     struct Shot : Profile
     {
-      static constexpr float PACE_CHANGE = 0.6f;
+      static constexpr float PACE_CHANGE = 0.0f;
+      static constexpr float POWER_ASKED_ANGLE = 0.6f;
+      static constexpr float POWER_ASKED_WEIGHT = 0.6f;
+      static constexpr float POWER_COMFORT_SHARE = 0.7f;
       static constexpr float REFERENCE_SPEED = 40.0f;
       static constexpr float TURN_ANGLE = 0.6f;
       static constexpr float INCOMING_PACE = HIGH;
@@ -1231,7 +1312,8 @@ struct MatchTuning final
       static constexpr float WEIGHT_MISS_BASE = 0.1f;
       static constexpr float WEIGHT_MISS_RANGE = 0.3f;
       static constexpr float HEAVY_SHARE = 0.3f;
-      static constexpr float ANGLE_JITTER = 0.586f;
+      static constexpr float ANGLE_JITTER = 0.5f;
+      static constexpr float JITTER_DIFFICULTY_SHARE = 0.85f;
       static constexpr float WEIGHT_JITTER = 0.05f;
       static constexpr float VERTICAL_SHARE = 0.375f;
       static constexpr float UP_SHARE = 0.7f;
@@ -1243,13 +1325,51 @@ struct MatchTuning final
     /** Headers (step 3c): shots, clearances and knock-downs. Skill:
      * Shooting 70%, Physicality 30%. A header is off the ground and off
      * no foot by nature; the ball comes in fast. The old header shot had
-     * the shot's spread. */
+     * the shot's spread, and keeps it: the shot's power cost and
+     * difficulty-driven jitter (2026-10-24) are the foot's. */
     struct Header final : Shot
     {
       static constexpr float PACE_CHANGE = 0.4f;
+      static constexpr float POWER_ASKED_ANGLE = 0.0f;
+      static constexpr float POWER_ASKED_WEIGHT = 0.0f;
+      static constexpr float ANGLE_JITTER = 0.586f;
+      static constexpr float JITTER_DIFFICULTY_SHARE = 0.0f;
       static constexpr float REFERENCE_SPEED = 25.0f;
       static constexpr float WEAKER_FOOT = 0.0f;
       static constexpr float OFF_GROUND = 0.0f;
+    };
+
+    /** Shot types (shooting technique plan step 5, 2026-10-24; first
+     * guesses, untuned), each read as the driven shot (Shot) but for
+     * these. Skill: Shooting. Power asked reads each against its part of
+     * the foot's share of his power (Shooting::*_FOOT_SHARE). */
+    /** Side-footed: a tighter line (the inside of the foot). */
+    struct PlacedShot final : Shot
+    {
+      static constexpr float ANGLE_JITTER = 0.35f;
+      static constexpr float UP_SHARE = 0.6f;
+    };
+    /** Bent with the instep's wrap: a little wider than driven. */
+    struct CurledShot final : Shot
+    {
+      static constexpr float ANGLE_JITTER = 0.55f;
+    };
+    /** Stabbed under the ball: its weight and steepness the hardest to
+     * judge (as a chip pass's against a lofted one), with its own
+     * elevation error. */
+    struct ChipShot final : Shot
+    {
+      static constexpr float WEIGHT_MISS_BASE = 0.15f;
+      static constexpr float WEIGHT_MISS_RANGE = 0.4f;
+      static constexpr float WEIGHT_JITTER = 0.08f;
+      static constexpr float UP_SHARE = 0.5f;
+      static constexpr float ELEVATION_JITTER = 0.04f;
+    };
+    /** The toe: little control of the line or the pace. */
+    struct ToePoke final : Shot
+    {
+      static constexpr float ANGLE_JITTER = 0.8f;
+      static constexpr float WEIGHT_JITTER = 0.1f;
     };
 
     /** Clearances (step 3c): precision barely matters, height and distance

@@ -200,7 +200,8 @@ float MatchEngine::shotSpread(const MatchPlayer& shooter, bool header,
 MatchEngine::ShotStrike MatchEngine::strikeShotBody(const MatchPlayer& shooter,
                                                     float aimY, float aimZ,
                                                     float spread, bool header,
-                                                    float powerScale)
+                                                    float powerScale,
+                                                    std::optional<ShotTechnique> technique)
 {
   switch (bodyOf(shooter.isHomeTeam))
   {
@@ -208,7 +209,7 @@ MatchEngine::ShotStrike MatchEngine::strikeShotBody(const MatchPlayer& shooter,
       break;
     case BodyId::BINTURONG:
       return strikeShotBodyBinturong(shooter, aimY, aimZ, spread, header,
-                                     powerScale);
+                                     powerScale, technique);
   }
   return strikeShotBodyAardvark(shooter, aimY, aimZ, spread, header,
                                 powerScale);

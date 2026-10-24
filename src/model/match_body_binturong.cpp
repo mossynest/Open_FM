@@ -2291,6 +2291,11 @@ ContactProfile strikeContactProfile(const StrikeKnobs& strikeKnobs,
   profile.approach = weights(K::APPROACH_ANGLE, K::APPROACH_WEIGHT);
   profile.spinAsked = weights(K::SPIN_ASKED_ANGLE, K::SPIN_ASKED_WEIGHT);
   profile.spinAskedSpin = knob(K::SPIN_ASKED_SPIN);
+  profile.powerAsked = weights(K::POWER_ASKED_ANGLE, K::POWER_ASKED_WEIGHT);
+  profile.powerComfortShare = knob(K::POWER_COMFORT_SHARE);
+  profile.powerInwardSquare = knob(K::POWER_INWARD_SQUARE);
+  profile.powerOutwardSquare = knob(K::POWER_OUTWARD_SQUARE);
+  profile.powerBehind = knob(K::POWER_BEHIND);
   profile.referenceSpeed = knob(K::REFERENCE_SPEED);
   profile.pressureRadius = knob(K::PRESSURE_RADIUS);
   // Where in his reach he meets it is measured as for the touch.
@@ -2312,6 +2317,7 @@ ContactProfile strikeContactProfile(const StrikeKnobs& strikeKnobs,
   profile.underTurnShare = knob(K::UNDER_TURN_SHARE);
   profile.heavyShare = knob(K::HEAVY_SHARE);
   profile.angleJitter = knob(K::ANGLE_JITTER);
+  profile.jitterDifficultyShare = knob(K::JITTER_DIFFICULTY_SHARE);
   profile.weightJitter = knob(K::WEIGHT_JITTER);
   profile.verticalShare = knob(K::VERTICAL_SHARE);
   profile.upShare = knob(K::UP_SHARE);
@@ -2371,11 +2377,20 @@ ContactResult MatchEngine::contactBinturong(const MatchPlayer& player,
   // Without the brain's read of the pressure, the body reads it.
   const float pressure = request.pressure.value_or(contactPressure(
       nearestOpponentDistance(player), profile.pressureRadius));
+  // A strike asks for some of his power for the kind, less what turning a
+  // moving ball costs him (a touch: none; a throw: its own limit).
+  const float powerCapacity =
+      !strike                        ? 0.0f
+      : request.powerCapacity > 0.0f ? request.powerCapacity
+      : request.strike == StrikeKind::THROW
+          ? strikePowerBinturong(player, request.strike)
+          : incomingPowerBudgetBinturong(
+                strikePowerBinturong(player, request.strike), request.aim);
   ContactResult result;
   result.contact =
       assessContactBinturong(player, profile, request.aim, request.speed,
                              request.lift, moment, request.surprise, pressure,
-                             request.spin, request.spinCapacity);
+                             request.spin, request.spinCapacity, powerCapacity);
   // A touch on receiving the ball is his First Touch; a touch on his own
   // ball, dribbling it, is his Dribbling.
   result.skill = strike ? strikeSkillBinturong(player, request.strike)
@@ -2468,6 +2483,10 @@ float MatchEngine::strikeSkillBinturong(const MatchPlayer& striker,
   switch (kind)
   {
     case StrikeKind::SHOT:
+    case StrikeKind::PLACED_SHOT:
+    case StrikeKind::CURLED_SHOT:
+    case StrikeKind::CHIP_SHOT:
+    case StrikeKind::TOE_POKE:
       return striker.shooting;
     case StrikeKind::HEADER:
       // Heading well is as much about strength and timing as finishing.
@@ -2531,10 +2550,42 @@ MatchEngine::Kick MatchEngine::strikeContactBinturong(
   return kick;
 }
 
+float MatchEngine::strikePowerBinturong(const MatchPlayer& striker,
+                                        StrikeKind kind)
+{
+  using Sh = MatchTuning::Shooting;
+  switch (kind)
+  {
+    case StrikeKind::SHOT:
+    case StrikeKind::HEADER:
+      return shotPowerBinturong(striker);
+    // A shot type: the share of his shot power its part of the foot uses.
+    case StrikeKind::PLACED_SHOT:
+      return shotPowerBinturong(striker) * Sh::PLACED_FOOT_SHARE;
+    case StrikeKind::CURLED_SHOT:
+      return shotPowerBinturong(striker) * Sh::CURLED_FOOT_SHARE;
+    case StrikeKind::CHIP_SHOT:
+      return shotPowerBinturong(striker) * Sh::CHIP_FOOT_SHARE;
+    case StrikeKind::TOE_POKE:
+      return shotPowerBinturong(striker) * Sh::TOE_FOOT_SHARE;
+    case StrikeKind::THROW:
+      return MatchTuning::Passing::MAX_GROUND_SPEED;
+    case StrikeKind::GROUND_PASS:
+    case StrikeKind::LOFTED_PASS:
+    case StrikeKind::CROSS:
+    case StrikeKind::CLEARANCE:
+    case StrikeKind::DRIVEN_PASS:
+    case StrikeKind::CHIP:
+      break;
+  }
+  return kickPowerBinturong(striker);
+}
+
 ContactAssessment MatchEngine::assessContactBinturong(
     const MatchPlayer& player, const ContactProfile& profile, Vector2F aim,
     float intendedSpeed, float intendedLift, const TouchMoment& moment,
-    float surprise, float pressure, BallSpin spin, float spinCapacity) const
+    float surprise, float pressure, BallSpin spin, float spinCapacity,
+    float powerCapacity) const
 {
   ContactSituation situation;
   situation.facing = normalized(
@@ -2557,6 +2608,7 @@ ContactAssessment MatchEngine::assessContactBinturong(
   situation.pressure = pressure;
   situation.intendedSpin = spin;
   situation.spinCapacity = spinCapacity;
+  situation.powerCapacity = powerCapacity;
   return assessContact(profile, situation);
 }
 
@@ -2795,6 +2847,21 @@ ContactAssessment assessContact(const ContactProfile& profile,
       // The spin he asks for against the most he can put on.
       {"the spin he asks for", TermSource::ATTRIBUTE, spinShare,
        profile.spinAsked.angle, profile.spinAsked.weight},
+      // The pace he asks for (in three dimensions) against his power, less
+      // the further the strike is off the way his body faces.
+      {"how much of his power", TermSource::ATTRIBUTE,
+       powerAskedValue(
+           intendedSpeed,
+           situation.powerCapacity *
+               powerByAngleShare(
+                   std::acos(std::clamp(aim.x * facing.x + aim.y * facing.y,
+                                        -1.0f, 1.0f)) *
+                       180.0f / std::numbers::pi_v<float>,
+                   outward ? profile.powerOutwardSquare
+                           : profile.powerInwardSquare,
+                   profile.powerBehind),
+           profile.powerComfortShare),
+       profile.powerAsked.angle, profile.powerAsked.weight},
   }};
   // The conditions weigh on the turn in steepness, and on the spin, as on
   // the turn seen from above; the spin asked on the spin by its own weight.
@@ -2849,6 +2916,13 @@ ContactOutcome MatchEngine::carryOutContactBinturong(
                  (1.0f - player.derivedStat(DerivedStat::TECHNIQUE));
   const float execution = fatigue * weakerFoot;
   const float scale = (1.0f - skill * profile.skillReduction) * execution;
+  // A clean contact's angle jitter: the profile's share of it grows with the
+  // angle job's difficulty (an easy strike is tight), the rest is there at
+  // any difficulty.
+  const float angleJitter =
+      profile.angleJitter *
+      (1.0f - profile.jitterDifficultyShare +
+       profile.jitterDifficultyShare * contact.angleDifficulty);
   ContactOutcome outcome;
   outcome.angleFailChance = clamp01(
       (profile.angleFailBase + contact.angleDifficulty * profile.angleFailRange) *
@@ -2895,7 +2969,7 @@ ContactOutcome MatchEngine::carryOutContactBinturong(
   const Job angleJob = carryOut(
       outcome.angleFailChance,
       profile.angleMissBase + contact.angleDifficulty * profile.angleMissRange,
-      profile.underTurnShare, profile.angleJitter * scale);
+      profile.underTurnShare, angleJitter * scale);
   const Job weightJob = carryOut(
       outcome.weightFailChance,
       profile.weightMissBase +
@@ -2958,7 +3032,7 @@ ContactOutcome MatchEngine::carryOutContactBinturong(
     const float upRoll = randomFloat(0.0f, 1.0f);
     const float jitter = (randomFloat(0.0f, 1.0f) + randomFloat(0.0f, 1.0f) +
                           randomFloat(0.0f, 1.0f) - 1.5f) *
-                         2.0f * profile.angleJitter * scale;
+                         2.0f * angleJitter * scale;
     const float share = profile.verticalShare;
     sideways = 1.0f - share;
     elevation += share * jitter;
@@ -3124,13 +3198,37 @@ TouchResult MatchEngine::firstTouchBinturong(const MatchPlayer& player,
   return result;
 }
 
+float MatchEngine::kickPowerFromSkillBinturong(float skill)
+{
+  // Skill 1 (0.01) to 99 (0.99) spans the range; a home edge past 99 adds
+  // nothing.
+  using P = MatchTuning::Passing;
+  const float share = std::clamp((skill - 0.01f) / 0.98f, 0.0f, 1.0f);
+  return P::MIN_KICK_SPEED + (P::MAX_KICK_SPEED - P::MIN_KICK_SPEED) * share;
+}
+
 float MatchEngine::kickPowerBinturong(const MatchPlayer& player)
 {
-  // Passing 1 (0.01) to 99 (0.99) spans the range; a home edge past 99
-  // adds nothing.
+  return kickPowerFromSkillBinturong(player.passing);
+}
+
+float MatchEngine::shotPowerBinturong(const MatchPlayer& player)
+{
+  return kickPowerFromSkillBinturong(player.shooting);
+}
+
+float MatchEngine::incomingPowerBudgetBinturong(float power, Vector2F aim) const
+{
+  // The ball as it meets him (over the ground, m/s): what of its pace runs
+  // across the line he strikes costs his foot power to turn; what runs
+  // along it helps a little (coming at him) or takes a little (running on).
   using P = MatchTuning::Passing;
-  const float share = std::clamp((player.passing - 0.01f) / 0.98f, 0.0f, 1.0f);
-  return P::MIN_KICK_SPEED + (P::MAX_KICK_SPEED - P::MIN_KICK_SPEED) * share;
+  const float along = ball.velocity.x * aim.x + ball.velocity.y * aim.y;
+  const float across = std::abs(ball.velocity.x * aim.y - ball.velocity.y * aim.x);
+  const float held = P::INCOMING_ACROSS_SHARE * across;
+  const float budget = std::sqrt(std::max(power * power - held * held, 0.0f)) -
+                       P::INCOMING_ALONG_SHARE * along;
+  return std::max(budget, P::INCOMING_BUDGET_FLOOR * power);
 }
 
 std::pair<float, float> MatchEngine::fullPowerLoftBinturong(
@@ -3262,12 +3360,16 @@ MatchEngine::LoftFlight MatchEngine::flyLoftBinturong(
 
 std::pair<float, float> MatchEngine::chipLaunchBinturong(
     float distanceMetres, float maxSpeed, float startHeight,
-    float arrivalHeight, BallSpin spin) const
+    float arrivalHeight, BallSpin spin, float clearMetres,
+    float clearHeight) const
 {
   using P = MatchTuning::Passing;
   constexpr float DEGREE = std::numbers::pi_v<float> / 180.0f;
   const float probe =
-      std::min(P::CHIP_CLEAR_DISTANCE_METRES, 0.5f * distanceMetres);
+      clearMetres >= 0.0f
+          ? clearMetres
+          : std::min(P::CHIP_CLEAR_DISTANCE_METRES, 0.5f * distanceMetres);
+  const float clearAt = clearHeight >= 0.0f ? clearHeight : P::CHIP_CLEAR_HEIGHT_METRES;
   const auto fly = [&](float speed, float angle)
   {
     return flyLoftBinturong(speed * std::cos(angle), speed * std::sin(angle),
@@ -3288,7 +3390,7 @@ std::pair<float, float> MatchEngine::chipLaunchBinturong(
   };
   const auto clears = [&](float angle)
   {
-    return fly(speedFor(angle), angle).probeHeight >= P::CHIP_CLEAR_HEIGHT_METRES;
+    return fly(speedFor(angle), angle).probeHeight >= clearAt;
   };
   // The flattest angle that clears (bisection; steeper clears higher).
   float flat = P::CHIP_MIN_ANGLE_DEGREES * DEGREE;
@@ -3324,13 +3426,27 @@ Vector2F MatchEngine::curlAimBinturong(Vector2F target, float curl) const
   return {ball.position.x + turned.x, ball.position.y + turned.y};
 }
 
-float MatchEngine::spinCapacityBinturong(const MatchPlayer& player)
+namespace
 {
-  // Passing 1 (0.01) to 99 (0.99) spans the range, as kick power does.
+/** Spin capacity (rad/s) for a skill of 0-1: skill 1 (0.01) to 99 (0.99)
+ * spans the range, as kick power does. */
+float spinCapacityFromSkill(float skill)
+{
   using P = MatchTuning::Passing;
-  const float share = std::clamp((player.passing - 0.01f) / 0.98f, 0.0f, 1.0f);
+  const float share = std::clamp((skill - 0.01f) / 0.98f, 0.0f, 1.0f);
   return (P::MIN_SPIN_REVS + (P::MAX_SPIN_REVS - P::MIN_SPIN_REVS) * share) *
          2.0f * std::numbers::pi_v<float>;
+}
+}  // namespace
+
+float MatchEngine::spinCapacityBinturong(const MatchPlayer& player)
+{
+  return spinCapacityFromSkill(player.passing);
+}
+
+float MatchEngine::shotSpinCapacityBinturong(const MatchPlayer& player)
+{
+  return spinCapacityFromSkill(player.shooting);
 }
 
 MatchEngine::Kick MatchEngine::kickPassBinturong(const MatchPlayer& passer,
@@ -3390,8 +3506,12 @@ MatchEngine::Kick MatchEngine::kickPassBinturong(const MatchPlayer& passer,
     return put;
   };
   // His kick power: the fastest he can send it, along the ground or through
-  // the air. A pass that needs more is struck at his limit and falls short.
-  const float power = kickPowerBinturong(passer);
+  // the air, less what turning a moving ball costs him. A pass that needs
+  // more is struck at his limit and falls short.
+  const float power =
+      thrown ? kickPowerBinturong(passer)
+             : incomingPowerBudgetBinturong(kickPowerBinturong(passer),
+                                            metricDirection(ball.position, target));
   const float startMetres = ball.z * MatchTuning::Units::BALL_Z_METRES;
   // Struck at, and aimed off for its curl; it curls by accident as a
   // ground pass does, or (`moreCurl`) as a lofted one.
@@ -3511,11 +3631,11 @@ float MatchEngine::shotSpreadBinturong(const MatchPlayer& /*shooter*/,
 {
   // Not metres for this body: a multiplier on the shot contact's angle
   // error (its jitter and fixed miss). The contact itself reads Shooting,
-  // pressure and the rest; distance is geometry. A penalty is a dead ball
-  // struck with all the time he wants; otherwise the match's calibration
-  // scales it; a free kick is placed with care.
-  float precision = penalty ? MatchTuning::Shooting::PENALTY_ERROR_SCALE
-                            : 1.0f / (finishingPrecision * levelPrecision);
+  // power, pressure and the rest; distance is geometry. A penalty is a dead
+  // ball struck with all the time he wants; a free kick is placed with care.
+  // (No match calibration: shooting technique plan step 3.)
+  float precision =
+      penalty ? MatchTuning::Shooting::PENALTY_ERROR_SCALE : 1.0f;
   if (freeKick) precision *= MatchTuning::SetPiece::FREE_KICK_ERROR_SCALE;
   return precision;
 }
@@ -3535,8 +3655,11 @@ struct GoalLineCrossing
 GoalLineCrossing predictGoalLineCrossing(const MatchEngine& engine,
                                          Vector2F origin, Vector2F heading,
                                          float along, float up,
-                                         float startHeight, float goalX)
+                                         float startHeight, float goalX,
+                                         BallSpin spin = {})
 {
+  // Flown with its spin: sidespin turns its heading as it goes (a curled
+  // shot), topspin and backspin bring it down or hold it up.
   using P = MatchTuning::Pitch;
   constexpr float DT = MatchTuning::Timing::FIXED_STEP_SECONDS /
                        static_cast<float>(MatchTuning::Timing::BALL_SUBSTEPS);
@@ -3549,24 +3672,34 @@ GoalLineCrossing predictGoalLineCrossing(const MatchEngine& engine,
     crossing.sideways = heading.y >= 0.0f ? P::WIDTH_METRES : -P::WIDTH_METRES;
     return crossing;
   }
-  const float metres = lineMetres / heading.x;
-  crossing.sideways = sidewaysAtOrigin + heading.y * metres;
-  FlightState flight{along, up, startHeight, false};
-  float travelled = 0.0f;
+  // A ball that stops short: where its line meets the goal line, on the
+  // ground there.
+  crossing.sideways = sidewaysAtOrigin + heading.y * lineMetres / heading.x;
+  FlightState flight{along, up, startHeight, false, spin};
+  float x = 0.0f;
+  float y = 0.0f;
+  Vector2F way = heading;
   for (float time = 0.0f; time < MatchTuning::Ball::MAX_FLIGHT_SECONDS &&
                           flight.horizontalSpeed > 0.0f;
        time += DT)
   {
     const float previousHeight = flight.height;
     const float step = engine.stepFlight(flight, DT);
-    if (travelled + step >= metres)
+    const float nextX = x + way.x * step;
+    const float nextY = y + way.y * step;
+    if ((nextX - lineMetres) * (x - lineMetres) <= 0.0f && nextX != x)
     {
-      const float share = (metres - travelled) / std::max(step, EPSILON);
+      const float share = (lineMetres - x) / (nextX - x);
+      crossing.sideways = sidewaysAtOrigin + y + (nextY - y) * share;
       crossing.height =
           previousHeight + (flight.height - previousHeight) * share;
       return crossing;
     }
-    travelled += step;
+    x = nextX;
+    y = nextY;
+    const float turn = flight.turnRate * DT;
+    way = {way.x * std::cos(turn) - way.y * std::sin(turn),
+           way.x * std::sin(turn) + way.y * std::cos(turn)};
   }
   return crossing;
 }
@@ -3574,41 +3707,161 @@ GoalLineCrossing predictGoalLineCrossing(const MatchEngine& engine,
 
 MatchEngine::ShotStrike MatchEngine::strikeShotBodyBinturong(
     const MatchPlayer& shooter, float aimY, float aimZ, float spread,
-    bool header, float powerScale)
+    bool header, float powerScale, std::optional<ShotTechnique> technique)
 {
   // The shot is a contact (contact plan step 3c): the spot he picked, at
   // the pace he means, launched to cross the line at the height he aimed
-  // for; then struck with the shot (or header) profile, its angle error
-  // scaled by `spread` (shotSpreadBinturong: a dead ball, play mode's
-  // power). Where it crosses the line is where that strike's flight takes
-  // it, and the ball is launched exactly so.
+  // for; then struck with the profile of how he strikes it (a header's, or
+  // a foot shot's type), its angle error scaled by `spread`
+  // (shotSpreadBinturong: a dead ball, play mode's power). Where it crosses
+  // the line is where that strike's flight takes it, spin and all, and the
+  // ball is launched exactly so.
   using Sh = MatchTuning::Shooting;
-  const StrikeKind kind = header ? StrikeKind::HEADER : StrikeKind::SHOT;
+  constexpr float REV = 2.0f * std::numbers::pi_v<float>;
+  const ShotTechnique how = technique.value_or(ShotTechnique::DRIVEN);
+  const StrikeKind kind = header                           ? StrikeKind::HEADER
+                          : how == ShotTechnique::PLACED   ? StrikeKind::PLACED_SHOT
+                          : how == ShotTechnique::CURLED   ? StrikeKind::CURLED_SHOT
+                          : how == ShotTechnique::CHIP     ? StrikeKind::CHIP_SHOT
+                          : how == ShotTechnique::TOE_POKE ? StrikeKind::TOE_POKE
+                                                           : StrikeKind::SHOT;
   const float goalX = shooter.isHomeTeam ? 1.0f : 0.0f;
   const Vector2F origin = ball.position;
   const Vector2F aimPoint{goalX, MatchTuning::Pitch::CENTRE +
                                      aimY / MatchTuning::Pitch::WIDTH_METRES};
-  const float speed =
-      (Sh::BASE_BALL_SPEED + shooter.shooting * Sh::SHOOTING_SPEED_BONUS +
-       shooter.physicality * Sh::POWER_SPEED_BONUS) *
-      MatchTuning::Strike::Shot::MEAN_SPEED_SHARE *
-      (header ? MatchTuning::Aerial::HEADER_SPEED_SCALE : 1.0f) * powerScale;
-  const float startHeight = header ? ball.z * MatchTuning::Units::BALL_Z_METRES
-                                   : Sh::RELEASE_HEIGHT_METRES;
-  const float up = loftVerticalSpeed(distance(origin, aimPoint), speed,
-                                     startHeight, aimZ);
-  const Kick kick =
-      strikeContactBinturong(shooter, kind, aimPoint, speed, up, spread);
+  // From the height the ball is at, as it is released (releaseFromBinturong).
+  const float startHeight = ball.z * MatchTuning::Units::BALL_Z_METRES;
+  const float metres = distance(origin, aimPoint);
+  // The spin he means, no more than he can put on: a little topspin on a
+  // driven shot, backspin on a chip, sidespin on a curled one, bent in
+  // towards the middle of the goal (from his right of it to his left, and
+  // the other way). A header has none.
+  BallSpin meant{};
+  const float spinCapacity = header ? 0.0f : shotSpinCapacityBinturong(shooter);
+  if (!header)
+  {
+    switch (how)
+    {
+      case ShotTechnique::DRIVEN:
+        meant = {0.0f, Sh::DRIVEN_TOPSPIN_REVS * REV};
+        break;
+      case ShotTechnique::CURLED:
+        meant = {(aimY >= 0.0f ? -1.0f : 1.0f) * Sh::CURLED_SIDESPIN_REVS * REV, 0.0f};
+        break;
+      case ShotTechnique::CHIP:
+        meant = {0.0f, -Sh::CHIP_BACKSPIN_REVS * REV};
+        break;
+      case ShotTechnique::PLACED:
+      case ShotTechnique::TOE_POKE:
+        break;
+    }
+    if (const float asked = std::hypot(meant.side, meant.top); asked > spinCapacity)
+    {
+      const float share = spinCapacity / asked;
+      meant = {meant.side * share, meant.top * share};
+    }
+  }
+  // A header keeps the old shot's pace over the ground, scaled, with its
+  // lift on top.
+  float speed = (Sh::BASE_BALL_SPEED + shooter.shooting * Sh::SHOOTING_SPEED_BONUS +
+                 shooter.physicality * Sh::POWER_SPEED_BONUS) *
+                MatchTuning::Strike::Shot::MEAN_SPEED_SHARE *
+                MatchTuning::Aerial::HEADER_SPEED_SCALE * powerScale;
+  float up = loftVerticalSpeed(metres, speed, startHeight, aimZ);
+  if (!header)
+  {
+    // His power at this moment (less what turning a moving ball costs him)
+    // and the share of it his part of the foot can use.
+    const float budget = incomingPowerBudgetBinturong(
+        shotPowerBinturong(shooter), metricDirection(origin, aimPoint));
+    const float footShare =
+        how == ShotTechnique::PLACED     ? Sh::PLACED_FOOT_SHARE
+        : how == ShotTechnique::CURLED   ? Sh::CURLED_FOOT_SHARE
+        : how == ShotTechnique::CHIP     ? Sh::CHIP_FOOT_SHARE
+        : how == ShotTechnique::TOE_POKE ? Sh::TOE_FOOT_SHARE
+                                         : 1.0f;
+    if (how == ShotTechnique::CHIP)
+    {
+      // Over the keeper where he stands (his reach, and a margin), coming
+      // down through the height aimed for on the line; else as a chip pass
+      // clears someone close. No faster than the stab allows: a long one
+      // falls short.
+      float clearMetres = -1.0f;
+      float clearHeight = -1.0f;
+      const Vector2F toGoal = metricDirection(origin, aimPoint);
+      for (const MatchPlayer& keeper : players)
+      {
+        if (!active(keeper) || !keeper.isGoalkeeper ||
+            keeper.isHomeTeam == shooter.isHomeTeam)
+          continue;
+        const Vector2F gap = toMetres(
+            {keeper.position.x - origin.x, keeper.position.y - origin.y});
+        const float out = gap.x * toGoal.x + gap.y * toGoal.y;
+        if (out > 1.0f && out < metres - 0.5f)
+        {
+          clearMetres = out;
+          clearHeight = MatchRules::goalkeeperReachMetres(keeper.heightMetres,
+                                                          keeper.goalkeeping) +
+                        Sh::CHIP_KEEPER_MARGIN_METRES;
+        }
+      }
+      std::tie(speed, up) =
+          chipLaunchBinturong(metres, budget * footShare, startHeight, aimZ,
+                              meant, clearMetres, clearHeight);
+    }
+    else
+    {
+      // A share of his shot power (the type's, or play mode's or a drill's
+      // as a scale on the driven one's), no more than the foot allows, as
+      // the ball's whole launch speed: what goes into the lift comes off its
+      // pace over the ground. A few rounds settle the two (the lift is
+      // small against the pace).
+      const float typeShare =
+          how == ShotTechnique::PLACED     ? Sh::PLACED_POWER_SHARE
+          : how == ShotTechnique::CURLED   ? Sh::CURLED_POWER_SHARE
+          : how == ShotTechnique::TOE_POKE ? Sh::TOE_POWER_SHARE
+                                           : Sh::DEFAULT_POWER_SHARE;
+      const float share =
+          powerScale == 1.0f ? typeShare : Sh::DEFAULT_POWER_SHARE * powerScale;
+      const float launch = budget * std::min(footShare, share);
+      speed = launch;
+      for (int round = 0; round < 4; ++round)
+      {
+        up = loftVerticalSpeed(metres, speed, startHeight, aimZ, meant);
+        speed = std::sqrt(std::max(launch * launch - up * up, 0.25f * launch * launch));
+      }
+      up = loftVerticalSpeed(metres, speed, startHeight, aimZ, meant);
+      // Too weak a strike to get there on a shot's line (it would have to
+      // be lobbed): at that pace, the flattest angle that gets there, or the
+      // one that gets furthest (short), as a pass beyond his power.
+      if (std::hypot(speed, up) > launch * 1.01f ||
+          up > launch * std::sin(Sh::MAX_LAUNCH_DEGREES *
+                                 std::numbers::pi_v<float> / 180.0f))
+        std::tie(speed, up) =
+            fullPowerLoftBinturong(metres, launch, startHeight, aimZ, meant);
+    }
+  }
+  // Aimed off for the curl he means, so it bends onto the spot.
+  const Vector2F contactAim =
+      meant.side != 0.0f
+          ? curlAimBinturong(aimPoint,
+                             curlAngle(metres, speed, up, startHeight, meant))
+          : aimPoint;
+  const Kick kick = strikeContactBinturong(shooter, kind, contactAim, speed, up,
+                                           spread, meant, spinCapacity);
   const Vector2F heading = metricDirection(origin, kick.target);
   const GoalLineCrossing crossing =
       predictGoalLineCrossing(*this, origin, heading, kick.speed,
-                              kick.verticalSpeed, startHeight, goalX);
+                              kick.verticalSpeed, startHeight, goalX, kick.spin);
   ShotStrike strike;
   strike.crossingY = crossing.sideways;
   strike.crossingZ = crossing.height;
   strike.speed = kick.speed;
   strike.verticalSpeed = kick.verticalSpeed;
   strike.launchSet = true;
+  strike.spin = kick.spin;
+  // A curled ball leaves along its first heading, not at where it crosses.
+  if (kick.spin.side != 0.0f) strike.launchToward = kick.target;
   return strike;
 }
 
@@ -4188,8 +4441,8 @@ float MatchEngine::clearanceDistanceBinturong(const MatchPlayer& /*defender*/,
 MatchEngine::BallRelease MatchEngine::releaseFromBinturong(const MatchPlayer& kicker,
                                                  ReleaseKind kind) const
 {
-  // Not all of these leave the ball as it was: a shot or clearance starts
-  // at a set height rather than the height it is at.
+  // Not all of these leave the ball as it was: a clearance starts at a set
+  // height rather than the height it is at.
   constexpr float Z_METRES = MatchTuning::Units::BALL_Z_METRES;
   BallRelease from;
   switch (kind)
@@ -4201,11 +4454,6 @@ MatchEngine::BallRelease MatchEngine::releaseFromBinturong(const MatchPlayer& ki
       from.heightMetres = ball.z * Z_METRES;
       break;
     case ReleaseKind::SHOT:
-      // From where the ball is, at the shot's release height.
-      from.position = ball.position;
-      from.heightMetres = MatchTuning::Shooting::RELEASE_HEIGHT_METRES;
-      from.z = from.heightMetres / Z_METRES;
-      break;
     case ReleaseKind::HEADED_SHOT:
       // From where the ball is, at its height.
       from.position = ball.position;
@@ -4661,18 +4909,9 @@ void MatchEngine::shapeMeetForStrikeBinturong(const MatchPlayer& owner)
   using R = MatchTuning::Dribble;
   if (!pendingStrike || !pendingStrike->atMeet || pendingStrike->striker != &owner)
     return;
-  Vector2F target;
-  switch (pendingStrike->kind)
-  {
-    case PendingStrike::Kind::PASS:
-      target = pendingStrike->pass.targetPoint;
-      break;
-    case PendingStrike::Kind::SHOT:
-      target = {owner.isHomeTeam ? 1.0f : 0.0f, MatchTuning::Pitch::CENTRE};
-      break;
-    case PendingStrike::Kind::CLEAR:
-      return;
-  }
+  const std::optional<Vector2F> aimAt = heldStrikeTargetBinturong(owner);
+  if (!aimAt) return;
+  const Vector2F target = *aimAt;
   const Vector2F meet = toMetres(ball.meetPoint);
   const Vector2F approach = unitOf(
       {meet.x - toMetres(owner.position).x, meet.y - toMetres(owner.position).y});
@@ -4711,6 +4950,28 @@ float MatchEngine::opponentArrivalSecondsBinturong(const MatchPlayer& owner,
   return soonest;
 }
 
+std::optional<Vector2F> MatchEngine::heldStrikeTargetBinturong(
+    const MatchPlayer& player) const
+{
+  // A pass: where it is aimed. A shot: the spot he picked on the goal line
+  // (or, without one, the middle of the goal).
+  if (!pendingStrike || pendingStrike->striker != &player) return std::nullopt;
+  switch (pendingStrike->kind)
+  {
+    case PendingStrike::Kind::PASS:
+      return pendingStrike->pass.targetPoint;
+    case PendingStrike::Kind::SHOT:
+      return Vector2F{player.isHomeTeam ? 1.0f : 0.0f,
+                      MatchTuning::Pitch::CENTRE +
+                          (pendingStrike->shotAim ? pendingStrike->shotAim->aimY
+                                                  : 0.0f) /
+                              MatchTuning::Pitch::WIDTH_METRES};
+    case PendingStrike::Kind::CLEAR:
+      break;
+  }
+  return std::nullopt;
+}
+
 std::optional<float> MatchEngine::turnToPassFacingBinturong(
     const MatchPlayer& player) const
 {
@@ -4718,13 +4979,13 @@ std::optional<float> MatchEngine::turnToPassFacingBinturong(
   // will meet it); but with the ball beyond his comfort gap he turns only so
   // far that it stays in front of his dead zone's edge (to send it further
   // round he would have to step round it).
-  if (!pendingStrike || pendingStrike->striker != &player ||
-      pendingStrike->kind != PendingStrike::Kind::PASS)
-    return std::nullopt;
+  if (!pendingStrike || pendingStrike->striker != &player) return std::nullopt;
+  const std::optional<Vector2F> aimAt = heldStrikeTargetBinturong(player);
+  if (!aimAt) return std::nullopt;
   const Vector2F ballAt = toMetres(pendingStrike->firstTime
                                        ? pendingStrike->meetPoint
                                        : ball.position);
-  const Vector2F target = toMetres(pendingStrike->pass.targetPoint);
+  const Vector2F target = toMetres(*aimAt);
   Vector2F line = unitOf({target.x - ballAt.x, target.y - ballAt.y});
   if (line.x == 0.0f && line.y == 0.0f) return std::nullopt;
   const Vector2F at = toMetres(player.position);

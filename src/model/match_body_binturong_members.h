@@ -56,7 +56,11 @@
                                            const TouchMoment& moment,
                                            float surprise,
                                            float pressure, BallSpin spin = {},
-                                           float spinCapacity = 0.0f) const;
+                                           float spinCapacity = 0.0f,
+                                           float powerCapacity = 0.0f) const;
+  /** His power for a kind of strike (m/s): shot power for shots and
+   * headers, the throw's limit, kick power for the rest. */
+  static float strikePowerBinturong(const MatchPlayer& striker, StrikeKind kind);
   /** A strike's contact profile (provisional, contact plan §3). */
   ContactProfile strikeProfileBinturong(StrikeKind kind) const;
   /** Where a strike meets the ball: where it lies, its gap from his centre
@@ -109,6 +113,17 @@
   /** His kick power: the fastest he can strike a pass (m/s), from his
    * Passing (MatchTuning::Passing::MIN_KICK_SPEED to MAX_KICK_SPEED). */
   static float kickPowerBinturong(const MatchPlayer& player);
+  /** His shot power: the fastest he can strike a shot (m/s), the same
+   * range from his Shooting. */
+  static float shotPowerBinturong(const MatchPlayer& player);
+  /** The fastest he can send the ball along `aim` (metric, unit) from his
+   * `power` (m/s), the ball moving as it is now: less for pace across that
+   * line, a little more or less for pace along it
+   * (MatchTuning::Passing::INCOMING_*). A ball at rest: `power`. */
+  float incomingPowerBudgetBinturong(float power, Vector2F aim) const;
+  /** Kick power (m/s) for a skill of 0-1 (Passing for passes, Shooting
+   * for shots). */
+  static float kickPowerFromSkillBinturong(float skill);
   /** The most spin he can put on a pass (rad/s), from his Passing
    * (MatchTuning::Passing::MIN_SPIN_REVS to MAX_SPIN_REVS). */
   static float spinCapacityBinturong(const MatchPlayer& player);
@@ -146,19 +161,27 @@
   /** A chip of `distanceMetres` struck at no more than `maxSpeed` (m/s):
    * (along, up) m/s, the flattest launch between the chip's angles that
    * comes down through `arrivalHeight` there and clears the chip's height
-   * on the way (the steepest, if none does); short at his limit. */
+   * on the way (the steepest, if none does); short at his limit. The
+   * height to clear is `clearHeight` (m) `clearMetres` out; below 0, a
+   * chip pass's (MatchTuning::Passing::CHIP_CLEAR_*). */
   std::pair<float, float> chipLaunchBinturong(float distanceMetres,
                                               float maxSpeed,
                                               float startHeight,
                                               float arrivalHeight,
-                                              BallSpin spin) const;
+                                              BallSpin spin,
+                                              float clearMetres = -1.0f,
+                                              float clearHeight = -1.0f) const;
   float recoverySecondsBinturong(const MatchPlayer& player, Recovery after);
   /** A shot's execution error (metres, one standard deviation). */
   float shotSpreadBinturong(const MatchPlayer& shooter, bool header, bool penalty,
                    bool freeKick, float metres) const;
   /** @param powerScale Play mode's power (1 for the AI). */
   ShotStrike strikeShotBodyBinturong(const MatchPlayer& shooter, float aimY, float aimZ,
-                            float spread, bool header, float powerScale);
+                            float spread, bool header, float powerScale,
+                            std::optional<ShotTechnique> technique);
+  /** The most spin he can put on a shot (rad/s), from his Shooting as a
+   * pass's from his Passing. */
+  static float shotSpinCapacityBinturong(const MatchPlayer& player);
   float clearanceSpeedBinturong(const MatchPlayer& defender);
   float headerClearanceSpeedBinturong(const MatchPlayer& header);
   /** Where a knock-down meant for `aim` really goes. */
@@ -254,6 +277,9 @@
    * asks of its passer, along its line from the ball, turned no further
    * than keeps the ball clear of his dead zone; none without one. */
   std::optional<float> turnToPassFacingBinturong(const MatchPlayer& player) const;
+  /** Where his held strike is aimed (normalised): a pass's target, a
+   * shot's spot on the goal line; none for a clearance or no strike. */
+  std::optional<Vector2F> heldStrikeTargetBinturong(const MatchPlayer& player) const;
   /** Whether a pass held while he turns is to be struck now: turned to it,
    * or out of time. */
   bool turnedToPassBinturong(const MatchPlayer& player) const;
