@@ -239,6 +239,20 @@ void MatchEngine::forcePassTo(PlayerID playerId, Vector2F spot,
   recordCommand(command);
 }
 
+void MatchEngine::forceHeader(PlayerID playerId, ForcedHeaderAim aim,
+                              std::optional<Vector2F> spot,
+                              std::optional<Vector2F> goalAim, bool knownEarly)
+{
+  MatchCommandRecord command;
+  command.type = MatchCommandType::FORCE_HEADER;
+  command.player = playerId;
+  command.headerAim = aim;
+  command.headerKnownEarly = knownEarly;
+  command.target = spot;
+  command.shotAim = goalAim;
+  recordCommand(command);
+}
+
 bool MatchEngine::passHeldFor(PlayerID playerId) const
 {
   return pendingStrike && pendingStrike->kind == PendingStrike::Kind::PASS &&

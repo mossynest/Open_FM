@@ -239,6 +239,21 @@ float MatchEngine::headerClearanceSpeed(const MatchPlayer& header)
   return headerClearanceSpeedAardvark(header);
 }
 
+std::pair<float, float> MatchEngine::headerPace(const MatchPlayer& header,
+                                                HeaderPace purpose,
+                                                Vector2F target, float speed,
+                                                float lift) const
+{
+  switch (bodyOf(header.isHomeTeam))
+  {
+    case BodyId::AARDVARK:
+      break;
+    case BodyId::BINTURONG:
+      return headerPaceBinturong(header, purpose, target, speed, lift);
+  }
+  return headerPaceAardvark(header, purpose, target, speed, lift);
+}
+
 Vector2F MatchEngine::knockDownPoint(const MatchPlayer& header, Vector2F aim)
 {
   switch (bodyOf(header.isHomeTeam))

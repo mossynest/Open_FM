@@ -511,6 +511,10 @@ struct ContactProfile
    * own miss, independent of the line's, which keeps all of its error
    * (verticalShare unused). */
   float elevationJitter = 0.0f;
+  /** The lowest elevation (rad) the error may leave it at: 0, along the
+   * ground (a foot); a header set per contact, as far down as his head
+   * can send it there (headerLimitsBinturong). */
+  float lowestElevation = 0.0f;
   float angleJitter = 0.0f;
   /** The share of the angle jitter that grows with the angle job's
    * difficulty: angleJitter x (1 - share + share x difficulty). */
@@ -735,6 +739,10 @@ struct ContactRequest
   float spinCapacity = 0.0f;
   /** A strike: his power for it (m/s; 0, the body's for the kind). */
   float powerCapacity = 0.0f;
+  /** The least pace (m/s, in three dimensions) it can leave him with that
+   * way (a cushioned header); 0, none. Asking near it is the weight job at
+   * its hardest, and the error can't take it below. */
+  float paceFloor = 0.0f;
 };
 
 /** A contact assessed and carried out, and the skill it was carried out
@@ -806,6 +814,11 @@ struct MatchBall
   /** Where the last contact sent it off from (normalised; for drills and
    * reports, read by nothing in play). */
   Vector2F sentFrom{};
+  /** How high it was there (m; the same: for drills and reports). */
+  float sentHeightMetres = 0.0f;
+  /** The current touch was a cushioned header: he collects it only once it
+   * is down at his feet. */
+  bool touchHeaded = false;
   /** The current touch: what was tried, and how far from his centre (m)
    * he met the ball. */
   TouchIntent::Kind touchKind = TouchIntent::Kind::SET;
@@ -985,7 +998,29 @@ enum class MatchCommandType : std::uint8_t
   KEEP_BALL,
   /** Drills: the player passes to a team-mate as soon as he has the ball
    * and can act. */
-  FORCE_PASS
+  FORCE_PASS,
+  /** Drills: what the player does with the next header he wins. */
+  FORCE_HEADER
+};
+
+/** What a drill's forced header does (forceHeader). */
+enum class ForcedHeaderAim : std::uint8_t
+{
+  /** Headed on to a spot on the ground (a knock-down to it). */
+  SPOT,
+  /** Headed at a spot in the goal (a headed shot). */
+  GOAL,
+  /** Cushioned down and kept. */
+  KEEP,
+};
+
+/** Which part of his head meets a high ball (heading technique plan step
+ * 4): the forehead, or the top of the head (above the forehead's reach, or
+ * a ball passing over him from beside or behind). */
+enum class HeadPart : std::uint8_t
+{
+  FOREHEAD,
+  TOP,
 };
 
 /** How a drill's forced pass is played: as the AI would (ground or lofted
@@ -1091,6 +1126,12 @@ struct MatchCommandRecord
   /** FORCE_SHOT: struck first time off a pass to him, and how (forceShot). */
   bool shotFirstTime = false;
   std::optional<ShotTechnique> shotTechnique;
+  /** FORCE_HEADER: what he does with it; to the spot `target` (SPOT) or
+   * at the spot in the goal `shotAim` (GOAL). */
+  ForcedHeaderAim headerAim = ForcedHeaderAim::SPOT;
+  /** FORCE_HEADER: he knows the header before the ball comes (and turns
+   * his body to it), or only as he meets it. */
+  bool headerKnownEarly = true;
   /** KEEP_BALL: how hard he carries it (older recordings: flat out). */
   float keepUrgency = 1.0f;
 };
@@ -1646,6 +1687,35 @@ class MatchEngine
   /** First-touch timing: how often a player who let the ball come closer
    * then lost it out of his reach untouched (should stay 0). */
   std::uint32_t getFirstTouchWaitsMissed() const { return firstTouchWaitsMissed; }
+  /** Restart line-ups (a Binturong body's taker), counted as he kicks. */
+  struct RestartLineUpStats
+  {
+    /** Kicked, by the restart (MatchState's index). */
+    std::array<std::uint32_t, 7> byRestart{};
+    std::uint32_t kicked = 0;
+    /** Kicked turned to his line, or once out of time to turn. */
+    std::uint32_t turned = 0;
+    std::uint32_t outOfTime = 0;
+    /** Kicked with the ball outside his comfort gap, or in his dead zone
+     * (both should stay 0). */
+    std::uint32_t outsideComfort = 0;
+    std::uint32_t inDeadZone = 0;
+    /** How long the line-ups took (s), and how far the ball was from his
+     * centre as he kicked (m). */
+    float secondsSum = 0.0f;
+    float secondsMax = 0.0f;
+    float gapSum = 0.0f;
+    float gapMax = 0.0f;
+  };
+  const RestartLineUpStats& getRestartLineUpStats() const
+  {
+    return restartLineUpStats;
+  }
+  /** How long the taker has been lining the ball up (0: nobody is). */
+  float getRestartLineUpSeconds() const
+  {
+    return restartLineUp ? restartLineUp->seconds : 0.0f;
+  }
   /** Dribble touches taken so far, heavy ones included (for the drills),
    * and the sum of how far from his centre he met the ball for the loose
    * ones (m). */
@@ -1906,6 +1976,20 @@ class MatchEngine
    * `style` can force it along the ground or lofted. Logged and replayed. */
   void forcePass(PlayerID playerId, PlayerID receiverId,
                  ForcedPassStyle style);
+  /** Drills: the next header the player wins goes to `spot` (normalised;
+   * SPOT), at `goalAim` in the goal (metres across from the middle and up;
+   * GOAL), or is cushioned and kept (KEEP), instead of what the brain
+   * would choose. Logged and replayed. */
+  void forceHeader(PlayerID playerId, ForcedHeaderAim aim,
+                   std::optional<Vector2F> spot = std::nullopt,
+                   std::optional<Vector2F> goalAim = std::nullopt,
+                   bool knownEarly = true);
+  /** The part of his head the last unchallenged header was met with (met in
+   * the sweep; none for a duel's header). For drills. */
+  [[nodiscard]] std::optional<HeadPart> getLastHeadPart() const
+  {
+    return lastHeadPart;
+  }
   /** Drills: the player passes to `spot` (normalised), with nobody there,
    * as soon as he has the ball and can act: weighted as for a man standing
    * on it, and a lofted pass is aimed to land on it; `spin` is the spin he
@@ -1994,6 +2078,16 @@ class MatchEngine
   bool forcedShotFirstTime = false;
   /** The forced shot's technique (forceShot), used by its strike. */
   std::optional<ShotTechnique> forcedShotTechnique;
+  /** A forced header waiting for its player to win a header (forceHeader). */
+  struct ForcedHeader
+  {
+    PlayerID player = 0;
+    ForcedHeaderAim aim = ForcedHeaderAim::SPOT;
+    Vector2F spot{};
+    Vector2F goalAim{};
+    bool knownEarly = true;
+  };
+  std::optional<ForcedHeader> forcedHeader;
   /** A forced pass waiting for its passer to be able to act (passer 0:
    * none). */
   struct ForcedPass
@@ -2475,6 +2569,15 @@ class MatchEngine
   void ageHeldStrike(float dt);
   /** The sweep moment a strike is being played at, while it is. */
   std::optional<TouchMoment> strikeAt;
+  /** Turning to head (heading technique plan step 7): the facing a player
+   * turns his body to before a header he already means, re-read each step
+   * (planHeaderTurnBinturong). */
+  struct HeaderTurn
+  {
+    const MatchPlayer* player = nullptr;
+    float facing = 0.0f;
+  };
+  std::optional<HeaderTurn> headerTurn;
   /** Holds `strike` for the sweep when strikes wait for it; false if it is
    * to be played now. */
   bool holdStrikeForSweep(const PendingStrike& strike);
@@ -2581,6 +2684,14 @@ class MatchEngine
   HeaderAttempt chooseHeaderAttempt(const MatchPlayer& header,
                                     bool fromTeammate);
   /** A header in play: over the own line, cleared, or knocked down. */
+  /** What a header's pace is for (headerPace): to land on a spot, a
+   * clearance, or as hard as he can at a set elevation. */
+  enum class HeaderPace : std::uint8_t
+  {
+    TO_SPOT,
+    CLEAR,
+    FULL,
+  };
   struct HeaderPlay
   {
     enum class Kind
@@ -2648,7 +2759,8 @@ class MatchEngine
    * for), the line he means to strike it along (metric unit; none for a
    * controller's pass), and how long he has been at it. He walks to a spot
    * just behind the ball on that line, turning to it, and kicks it once it
-   * is in his reach and out of his dead zone, turned or out of time.
+   * is inside his comfort gap (so out of his dead zone), turned or out of
+   * time.
    */
   struct RestartLineUp
   {
@@ -2667,6 +2779,10 @@ class MatchEngine
   /** Steers a lining-up taker this step: to his spot behind the ball,
    * turning to his line. */
   void steerRestartLineUp(MatchPlayer& taker, float dt);
+  /** Counts a lined-up restart as he kicks it. */
+  void noteRestartKick(const MatchPlayer& taker, const RestartLineUp& lineUp,
+                       MatchState restart);
+  RestartLineUpStats restartLineUpStats;
   /**
    * How the score and the gap in quality bend a side's tactics: in front it
    * sits deeper and takes fewer risks, behind it pushes on; the underdog
@@ -2835,6 +2951,13 @@ class MatchEngine
   float headerClearanceSpeed(const MatchPlayer& header);
   /** Where a knock-down meant for `aim` really goes. */
   Vector2F knockDownPoint(const MatchPlayer& header, Vector2F aim);
+  /** A header's pace over the ground and upward (m/s), for its purpose,
+   * towards `target`; `speed` and `lift` are the brain's (the Aardvark body
+   * heads it at those; the Binturong body takes only their elevation, for
+   * FULL). */
+  std::pair<float, float> headerPace(const MatchPlayer& header,
+                                     HeaderPace purpose, Vector2F target,
+                                     float speed, float lift) const;
   /** Brings a received ball under control: trap time and when he can act
    * (a keeper with it in his hands: how long he holds it). */
   void settleOnBall(MatchPlayer& player, float touchSkill, bool hands);
@@ -2927,7 +3050,15 @@ class MatchEngine
   void diveGoalkeeper(MatchPlayer& keeper, float dt);
   void planGoalkeeperDive(bool defendingHome, bool penalty);
   void resolveShotAtGoalkeeper(MatchPlayer& goalkeeper);
+  /** A keeper's claim, or a duel for a high ball (true when it was played).
+   * A lone side under it on a Binturong body is left to headInSweep. */
   bool resolveAerialContest();
+  /** The unchallenged header (heading technique plan step 4): a Binturong
+   * body meets a high ball where it passes through his head's reach, the
+   * first on its path over the last stretch (true when one did). */
+  bool headInSweep();
+  /** The part of his head of the last unchallenged header. */
+  std::optional<HeadPart> lastHeadPart;
   void headBall(MatchPlayer& header);
   /** A defender's touch in front of his own goal that now and then goes
    * toward it instead (true when it did). */

@@ -455,6 +455,18 @@ bool MatchEngine::executeCommand(const MatchCommandRecord& command)
                     command.passFirstTime};
       ++inputRevision;
       return true;
+    case MatchCommandType::FORCE_HEADER:
+      if (!drillPlayer(command.player) ||
+          (command.headerAim == ForcedHeaderAim::SPOT && !command.target) ||
+          (command.headerAim == ForcedHeaderAim::GOAL && !command.shotAim))
+        return false;
+      forcedHeader = ForcedHeader{command.player, command.headerAim,
+                                  command.target.value_or(Vector2F{}),
+                                  command.shotAim.value_or(Vector2F{}),
+                                  command.headerKnownEarly};
+      lastHeadPart.reset();
+      ++inputRevision;
+      return true;
     case MatchCommandType::KEEP_BALL:
       if (!drillPlayer(command.player)) return false;
       std::erase(ballKeepers, command.player);
@@ -1947,6 +1959,28 @@ void MatchEngine::updateRestartMovement(float dt)
         player.movementTarget = goalkeeperTarget(player, nullptr);
     }
     updateRestartSupport(player, taker);
+    // A taker who lines the ball up needs room to walk up to it: everyone
+    // else keeps clear of it (restart lining-up).
+    if (taker && &player != taker && linesUpRestart(*taker, state))
+    {
+      constexpr float ROOM = MatchTuning::Dribble::RESTART_ROOM_METRES;
+      const Vector2F away = toMetres({player.movementTarget.x - ball.position.x,
+                                      player.movementTarget.y - ball.position.y});
+      const float metres = length(away);
+      if (metres < ROOM)
+      {
+        // Straight out from the ball (on it: back towards his own goal).
+        const Vector2F out = metres > EPSILON
+                                 ? Vector2F{away.x / metres, away.y / metres}
+                                 : Vector2F{player.isHomeTeam ? -1.0f : 1.0f, 0.0f};
+        const Vector2F step = toPitch({out.x * ROOM, out.y * ROOM});
+        player.movementTarget = {
+            std::clamp(ball.position.x + step.x, MatchTuning::Pitch::PLAYER_MIN_X,
+                       MatchTuning::Pitch::PLAYER_MAX_X),
+            std::clamp(ball.position.y + step.y, MatchTuning::Pitch::PLAYER_MIN_Y,
+                       MatchTuning::Pitch::PLAYER_MAX_Y)};
+      }
+    }
     player.intent = player.isGoalkeeper ? PlayerIntent::GOALKEEP
                                         : PlayerIntent::RECOVER_SHAPE;
     // His restart spot is where he is going: his tactical target too, as
@@ -3378,10 +3412,17 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
   const float endHeight = ball.z * MatchTuning::Units::BALL_Z_METRES;
   if (!ball.isShot && endHeight > MatchTuning::Aerial::CONTROL_CEILING_METRES)
   {
-    // In the air it is contested at the line's far side, as ever.
-    if (!beforeLine) resolveAerialContest();
+    // In the air it is claimed or contested at the line's far side, as
+    // ever; a lone side's header is met where it passes his head.
+    if (!beforeLine && !resolveAerialContest()) headInSweep();
     return;
   }
+  // Dropping through the chest ceiling: his head may have met it on the way.
+  if (!ball.isShot && !beforeLine &&
+      substepBallZ * MatchTuning::Units::BALL_Z_METRES >
+          MatchTuning::Aerial::CONTROL_CEILING_METRES &&
+      headInSweep())
+    return;
 
   // Swept contact over the last sub-step: every player whose reach the ball
   // passed through is a candidate, taken in the order the ball met them.
@@ -3813,7 +3854,8 @@ bool MatchEngine::resolveAerialContest()
   {
     if (!active(player) || player.isGoalkeeper || count == candidates.size() ||
         player.trapTimer > 0.0f ||
-        (ball.kickerLockout > 0.0f && ball.kicker == player.player))
+        (ball.kickerLockout > 0.0f && ball.kicker == player.player) ||
+        (ball.inTouch && ball.possessedBy == player.player))
       continue;
     if (distance(player.position, ball.position) >
         MatchTuning::Aerial::DUEL_RADIUS_METRES)
@@ -3833,7 +3875,12 @@ bool MatchEngine::resolveAerialContest()
     ++count;
     (player.isHomeTeam ? homeInvolved : awayInvolved) = true;
   }
-  if (count == 0) return false;
+  const bool contested = homeInvolved && awayInvolved;
+  // Unchallenged on a Binturong body: he meets it with his head where it
+  // passes through his head's reach (headInSweep), not here.
+  if (count == 0 ||
+      (!contested && getBody(candidates[0]->isHomeTeam) == BodyId::BINTURONG))
+    return false;
 
   float pick = randomFloat(0.0f, totalStrength);
   std::size_t winnerIndex = count - 1;
@@ -3847,7 +3894,6 @@ bool MatchEngine::resolveAerialContest()
     }
   }
   MatchPlayer& winner = *candidates[winnerIndex];
-  const bool contested = homeInvolved && awayInvolved;
   if (contested)
   {
     for (std::size_t index = 0; index < count; ++index)
@@ -3894,7 +3940,128 @@ bool MatchEngine::resolveAerialContest()
       }
     }
   }
+  // The duel's header is met where the ball is, his reach the duel's
+  // (until the duel's own plan).
+  lastHeadPart.reset();
+  strikeAt = TouchMoment{ball.position,
+                         distance(winner.position, ball.position),
+                         MatchTuning::Aerial::DUEL_RADIUS_METRES,
+                         heightMetres,
+                         substepsLeftInStep,
+                         0.0f,
+                         ballStepSeconds};
   headBall(winner);
+  strikeAt.reset();
+  return true;
+}
+
+bool MatchEngine::headInSweep()
+{
+  // The first Binturong body on the ball's path over the last stretch whose
+  // head it passed within reach of (headMeetBinturong) meets it there.
+  constexpr float HEAD_REACH = MatchTuning::Aerial::HEAD_REACH_METRES;
+  const Vector2F start = toMetres(substepBallPosition);
+  const Vector2F end = toMetres(ball.position);
+  const Vector2F segment{end.x - start.x, end.y - start.y};
+  const float segmentSquared = segment.x * segment.x + segment.y * segment.y;
+  const float startHeight = substepBallZ * MatchTuning::Units::BALL_Z_METRES;
+  const float endHeight = ball.z * MatchTuning::Units::BALL_Z_METRES;
+  struct Meet
+  {
+    std::size_t slot = 0;
+    float along = 0.0f;
+    float gap = 0.0f;
+    HeadPart part = HeadPart::FOREHEAD;
+  };
+  std::optional<Meet> first;
+  for (std::size_t slot = 0; slot < players.size(); ++slot)
+  {
+    const MatchPlayer& player = players[slot];
+    // Not his own touched ball (a cushion dropping to him).
+    if (!active(player) || player.isGoalkeeper || player.trapTimer > 0.0f ||
+        (ball.kickerLockout > 0.0f && ball.kicker == player.player) ||
+        (ball.inTouch && ball.possessedBy == player.player) ||
+        getBody(player.isHomeTeam) != BodyId::BINTURONG)
+      continue;
+    const Vector2F position = toMetres(player.position);
+    const float along = segmentSquared > EPSILON
+                            ? std::clamp(((position.x - start.x) * segment.x +
+                                          (position.y - start.y) * segment.y) /
+                                             segmentSquared,
+                                         0.0f, 1.0f)
+                            : 0.0f;
+    if (first && along >= first->along) continue;
+    const Vector2F toBall{start.x + segment.x * along - position.x,
+                          start.y + segment.y * along - position.y};
+    const float gap = length(toBall);
+    if (gap > HEAD_REACH) continue;
+    const float height = startHeight + (endHeight - startHeight) * along;
+    const std::optional<HeadPart> part = headMeetBinturong(
+        player, gap > EPSILON ? Vector2F{toBall.x / gap, toBall.y / gap} : Vector2F{},
+        gap, height);
+    if (!part) continue;
+    // Still closing on him at the stretch's end: he lets it come closer to
+    // the middle of his head, if a sub-step on (or where it passes closest,
+    // if sooner) it will still be his to head (its height there from its
+    // flight, without drag).
+    if (along >= 1.0f)
+    {
+      const Vector2F velocity = substepEndMotion.velocity;
+      const float speedSquared = velocity.x * velocity.x + velocity.y * velocity.y;
+      const Vector2F fromHim{end.x - position.x, end.y - position.y};
+      const float closing = -(fromHim.x * velocity.x + fromHim.y * velocity.y);
+      if (speedSquared > EPSILON && closing > 0.0f)
+      {
+        const float seconds =
+            std::min(closing / speedSquared,
+                     ballStepSeconds /
+                         static_cast<float>(MatchTuning::Timing::BALL_SUBSTEPS *
+                                            static_cast<int>(stepTicks)));
+        const Vector2F later{fromHim.x + velocity.x * seconds,
+                             fromHim.y + velocity.y * seconds};
+        const float laterGap = length(later);
+        const float laterHeight =
+            endHeight + substepEndMotion.velocityZ * seconds -
+            0.5f * MatchTuning::Ball::GRAVITY * seconds * seconds;
+        if (headMeetBinturong(player,
+                              laterGap > EPSILON
+                                  ? Vector2F{later.x / laterGap, later.y / laterGap}
+                                  : Vector2F{},
+                              laterGap, laterHeight))
+          continue;
+      }
+    }
+    first = Meet{slot, along, gap, *part};
+  }
+  if (!first) return false;
+
+  // Met where it reaches him, as a foot meets it (resolveLooseBall): the
+  // ball travels that share of the stretch, he heads it there, and it goes
+  // on for the rest with what his head gave it.
+  MatchPlayer& player = players[first->slot];
+  if (substepPathKnown)
+  {
+    setBallMotion(substepStartMotion);
+    integrateBall(substepStretchSeconds * first->along);
+    contactAlong = first->along;
+  }
+  else
+  {
+    setBallMotion(substepEndMotion);
+    contactAlong.reset();
+  }
+  lastHeadPart = first->part;
+  const int substepsPerStep =
+      MatchTuning::Timing::BALL_SUBSTEPS * static_cast<int>(stepTicks);
+  strikeAt = TouchMoment{ball.position,
+                         first->gap,
+                         HEAD_REACH,
+                         ball.z * MatchTuning::Units::BALL_Z_METRES,
+                         substepsLeftInStep,
+                         ballStepSeconds / static_cast<float>(substepsPerStep),
+                         ballStepSeconds};
+  headBall(player);
+  strikeAt.reset();
   return true;
 }
 
@@ -3903,10 +4070,16 @@ void MatchEngine::clearBehind(MatchPlayer& defender, bool headed)
   // Knock the ball over the own goal line, wide of the posts.
   const Vector2F target = chooseClearBehindTarget(defender);
   const BallRelease from = releaseFrom(defender, ReleaseKind::CLEAR_BEHIND);
+  // Headed: as hard as his head sends it, at the same elevation.
+  const auto [speed, lift] =
+      headed ? headerPace(defender, HeaderPace::FULL, target,
+                          MatchTuning::Aerial::HEADER_CLEARANCE_SPEED,
+                          MatchTuning::Aerial::HEADER_LIFT * 0.5f)
+             : std::pair{MatchTuning::Aerial::HEADER_CLEARANCE_SPEED,
+                         MatchTuning::Aerial::HEADER_LIFT * 0.5f};
   const Kick kick =
       strikeAs(defender, headed ? StrikeKind::HEADER : StrikeKind::CLEARANCE,
-               target, MatchTuning::Aerial::HEADER_CLEARANCE_SPEED,
-               MatchTuning::Aerial::HEADER_LIFT * 0.5f);
+               target, speed, lift);
   launchBall(defender, from, kick.target, kick.speed, kick.verticalSpeed,
              BallSpin{});
   lastShooter = nullptr;
@@ -3957,7 +4130,21 @@ void MatchEngine::headBall(MatchPlayer& header)
     return;
   }
 
-  const HeaderAttempt attempt = chooseHeaderAttempt(header, fromTeammate);
+  // A drill's forced header (forceHeader) stands in for the brain's choice.
+  std::optional<ForcedHeader> forced;
+  if (forcedHeader && header.player &&
+      forcedHeader->player == header.player->getId())
+  {
+    forced = forcedHeader;
+    forcedHeader.reset();
+  }
+  const HeaderAttempt attempt =
+      !forced                                    ? chooseHeaderAttempt(header, fromTeammate)
+      : forced->aim == ForcedHeaderAim::GOAL ? HeaderAttempt::SHOOT
+      : forced->aim == ForcedHeaderAim::KEEP ? HeaderAttempt::CUSHION
+                                             : HeaderAttempt::PLAY;
+  if (forced && forced->aim == ForcedHeaderAim::GOAL)
+    forcedShotAim = forced->goalAim;
   if (attempt == HeaderAttempt::SHOOT)
   {
     if (deliverer && deliverer->isHomeTeam == header.isHomeTeam &&
@@ -3980,6 +4167,14 @@ void MatchEngine::headBall(MatchPlayer& header)
     return;
   }
 
+  if (attempt == HeaderAttempt::CUSHION &&
+      getBody(header.isHomeTeam) == BodyId::BINTURONG)
+  {
+    // Cushioned with his head as softly as it can, owned as it drops, and
+    // collected once it is down (heading technique plan step 6).
+    cushionHeaderBinturong(header);
+    return;
+  }
   if (attempt == HeaderAttempt::CUSHION)
   {
     // A team-mate's lofted ball away from goal is cushioned down and kept.
@@ -3996,8 +4191,12 @@ void MatchEngine::headBall(MatchPlayer& header)
   ball.lastPossessor = header.player;
   lastShooter = nullptr;
   meetWithHead(header);
-  if (!fromTeammate && tryOwnGoalTouch(header)) return;
-  const HeaderPlay play = chooseHeaderPlay(header, fromTeammate);
+  if (!forced && !fromTeammate && tryOwnGoalTouch(header)) return;
+  HeaderPlay play;
+  if (forced)
+    play.aim = forced->spot;
+  else
+    play = chooseHeaderPlay(header, fromTeammate);
   if (play.kind == HeaderPlay::Kind::BEHIND)
   {
     ++statsOf(header).clearances;
@@ -4005,8 +4204,9 @@ void MatchEngine::headBall(MatchPlayer& header)
     {
       // Headed out of play the way he chose.
       const BallRelease from = releaseFrom(header, ReleaseKind::HEADER);
-      const Kick kick = strikeAs(header, StrikeKind::HEADER, play.aim,
-                                 play.speed, play.lift);
+      const auto [speed, lift] =
+          headerPace(header, HeaderPace::FULL, play.aim, play.speed, play.lift);
+      const Kick kick = strikeAs(header, StrikeKind::HEADER, play.aim, speed, lift);
       launchBall(header, from, kick.target, kick.speed,
                  kick.verticalSpeed, BallSpin{});
     }
@@ -4018,10 +4218,11 @@ void MatchEngine::headBall(MatchPlayer& header)
     ++statsOf(header).clearances;
     // Many defensive headers are half-clearances that drop around the edge
     // of the box, where the second ball is fought for.
-    const float speed = headerClearanceSpeed(header);
+    const auto [speed, lift] =
+        headerPace(header, HeaderPace::CLEAR, play.aim,
+                   headerClearanceSpeed(header), MatchTuning::Aerial::HEADER_LIFT);
     const BallRelease from = releaseFrom(header, ReleaseKind::HEADER);
-    const Kick kick = strikeAs(header, StrikeKind::HEADER, play.aim, speed,
-                               MatchTuning::Aerial::HEADER_LIFT);
+    const Kick kick = strikeAs(header, StrikeKind::HEADER, play.aim, speed, lift);
     launchBall(header, from, kick.target, kick.speed,
                kick.verticalSpeed, BallSpin{});
     if (getRecorder())
@@ -4036,10 +4237,11 @@ void MatchEngine::headBall(MatchPlayer& header)
   {
     const Vector2F knockDown = knockDownPoint(header, play.aim);
     const BallRelease from = releaseFrom(header, ReleaseKind::HEADER);
-    const Kick kick =
-        strikeAs(header, StrikeKind::HEADER, knockDown,
-                 MatchTuning::Aerial::HEADER_PASS_SPEED,
-                 MatchTuning::Aerial::HEADER_LIFT * 0.5f);
+    const auto [speed, lift] =
+        headerPace(header, HeaderPace::TO_SPOT, knockDown,
+                   MatchTuning::Aerial::HEADER_PASS_SPEED,
+                   MatchTuning::Aerial::HEADER_LIFT * 0.5f);
+    const Kick kick = strikeAs(header, StrikeKind::HEADER, knockDown, speed, lift);
     launchBall(header, from, kick.target, kick.speed,
                kick.verticalSpeed, BallSpin{});
     if (getRecorder())
@@ -4101,6 +4303,7 @@ void MatchEngine::clearPossession()
   ball.possessedBy = nullptr;
   ball.inTouch = false;
   ball.touchCollected = false;
+  ball.touchHeaded = false;
   ball.touchPasser = nullptr;
   ball.touchWaiting = 0;
 }
@@ -4110,6 +4313,7 @@ void MatchEngine::handBallTo(const Player* holder)
   ball.possessedBy = holder;
   ball.inTouch = false;
   ball.touchCollected = false;
+  ball.touchHeaded = false;
   ball.touchPasser = nullptr;
   ball.touchWaiting = 0;
 }
@@ -4167,6 +4371,7 @@ void MatchEngine::sendBallOff(const MatchPlayer& kicker, Vector2F position,
 {
   ball.position = position;
   ball.sentFrom = position;
+  ball.sentHeightMetres = z * MatchTuning::Units::BALL_Z_METRES;
   ball.z = z;
   ball.velocity = velocity;
   ball.velocityZ = velocityZ;
@@ -4839,12 +5044,15 @@ void MatchEngine::updateTouch(MatchPlayer& carrier, float dt)
   ball.plannedTouchIn = std::max(0.0f, ball.plannedTouchIn - dt);
 
   if (!ball.touchCollected && gap <= R::KICK_REACH_METRES &&
-      length(relative) <= touchKnobs[TouchKnob::COLLECT_RELATIVE_SPEED])
+      length(relative) <= touchKnobs[TouchKnob::COLLECT_RELATIVE_SPEED] &&
+      (!ball.touchHeaded ||
+       ball.z * MatchTuning::Units::BALL_Z_METRES <= MatchTuning::Ball::LOW_BALL_METRES))
   {
     // Collected: the pass is complete and he can think about his next
     // action. The ball stays loose: from here he dribbles it, touch by touch.
     using F = MatchTuning::FirstTouch;
     ball.touchCollected = true;
+    ball.touchHeaded = false;
     if (ball.touchPasser) creditPassCompletion(carrier, ball.touchPasser);
     ball.touchPasser = nullptr;
     carrier.actionCooldown =
@@ -5150,13 +5358,11 @@ bool MatchEngine::lineUpRestart(MatchPlayer& taker, MatchState restart,
   if (lineUp.userAction == MatchInputAction::NONE &&
       lineUp.play.kind == RestartPlay::Kind::HOLD)
     return true;
-  // In his reach and out of his dead zone, as for any contact.
+  // In his comfort gap: he walks right up to a dead ball (inside it the ball
+  // is never in his dead zone, and he is not stretching for it).
   const Vector2F fromBall = toMetres({taker.position.x - ball.position.x,
                                       taker.position.y - ball.position.y});
-  const float gap = length(fromBall);
-  if (gap > feetReach(taker) ||
-      ballBehindReach(taker, fromBall.x, fromBall.y, gap))
-    return false;
+  if (length(fromBall) > touchKnobs[TouchKnob::COMFORT_GAP]) return false;
   // Turned to his line, or out of time to turn further.
   if (!lineUp.line ||
       lineUp.seconds >= MatchTuning::Dribble::TURN_TO_PASS_MAX_SECONDS)
@@ -5171,20 +5377,38 @@ bool MatchEngine::lineUpRestart(MatchPlayer& taker, MatchState restart,
 
 void MatchEngine::steerRestartLineUp(MatchPlayer& taker, float dt)
 {
-  // To just behind the ball on his line (his comfort gap from it), facing
+  // To just behind the ball on his line (inside his comfort gap), facing
   // along it; with no line (a controller's pass), to the ball the way he
   // comes at it.
   RestartLineUp& lineUp = *restartLineUp;
   lineUp.seconds += dt;
   const Vector2F line =
       lineUp.line.value_or(metricDirection(taker.position, ball.position));
-  const float back = touchKnobs[TouchKnob::COMFORT_GAP];
-  const Vector2F offset = toPitch({-line.x * back, -line.y * back});
-  taker.movementTarget = {
-      std::clamp(ball.position.x + offset.x, MatchTuning::Pitch::PLAYER_MIN_X,
-                 MatchTuning::Pitch::PLAYER_MAX_X),
-      std::clamp(ball.position.y + offset.y, MatchTuning::Pitch::PLAYER_MIN_Y,
-                 MatchTuning::Pitch::PLAYER_MAX_Y)};
+  const float back = touchKnobs[TouchKnob::COMFORT_GAP] *
+                     MatchTuning::Dribble::RESTART_SPOT_COMFORT_SHARE;
+  const auto onPitch = [](Vector2F at)
+  {
+    return Vector2F{std::clamp(at.x, MatchTuning::Pitch::PLAYER_MIN_X,
+                               MatchTuning::Pitch::PLAYER_MAX_X),
+                    std::clamp(at.y, MatchTuning::Pitch::PLAYER_MIN_Y,
+                               MatchTuning::Pitch::PLAYER_MAX_Y)};
+  };
+  const Vector2F behind = toPitch({-line.x * back, -line.y * back});
+  const Vector2F spot =
+      onPitch({ball.position.x + behind.x, ball.position.y + behind.y});
+  // A walk counts as arrived anywhere within the arrival dead zone of its
+  // target, which is wider than the comfort gap: he aims that far past
+  // his spot, the way he comes at it, so he pulls up on it.
+  const Vector2F toSpot = toMetres({spot.x - taker.position.x,
+                                    spot.y - taker.position.y});
+  const float metres = length(toSpot);
+  const float through =
+      MatchTuning::Player::ARRIVAL_DEAD_ZONE_METRES / std::max(metres, EPSILON);
+  taker.movementTarget =
+      metres > 0.01f
+          ? onPitch({spot.x + (spot.x - taker.position.x) * through,
+                     spot.y + (spot.y - taker.position.y) * through})
+          : spot;
   taker.tacticalTarget = taker.movementTarget;
   if (lineUp.line)
   {
@@ -5193,6 +5417,40 @@ void MatchEngine::steerRestartLineUp(MatchPlayer& taker, float dt)
         std::atan2(line.y / MatchTuning::Pitch::WIDTH_METRES,
                    line.x / MatchTuning::Pitch::LENGTH_METRES);
   }
+}
+
+void MatchEngine::noteRestartKick(const MatchPlayer& taker,
+                                  const RestartLineUp& lineUp,
+                                  MatchState restart)
+{
+  // Kept, not kicked: nothing to count.
+  if (lineUp.userAction == MatchInputAction::NONE &&
+      lineUp.play.kind == RestartPlay::Kind::HOLD)
+    return;
+  RestartLineUpStats& tally = restartLineUpStats;
+  const auto index = static_cast<std::size_t>(restart);
+  if (index < tally.byRestart.size()) ++tally.byRestart[index];
+  ++tally.kicked;
+  const Vector2F fromBall = toMetres({taker.position.x - ball.position.x,
+                                      taker.position.y - ball.position.y});
+  const float gap = length(fromBall);
+  if (gap > touchKnobs[TouchKnob::COMFORT_GAP]) ++tally.outsideComfort;
+  if (ballBehindReach(taker, fromBall.x, fromBall.y, gap)) ++tally.inDeadZone;
+  if (lineUp.line)
+  {
+    const Vector2F facing = normalized(
+        {std::cos(taker.facingAngle) * MatchTuning::Pitch::LENGTH_METRES,
+         std::sin(taker.facingAngle) * MatchTuning::Pitch::WIDTH_METRES});
+    const bool turned =
+        facing.x * lineUp.line->x + facing.y * lineUp.line->y >=
+        std::cos(MatchTuning::Dribble::TURN_TO_PASS_READY_DEGREES *
+                 std::numbers::pi_v<float> / 180.0f);
+    ++(turned ? tally.turned : tally.outOfTime);
+  }
+  tally.secondsSum += lineUp.seconds;
+  tally.secondsMax = std::max(tally.secondsMax, lineUp.seconds);
+  tally.gapSum += gap;
+  tally.gapMax = std::max(tally.gapMax, gap);
 }
 
 void MatchEngine::resetPositions()

@@ -115,6 +115,10 @@ void MatchEngine::deriveStats(MatchPlayer& matchPlayer) const
       rating += recipes[stat].weights[index] * base[index];
     for (std::size_t future = 0; future < DERIVED_STAT_COUNT; ++future)
       rating += recipes[stat].futureWeights[future] * matchPlayer.derived[future];
+    if (recipes[stat].onHeight())
+      rating = derivedRatingOnHeight(static_cast<DerivedStat>(stat),
+                                     recipes[stat], rating,
+                                     matchPlayer.heightMetres);
     matchPlayer.derived[stat] = std::clamp(rating, 0.0f, 1.0f);
   }
 }

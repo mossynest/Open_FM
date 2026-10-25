@@ -55,6 +55,10 @@
   float headerClearanceSpeedAardvark(const MatchPlayer& header);
   /** Where a knock-down meant for `aim` really goes. */
   Vector2F knockDownPointAardvark(const MatchPlayer& header, Vector2F aim);
+  /** A header's pace: the brain's, as set. */
+  std::pair<float, float> headerPaceAardvark(const MatchPlayer& header,
+                                             HeaderPace purpose, Vector2F target,
+                                             float speed, float lift) const;
   /** Brings a received ball under control: trap time and when he can act
    * (a keeper with it in his hands: how long he holds it). */
   void settleOnBallAardvark(MatchPlayer& player, float touchSkill, bool hands);

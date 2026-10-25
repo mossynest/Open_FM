@@ -60,7 +60,7 @@
                                            float powerCapacity = 0.0f) const;
   /** His power for a kind of strike (m/s): shot power for shots and
    * headers, the throw's limit, kick power for the rest. */
-  static float strikePowerBinturong(const MatchPlayer& striker, StrikeKind kind);
+  float strikePowerBinturong(const MatchPlayer& striker, StrikeKind kind) const;
   /** A strike's contact profile (provisional, contact plan §3). */
   ContactProfile strikeProfileBinturong(StrikeKind kind) const;
   /** Where a strike meets the ball: where it lies, its gap from his centre
@@ -186,6 +186,42 @@
   float headerClearanceSpeedBinturong(const MatchPlayer& header);
   /** Where a knock-down meant for `aim` really goes. */
   Vector2F knockDownPointBinturong(const MatchPlayer& header, Vector2F aim);
+  /** His header power (m/s): the pace he gives a ball with almost none of
+   * its own, by Heading (heading technique plan step 3). */
+  float headerPowerBinturong(const MatchPlayer& header) const;
+  /** Whether the header being played was met with the top of his head. */
+  bool metWithTopOfHeadBinturong() const;
+  /** Brings `request` within what his head can do where he meets the ball
+   * (`moment`), and sets `profile`'s lowest elevation (heading technique
+   * plan step 5). */
+  void headerLimitsBinturong(const MatchPlayer& header, const TouchMoment& moment,
+                             ContactRequest& request, ContactProfile& profile) const;
+  /** The least pace (m/s) the ball can leave his head with along `aim`
+   * (metric unit) at `elevation` (rad), the ball coming in as it is. */
+  float headerFloorBinturong(const MatchPlayer& header, Vector2F aim,
+                             float elevation) const;
+  /** A cushioned header: as softly as he can, then his to collect. */
+  void cushionHeaderBinturong(MatchPlayer& header);
+  /** The fastest the ball can leave his head along `aim` (metric unit) at
+   * `elevation` (rad, + up), the ball coming in as it is; `byAngle`: with
+   * his body's share of his power that far off the way he faces. */
+  float headerCeilingBinturong(const MatchPlayer& header, Vector2F aim,
+                               float elevation, bool byAngle = true) const;
+  std::pair<float, float> headerPaceBinturong(const MatchPlayer& header,
+                                              HeaderPace purpose, Vector2F target,
+                                              float speed, float lift) const;
+  /** The launch pace at `elevation` (rad) from `startHeight` (m) that first
+   * lands `metres` away. */
+  float landingPaceBinturong(float metres, float elevation, float startHeight) const;
+  /** His Jumping reach (m): the top of his head at the top of his jump. */
+  float jumpingReachBinturong(const MatchPlayer& player) const;
+  /** Whether his head can meet a ball `gap` metres from his centre across
+   * the ground, the way `toBall` (metric unit), `heightMetres` up, and with
+   * which part (heading technique plan step 4); none: out of his head's
+   * reach. */
+  std::optional<HeadPart> headMeetBinturong(const MatchPlayer& player,
+                                            Vector2F toBall, float gap,
+                                            float heightMetres) const;
   /** Brings a received ball under control: trap time and when he can act
    * (a keeper with it in his hands: how long he holds it). */
   void settleOnBallBinturong(MatchPlayer& player, float touchSkill, bool hands);
@@ -284,6 +320,12 @@
    * asks of its passer, along its line from the ball, turned no further
    * than keeps the ball clear of his dead zone; none without one. */
   std::optional<float> turnToPassFacingBinturong(const MatchPlayer& player) const;
+  /** Who turns to head a ball still to come, and to what facing
+   * (headerTurn; heading technique plan step 7). */
+  void planHeaderTurnBinturong();
+  /** The facing his body turns to for a strike he means: a pass or shot he
+   * holds, else a header he means. */
+  std::optional<float> strikeFacingBinturong(const MatchPlayer& player) const;
   /** Where his held strike is aimed (normalised): a pass's target, a
    * shot's spot on the goal line; none for a clearance or no strike. */
   std::optional<Vector2F> heldStrikeTargetBinturong(const MatchPlayer& player) const;

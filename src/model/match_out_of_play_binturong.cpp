@@ -462,7 +462,7 @@ void MatchEngine::completeRestartBinturong()
   MatchPlayer* taker = restartTaker();
   const bool userPass = userRestartPassRequested();
   // A Binturong body's taker lines the ball up first: he moves until it is
-  // in his reach and out of his dead zone (restart lining-up).
+  // inside his comfort gap, out of his dead zone (restart lining-up).
   if (taker && active(*taker) && linesUpRestart(*taker, restartState) &&
       !lineUpRestart(*taker, restartState, userPass))
     return;
@@ -483,6 +483,7 @@ void MatchEngine::completeRestartBinturong()
 
   // The taker has walked to the spot; line him up exactly on the ball
   // (one who lined it up kicks it from where he stands).
+  if (linedUp) noteRestartKick(*taker, *linedUp, restartState);
   if (restartState != MatchState::KICK_OFF && !linedUp)
   {
     taker->position = ball.position;

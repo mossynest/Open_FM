@@ -103,6 +103,8 @@ json toJson(const MatchCommandRecord& command)
           {"shot_technique", command.shotTechnique
                                  ? json(static_cast<int>(*command.shotTechnique))
                                  : json(nullptr)},
+          {"header_aim", static_cast<int>(command.headerAim)},
+          {"header_known_early", command.headerKnownEarly},
           {"keep_urgency", command.keepUrgency}};
 }
 
@@ -161,6 +163,9 @@ MatchCommandRecord commandFromJson(const json& value)
   if (const auto how = value.find("shot_technique");
       how != value.end() && how->is_number())
     command.shotTechnique = static_cast<ShotTechnique>(how->get<int>());
+  command.headerAim =
+      static_cast<ForcedHeaderAim>(value.value("header_aim", 0));
+  command.headerKnownEarly = value.value("header_known_early", true);
   command.keepUrgency = value.value("keep_urgency", 1.0f);
   return command;
 }

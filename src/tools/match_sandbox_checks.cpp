@@ -18,6 +18,7 @@
 #include <format>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <numbers>
@@ -480,6 +481,11 @@ bool runDerivedStatChecks(const std::vector<const Team*>& clubs,
   {
     std::array<double, DERIVED_STAT_COUNT> sums{};
     std::size_t players = 0;
+    // Jumping reach's spread in metres, and how many are held at the ends
+    // of its scale.
+    float reachLow = std::numeric_limits<float>::max();
+    float reachHigh = 0.0f;
+    std::size_t reachHeld = 0;
     for (std::size_t pair = 0; pair + 1 < clubs.size(); pair += 2)
     {
       const MatchEngine engine(clubs[pair]->getLineup(),
@@ -505,6 +511,12 @@ bool runDerivedStatChecks(const std::vector<const Team*>& clubs,
           }
           sums[index] += rating;
         }
+        const float reach = player.derivedStat(DerivedStat::JUMPING_REACH);
+        const float metres =
+            derivedPhysicalValue(DerivedStat::JUMPING_REACH, reach);
+        reachLow = std::min(reachLow, metres);
+        reachHigh = std::max(reachHigh, metres);
+        if (reach <= 0.0f || reach >= 1.0f) ++reachHeld;
       }
     }
     checked += players;
@@ -513,6 +525,9 @@ bool runDerivedStatChecks(const std::vector<const Team*>& clubs,
       means += std::format(
           " {} {:.0f}", DERIVED_STATS[index].label,
           players ? 100.0 * sums[index] / static_cast<double>(players) : 0.0);
+    if (players)
+      means += std::format(" (jumping reach {:.2f}-{:.2f} m, {} at an end)",
+                           reachLow, reachHigh, reachHeld);
   }
   std::cout << std::format(
       "\nDerived stats: {} kinds ({} future game stats, {} match engine "
@@ -858,6 +873,94 @@ bool runFirstTouchChecks(const std::vector<const Team*>& clubs,
   return ok;
 }
 }  // namespace
+
+/** Restart line-ups: Binturong brains and bodies on both sides, under both
+ * out-of-play versions. Every restart is taken (no line-up runs on), and a
+ * lined-up ball is kicked inside his comfort gap, out of his dead zone. Reports
+ * how many restarts of each kind were lined up, how long it took and how
+ * far the ball was as he kicked. */
+bool runRestartChecks(const std::vector<const Team*>& clubs,
+                      const StatsConfig& config)
+{
+  constexpr int MATCHES = 4;
+  // A line-up running this long has stuck.
+  constexpr float STUCK_SECONDS = 10.0f;
+  constexpr std::array<std::string_view, 7> RESTARTS{
+      "kick-off", "", "throw-in", "goal kick", "corner", "free kick", "penalty"};
+  bool ok = true;
+  std::cout << std::format("\nRestart line-ups (Binturong brains and bodies, "
+                           "{} matches per version)\n",
+                           MATCHES);
+  for (const OutOfPlayId version : {OutOfPlayId::AARDVARK, OutOfPlayId::BINTURONG})
+  {
+    std::array<std::uint32_t, 7> taken{};
+    MatchEngine::RestartLineUpStats all;
+    float longest = 0.0f;
+    int finished = 0;
+    for (int match = 0; match < MATCHES; ++match)
+    {
+      const std::size_t pair = (static_cast<std::size_t>(match) * 2) % clubs.size();
+      auto engine = makeEngine(*clubs[pair], *clubs[(pair + 1) % clubs.size()],
+                               config, static_cast<std::uint32_t>(3000 + match));
+      for (const bool home : {true, false})
+      {
+        engine->setBrain(home, BrainId::BINTURONG);
+        engine->setBody(home, BodyId::BINTURONG);
+      }
+      engine->setOutOfPlay(version);
+      MatchState previous = engine->getState();
+      std::size_t steps = 0;
+      while (engine->getState() != MatchState::FULL_TIME && steps < 2'000'000)
+      {
+        (void)engine->advance(MatchTuning::Timing::FIXED_STEP_SECONDS);
+        ++steps;
+        longest = std::max(longest, engine->getRestartLineUpSeconds());
+        // A restart taken: play resumes from it.
+        const MatchState now = engine->getState();
+        if (now == MatchState::PLAYING && previous != MatchState::PLAYING)
+          if (const auto index = static_cast<std::size_t>(previous);
+              index < taken.size())
+            ++taken[index];
+        previous = now;
+      }
+      if (engine->getState() == MatchState::FULL_TIME) ++finished;
+      const MatchEngine::RestartLineUpStats& stats = engine->getRestartLineUpStats();
+      for (std::size_t index = 0; index < all.byRestart.size(); ++index)
+        all.byRestart[index] += stats.byRestart[index];
+      all.kicked += stats.kicked;
+      all.turned += stats.turned;
+      all.outOfTime += stats.outOfTime;
+      all.outsideComfort += stats.outsideComfort;
+      all.inDeadZone += stats.inDeadZone;
+      all.secondsSum += stats.secondsSum;
+      all.secondsMax = std::max(all.secondsMax, stats.secondsMax);
+      all.gapSum += stats.gapSum;
+      all.gapMax = std::max(all.gapMax, stats.gapMax);
+    }
+    const double kicked = std::max(1.0, static_cast<double>(all.kicked));
+    std::string byRestart;
+    for (std::size_t index = 0; index < RESTARTS.size(); ++index)
+      if (!RESTARTS[index].empty())
+        byRestart += std::format("{}{} {}/{}", byRestart.empty() ? "" : ", ",
+                                 RESTARTS[index], all.byRestart[index],
+                                 taken[index]);
+    const bool good = finished == MATCHES && all.outsideComfort == 0 &&
+                      all.inDeadZone == 0 && longest < STUCK_SECONDS;
+    std::cout << std::format(
+        "  {} out of play: finished {}/{}; lined up/taken: {}\n"
+        "    {} kicked: turned to his line {:.0f}%, out of time {:.0f}%; "
+        "line-up {:.2f} s on average, longest {:.2f} s; ball {:.2f} m from his "
+        "centre on average, furthest {:.2f} m; outside his comfort gap {}, in his dead "
+        "zone {}{}\n",
+        version == OutOfPlayId::AARDVARK ? "Aardvark" : "Binturong", finished,
+        MATCHES, byRestart, all.kicked,
+        100.0 * all.turned / kicked, 100.0 * all.outOfTime / kicked,
+        all.secondsSum / kicked, longest, all.gapSum / kicked, all.gapMax,
+        all.outsideComfort, all.inDeadZone, good ? "" : "  <- FAIL");
+    ok = ok && good;
+  }
+  return ok;
+}
 
 int runSandboxChecks(GameController& controller, int matches)
 {
@@ -1318,8 +1421,13 @@ int runSandboxChecks(GameController& controller, int matches)
                     ? "PASS: first touches roll under physics and are "
                       "collected.\n"
                     : "FAIL: a first-touch check failed.\n");
+  const bool restartsWork = runRestartChecks(clubs, config);
+  std::cout << (restartsWork
+                    ? "PASS: restarts are lined up and taken, the ball inside "
+                      "his comfort gap.\n"
+                    : "FAIL: a restart check failed.\n");
   return allIdentical && rewindExact && drillsWork && derivedWork &&
-                 possessionWorks && firstTouchWorks
+                 possessionWorks && firstTouchWorks && restartsWork
              ? 0
              : 1;
 }

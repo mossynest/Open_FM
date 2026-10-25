@@ -584,6 +584,14 @@ struct MatchTuning final
      * this far inside his dead zone's edge (design choices). */
     static constexpr float TURN_TO_PASS_READY_DEGREES = 10.0f;
     static constexpr float TURN_TO_PASS_MAX_SECONDS = 1.0f;
+    /** A restart's taker walks to a spot behind the ball this share of his
+     * comfort gap from it, and kicks once the ball is inside the gap
+     * (restart lining-up). */
+    static constexpr float RESTART_SPOT_COMFORT_SHARE = 0.75f;
+    /** Everyone else keeps this far from the ball while he lines it up:
+     * room for his body (the minimum body separation, 0.8 m) beside a ball
+     * inside his comfort gap (0.3 m), and a margin. */
+    static constexpr float RESTART_ROOM_METRES = 1.2f;
     static constexpr float TURN_TO_PASS_DEAD_ZONE_MARGIN_DEGREES = 15.0f;
     /** The carry's pace (2c, design choices): an urgency 0-1 (0 a walk, 1/3
      * a jog, 2/3 a run, 1 a sprint, the tops of his bands) from a base, the
@@ -1337,14 +1345,35 @@ struct MatchTuning final
       static constexpr float PACE_CHANGE = 0.4f;
       static constexpr float POWER_ASKED_ANGLE = 0.0f;
       static constexpr float POWER_ASKED_WEIGHT = 0.0f;
-      static constexpr float ANGLE_JITTER = 0.586f;
-      static constexpr float JITTER_DIFFICULTY_SHARE = 0.0f;
+      // Skill: Heading (heading technique plan step 5). The easiest header's
+      // clean error (a gentle dropping ball, square on, 10 m: angle
+      // difficulty about 0.09), its mean miss along the ground: 20 deg at
+      // Heading 1 to 0.5 deg at 99 (decision 6), in a straight line. As for
+      // shots, the jitter grows with the angle job's difficulty: ANGLE_JITTER
+      // x (1 - share + share x difficulty) x (1 - Heading x SKILL_REDUCTION),
+      // a standard deviation, set so the drill's mean miss comes out at
+      // those figures; the hardest header is about 2.4 times the easiest.
+      // All of it sideways; the elevation has its own (a placeholder: 5 deg
+      // at 1 to 0.1 at 99).
+      static constexpr float SKILL_REDUCTION = 0.985f;
+      static constexpr float ANGLE_JITTER = 1.016f;
+      static constexpr float JITTER_DIFFICULTY_SHARE = 0.65f;
+      static constexpr float VERTICAL_SHARE = 0.0f;
+      static constexpr float ELEVATION_JITTER = 0.104f;
       static constexpr float REFERENCE_SPEED = 25.0f;
+      // No foot, no spin, always in the air.
       static constexpr float WEAKER_FOOT = 0.0f;
       static constexpr float OFF_GROUND = 0.0f;
-      // Passes and shots with the foot only, for now.
-      static constexpr float APPROACH_ANGLE = 0.0f;
-      static constexpr float APPROACH_WEIGHT = 0.0f;
+      // A ball dropping over his shoulder is hard to head: he can't see it.
+      // Weighted half as much again as for a foot.
+      static constexpr float APPROACH_ANGLE = 1.5f * FirstTouch::APPROACH.angle;
+      static constexpr float APPROACH_WEIGHT = 1.5f * FirstTouch::APPROACH.weight;
+      // A head's power by angle (heading technique plan step 3): all of it
+      // the way he faces, a flick of the neck square to his body, a glance
+      // behind; the same either side (placeholders).
+      static constexpr float POWER_INWARD_SQUARE = 0.35f;
+      static constexpr float POWER_OUTWARD_SQUARE = 0.35f;
+      static constexpr float POWER_BEHIND = 0.1f;
     };
 
     /** Shot types (shooting technique plan step 5, 2026-10-24; first
@@ -1869,6 +1898,10 @@ struct MatchTuning final
     static constexpr float BASE_JUMP_METRES = 0.32f;
     static constexpr float PHYSICALITY_JUMP_METRES = 0.38f;
     static constexpr float HEAD_OFFSET_METRES = 0.08f;
+    /** Jumping reach's jump (heading technique plan step 1): how far the
+     * top of his head rises, at rating 1 and 99 of its blend. */
+    static constexpr float JUMP_LOW_METRES = 0.25f;
+    static constexpr float JUMP_HIGH_METRES = 0.70f;
     static constexpr float GOALKEEPER_ARM_REACH_RATIO = 1.26f;
     static constexpr float GOALKEEPER_BASE_JUMP_METRES = 0.30f;
     static constexpr float GOALKEEPER_SKILL_JUMP_METRES = 0.30f;
@@ -1901,6 +1934,57 @@ struct MatchTuning final
     /** Share of physicality (against shooting) in heading precision. */
     static constexpr float HEADING_PHYSICAL_SHARE = 0.3f;
     static constexpr float HEADER_SPEED_SCALE = 0.7f;
+    // Header power (Binturong body; heading technique plan step 3). The
+    // pace he gives a ball that arrives with almost no pace of its own, at
+    // Heading 1 and 99 (placeholders).
+    static constexpr float HEADER_POWER_LOW = 8.0f;
+    static constexpr float HEADER_POWER_HIGH = 17.0f;
+    /** The share of the ball's pace into his head (along the line his head
+     * pushes) that springs back off it. */
+    static constexpr float HEADER_SPRING = 0.6f;
+    /** A headed shot: the share of the fastest he can head it on its line. */
+    static constexpr float HEADER_SHOT_SHARE = 0.9f;
+    /** A header to a spot (rad up): weighted to land on it at this angle. */
+    static constexpr float HEADER_PASS_ELEVATION = 0.35f;
+    /** A clearing header (rad up), as hard as he can. */
+    static constexpr float HEADER_CLEAR_ELEVATION = 0.5f;
+    // The head's reach (heading technique plan step 4; placeholders). He
+    // can't stretch for a header as he can with a leg: the ball has to come
+    // within a lean of the neck and shoulders of his centre, easily within
+    // the comfort gap. Beyond the comfort gap and more than the dead zone's
+    // angle off his facing, his forehead can't get to it; only the top of
+    // his head, for a ball at or above it. It meets a ball from the chest
+    // ceiling (CONTROL_CEILING_METRES) up to his Jumping reach (the top of
+    // his head at the top of his jump), the forehead up to HEAD_OFFSET_METRES
+    // below that.
+    static constexpr float HEAD_REACH_METRES = 0.4f;
+    static constexpr float HEAD_COMFORT_GAP_METRES = 0.15f;
+    static constexpr float HEAD_DEAD_ZONE_DEGREES = 60.0f;
+    /** The head's stretch map: the shares of HEAD_REACH_METRES out, at
+     * FirstTouch::STRETCH_ANGLES (rows), rising quickly beyond the comfort
+     * gap (0.375 of the reach). Past 60 degrees only the top of the head
+     * reaches. */
+    static constexpr std::array<float, 6> HEAD_STRETCH_DISTANCES{
+        0.000f, 0.375f, 0.500f, 0.700f, 0.850f, 1.000f};
+    static constexpr std::array<std::array<float, 6>, 6> HEAD_STRETCH_VALUES{{
+        {0.000f, 0.000f, 0.150f, 0.400f, 0.700f, 1.000f},
+        {0.000f, 0.000f, 0.200f, 0.500f, 0.800f, 1.000f},
+        {0.000f, 0.100f, 0.300f, 0.600f, 0.900f, 1.000f},
+        {0.000f, 0.100f, 0.300f, 0.600f, 0.900f, 1.000f},
+        {0.000f, 0.100f, 0.300f, 0.600f, 0.900f, 1.000f},
+        {0.000f, 0.100f, 0.300f, 0.600f, 0.900f, 1.000f},
+    }};
+    // What his head can do with it (heading technique plan step 5;
+    // placeholders). The top of his head only glances it on: within this
+    // turn (rad) of the way it was going, flat or upward, with this share
+    // of his header power added.
+    static constexpr float TOP_MAX_TURN = 0.45f;
+    static constexpr float TOP_POWER_SHARE = 0.3f;
+    // The cushion (heading technique plan step 6; placeholders): the head
+    // can only give a little. At least this share of the pace into his head
+    // (along the line it pushes) comes back off it, at Heading 1 and 99.
+    static constexpr float CUSHION_KEEP_LOW = 0.5f;
+    static constexpr float CUSHION_KEEP_HIGH = 0.2f;
     static constexpr float ARRIVAL_HEIGHT_METRES = 2.1f;
   };
 

@@ -1075,6 +1075,7 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
   using P = MatchTuning::Player;
   using Pitch = MatchTuning::Pitch;
   constexpr float PI = std::numbers::pi_v<float>;
+  planHeaderTurnBinturong();
   // The movers are gathered into arrays and advanced with straight-line code
   // (every branch of stepKinematicsBinturong() evaluated and selected per
   // player), so the compiler can process several players at once. The
@@ -1471,8 +1472,9 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     // leg: waypoints stand still.
     const Vector2F movingTarget =
         walking || routed ? Vector2F{0.0f, 0.0f} : player.targetVelocity;
-    // A pass he holds turns his body to it (turning to pass).
-    const std::optional<float> passFacing = turnToPassFacingBinturong(player);
+    // A pass he holds turns his body to it (turning to pass), and so does a
+    // header he means (turning to head).
+    const std::optional<float> passFacing = strikeFacingBinturong(player);
     // A player standing on his spot stays put (the common case in stoppages).
     if (offset.x * offset.x + offset.y * offset.y <=
             P::ARRIVAL_DEAD_ZONE_METRES * P::ARRIVAL_DEAD_ZONE_METRES &&
@@ -2288,7 +2290,8 @@ ContactProfile touchContactProfile(const FirstTouchKnobs& knob)
 ContactProfile MatchEngine::strikeProfileBinturong(StrikeKind kind) const
 {
   ContactProfile profile = strikeContactProfile(strikeKnobs, kind, touchKnobs);
-  profile.stretchMap = contactStretchMap;
+  // A header keeps the head's own map (strikeContactProfile).
+  if (kind != StrikeKind::HEADER) profile.stretchMap = contactStretchMap;
   return profile;
 }
 
@@ -2325,8 +2328,16 @@ ContactProfile strikeContactProfile(const StrikeKnobs& strikeKnobs,
   profile.powerBehind = knob(K::POWER_BEHIND);
   profile.referenceSpeed = knob(K::REFERENCE_SPEED);
   profile.pressureRadius = knob(K::PRESSURE_RADIUS);
-  // Where in his reach he meets it is measured as for the touch.
+  // Where in his reach he meets it is measured as for the touch; a header
+  // against the head's reach (heading technique plan step 4).
   profile.comfortGap = touchKnobs[TouchKnob::COMFORT_GAP];
+  if (kind == StrikeKind::HEADER)
+  {
+    using A = MatchTuning::Aerial;
+    profile.comfortGap = A::HEAD_COMFORT_GAP_METRES;
+    profile.stretchMap.distances = A::HEAD_STRETCH_DISTANCES;
+    profile.stretchMap.values = A::HEAD_STRETCH_VALUES;
+  }
   // Tiredness, and his weaker foot when he uses it, as for every strike.
   profile.fatigueErrorGain = MatchTuning::Fatigue::SPENT_TECHNIQUE_ERROR;
   profile.weakerFootErrorGain = MatchTuning::Player::WEAKER_FOOT_ERROR_GAIN;
@@ -2386,15 +2397,18 @@ ContactAssessment MatchEngine::assessStrikeBinturong(
 }
 
 ContactResult MatchEngine::contactBinturong(const MatchPlayer& player,
-                                            const ContactRequest& request,
+                                            const ContactRequest& asked,
                                             const TouchMoment& moment)
 {
   // Every contact the same way (unified kick plan step 1): the kind's
   // profile, assessed where he meets the ball, carried out with his skill
-  // for it, and reported.
+  // for it, and reported. A header within what his head can do there.
+  ContactRequest request = asked;
   const bool strike = request.kind == ContactRequest::Kind::STRIKE;
   ContactProfile profile =
       strike ? strikeProfileBinturong(request.strike) : touchProfileBinturong();
+  if (strike && request.strike == StrikeKind::HEADER)
+    headerLimitsBinturong(player, moment, request, profile);
   if (request.precision != 1.0f)
   {
     profile.angleJitter *= request.precision;
@@ -2405,12 +2419,17 @@ ContactResult MatchEngine::contactBinturong(const MatchPlayer& player,
   const float pressure = request.pressure.value_or(contactPressure(
       nearestOpponentDistance(player), profile.pressureRadius));
   // A strike asks for some of his power for the kind, less what turning a
-  // moving ball costs him (a touch: none; a throw: its own limit).
+  // moving ball costs him (a touch: none; a throw: its own limit; a header:
+  // the fastest the ball can come off his head that way, before his body's
+  // angle, which the condition takes off as for a foot).
   const float powerCapacity =
       !strike                        ? 0.0f
       : request.powerCapacity > 0.0f ? request.powerCapacity
       : request.strike == StrikeKind::THROW
           ? strikePowerBinturong(player, request.strike)
+      : request.strike == StrikeKind::HEADER
+          ? headerCeilingBinturong(player, request.aim,
+                                   std::atan2(request.lift, request.speed), false)
           : incomingPowerBudgetBinturong(
                 strikePowerBinturong(player, request.strike), request.aim);
   ContactResult result;
@@ -2418,6 +2437,14 @@ ContactResult MatchEngine::contactBinturong(const MatchPlayer& player,
       assessContactBinturong(player, profile, request.aim, request.speed,
                              request.lift, moment, request.surprise, pressure,
                              request.spin, request.spinCapacity, powerCapacity);
+  // The least it can leave him with: the nearer he asks to it, the harder
+  // the weight job (heading technique plan step 6).
+  if (request.paceFloor > 0.0f)
+    result.contact.weightDifficulty = std::max(
+        result.contact.weightDifficulty,
+        std::clamp(1.0f - (result.contact.intendedSpeed - request.paceFloor) /
+                              request.paceFloor,
+                   0.0f, 1.0f));
   // A touch on receiving the ball is his First Touch; a touch on his own
   // ball, dribbling it, is his Dribbling.
   result.skill = strike ? strikeSkillBinturong(player, request.strike)
@@ -2426,6 +2453,26 @@ ContactResult MatchEngine::contactBinturong(const MatchPlayer& player,
                      : player.derivedStat(DerivedStat::FIRST_TOUCH);
   result.outcome =
       carryOutContactBinturong(player, profile, result.contact, result.skill);
+  // ...and the error can't take it below that: a light miss comes off at it.
+  if (ContactOutcome& outcome = result.outcome;
+      request.paceFloor > 0.0f && outcome.actualSpeed < request.paceFloor)
+  {
+    const float scale =
+        outcome.actualSpeed > EPSILON ? request.paceFloor / outcome.actualSpeed : 0.0f;
+    if (scale > 0.0f)
+    {
+      outcome.velocity = {outcome.velocity.x * scale, outcome.velocity.y * scale};
+      outcome.verticalSpeed *= scale;
+    }
+    else
+    {
+      const float along = request.paceFloor * std::cos(outcome.achievedElevation);
+      outcome.velocity = {request.aim.x * along, request.aim.y * along};
+      outcome.verticalSpeed =
+          request.paceFloor * std::sin(outcome.achievedElevation);
+    }
+    outcome.actualSpeed = request.paceFloor;
+  }
   reportContactBinturong(player, request, result);
   return result;
 }
@@ -2516,10 +2563,8 @@ float MatchEngine::strikeSkillBinturong(const MatchPlayer& striker,
     case StrikeKind::TOE_POKE:
       return striker.shooting;
     case StrikeKind::HEADER:
-      // Heading well is as much about strength and timing as finishing.
-      return striker.shooting *
-                 (1.0f - MatchTuning::Aerial::HEADING_PHYSICAL_SHARE) +
-             striker.physicality * MatchTuning::Aerial::HEADING_PHYSICAL_SHARE;
+      // Heading (heading technique plan step 5).
+      return striker.derivedStat(DerivedStat::HEADING);
     case StrikeKind::CLEARANCE:
       return striker.defending;
     case StrikeKind::GROUND_PASS:
@@ -2578,14 +2623,15 @@ MatchEngine::Kick MatchEngine::strikeContactBinturong(
 }
 
 float MatchEngine::strikePowerBinturong(const MatchPlayer& striker,
-                                        StrikeKind kind)
+                                        StrikeKind kind) const
 {
   using Sh = MatchTuning::Shooting;
   switch (kind)
   {
     case StrikeKind::SHOT:
-    case StrikeKind::HEADER:
       return shotPowerBinturong(striker);
+    case StrikeKind::HEADER:
+      return headerPowerBinturong(striker);
     // A shot type: the share of his shot power its part of the foot uses.
     case StrikeKind::PLACED_SHOT:
       return shotPowerBinturong(striker) * Sh::PLACED_FOOT_SHARE;
@@ -3052,7 +3098,7 @@ ContactOutcome MatchEngine::carryOutContactBinturong(
                    (profile.angleMissAbsoluteBase +
                     contact.angleDifficulty * profile.angleMissAbsoluteRange) *
                    (upRoll < profile.upShare ? 1.0f : -1.0f);
-    elevation = std::clamp(elevation, 0.0f, 1.4f);
+    elevation = std::clamp(elevation, profile.lowestElevation, 1.4f);
   }
   else if (profile.verticalShare > 0.0f)
   {
@@ -3066,7 +3112,7 @@ ContactOutcome MatchEngine::carryOutContactBinturong(
     if (angleJob.failed)
       elevation += share * std::abs(absoluteMiss) *
                    (upRoll < profile.upShare ? 1.0f : -1.0f);
-    elevation = std::clamp(elevation, 0.0f, 1.4f);
+    elevation = std::clamp(elevation, profile.lowestElevation, 1.4f);
   }
 
   // The vertical angle job (profiles that carry it out): the turn in
@@ -3788,14 +3834,27 @@ MatchEngine::ShotStrike MatchEngine::strikeShotBodyBinturong(
       meant = {meant.side * share, meant.top * share};
     }
   }
-  // A header keeps the old shot's pace over the ground, scaled, with its
-  // lift on top.
-  float speed = (Sh::BASE_BALL_SPEED + shooter.shooting * Sh::SHOOTING_SPEED_BONUS +
-                 shooter.physicality * Sh::POWER_SPEED_BONUS) *
-                MatchTuning::Strike::Shot::MEAN_SPEED_SHARE *
-                MatchTuning::Aerial::HEADER_SPEED_SCALE * powerScale;
-  float up = loftVerticalSpeed(metres, speed, startHeight, aimZ);
-  if (!header)
+  float speed = 0.0f;
+  float up = 0.0f;
+  if (header)
+  {
+    // A share of the fastest he can head it on the shot's line (heading
+    // technique plan step 3; play mode's power scales the share), as its
+    // whole launch speed: a few rounds settle the lift and the pace.
+    const float share =
+        std::min(MatchTuning::Aerial::HEADER_SHOT_SHARE * powerScale, 1.0f);
+    const Vector2F toGoal = metricDirection(origin, aimPoint);
+    speed = share * headerCeilingBinturong(shooter, toGoal, 0.0f);
+    for (int round = 0; round < 4; ++round)
+    {
+      up = loftVerticalSpeed(metres, speed, startHeight, aimZ);
+      const float launch =
+          share * headerCeilingBinturong(shooter, toGoal, std::atan2(up, speed));
+      speed = std::sqrt(std::max(launch * launch - up * up, 0.25f * launch * launch));
+    }
+    up = loftVerticalSpeed(metres, speed, startHeight, aimZ);
+  }
+  else
   {
     // His power at this moment (less what turning a moving ball costs him)
     // and the share of it his part of the foot can use.
@@ -4171,8 +4230,322 @@ float MatchEngine::clearanceSpeedBinturong(const MatchPlayer& /*defender*/)
 
 float MatchEngine::headerClearanceSpeedBinturong(const MatchPlayer& /*header*/)
 {
-  return MatchTuning::Aerial::HEADER_CLEARANCE_SPEED *
-         randomFloat(MatchTuning::Aerial::MIN_CLEARANCE_SHARE, 1.0f);
+  // Not used for its pace: a clearing header goes as hard as he can head it
+  // (headerPaceBinturong).
+  return MatchTuning::Aerial::HEADER_CLEARANCE_SPEED;
+}
+
+float MatchEngine::headerPowerBinturong(const MatchPlayer& header) const
+{
+  // The pace he gives a ball that arrives with almost no pace of its own
+  // (heading technique plan step 3): by Heading alone, 8 m/s at 1 to
+  // 17 m/s at 99, in a straight line. Met with the top of his head, a
+  // share of it (step 5).
+  using A = MatchTuning::Aerial;
+  const float share = (header.derivedStat(DerivedStat::HEADING) - STAT_1_RATING) /
+                      (STAT_99_RATING - STAT_1_RATING);
+  const float power = std::max(
+      A::HEADER_POWER_LOW + (A::HEADER_POWER_HIGH - A::HEADER_POWER_LOW) * share,
+      0.0f);
+  return metWithTopOfHeadBinturong() ? power * A::TOP_POWER_SHARE : power;
+}
+
+bool MatchEngine::metWithTopOfHeadBinturong() const
+{
+  // Only while a header met in the sweep is being played.
+  return strikeAt && lastHeadPart == HeadPart::TOP;
+}
+
+void MatchEngine::headerLimitsBinturong(const MatchPlayer& header,
+                                        const TouchMoment& moment,
+                                        ContactRequest& request,
+                                        ContactProfile& profile) const
+{
+  // What his head can do with the ball where he meets it (heading
+  // technique plan step 5); beyond it, he does the nearest he can.
+  using A = MatchTuning::Aerial;
+  const float pace = std::hypot(request.speed, request.lift);
+  if (metWithTopOfHeadBinturong())
+  {
+    // The top of his head glances it on: not far off the way it was going,
+    // and flat or upward.
+    const float level = length(ball.velocity);
+    if (level > MatchTuning::Ball::STOP_SPEED)
+    {
+      const Vector2F onward{ball.velocity.x / level, ball.velocity.y / level};
+      const float turn =
+          std::clamp(std::atan2(onward.x * request.aim.y - onward.y * request.aim.x,
+                                onward.x * request.aim.x + onward.y * request.aim.y),
+                     -A::TOP_MAX_TURN, A::TOP_MAX_TURN);
+      request.aim = {onward.x * std::cos(turn) - onward.y * std::sin(turn),
+                     onward.x * std::sin(turn) + onward.y * std::cos(turn)};
+    }
+    profile.lowestElevation = 0.0f;
+  }
+  else
+  {
+    // His forehead sends it down only from above it: as steeply as his
+    // forehead, at the top of his jump, can get above the ball's centre,
+    // against its radius (it meets the upper half of the ball).
+    const float above =
+        jumpingReachBinturong(header) - A::HEAD_OFFSET_METRES - moment.height;
+    profile.lowestElevation = -std::asin(std::clamp(
+        above / MatchTuning::Units::BALL_RADIUS_METRES, 0.0f, 1.0f));
+  }
+  const float elevation =
+      std::max(std::atan2(request.lift, request.speed), profile.lowestElevation);
+  request.speed = pace * std::cos(elevation);
+  request.lift = pace * std::sin(elevation);
+}
+
+float MatchEngine::headerFloorBinturong(const MatchPlayer& header, Vector2F aim,
+                                        float elevation) const
+{
+  // The least pace the ball can leave his head with along `aim` at
+  // `elevation` (heading technique plan step 6). His head pushes along one
+  // line (headerCeilingBinturong): across it the ball keeps its pace, and
+  // along it he can take off only so much of the pace it hits him with:
+  // at least a share comes back off it, 50% at Heading 1 to 20% at 99.
+  using A = MatchTuning::Aerial;
+  const float rating = (header.derivedStat(DerivedStat::HEADING) - STAT_1_RATING) /
+                       (STAT_99_RATING - STAT_1_RATING);
+  const float keep =
+      A::CUSHION_KEEP_LOW + (A::CUSHION_KEEP_HIGH - A::CUSHION_KEEP_LOW) * rating;
+  const float c = std::cos(elevation);
+  const std::array<float, 3> way{aim.x * c, aim.y * c, std::sin(elevation)};
+  const std::array<float, 3> in{ball.velocity.x, ball.velocity.y, ball.velocityZ};
+  // Whether leaving at `pace` that way keeps enough of the pace into his
+  // head: the push from the incoming velocity to it is along his line.
+  const auto possible = [&](float pace)
+  {
+    std::array<float, 3> push{};
+    float size = 0.0f;
+    for (std::size_t axis = 0; axis < 3; ++axis)
+    {
+      push[axis] = pace * way[axis] - in[axis];
+      size += push[axis] * push[axis];
+    }
+    size = std::sqrt(size);
+    if (size < 1.0e-4f) return true;
+    float into = 0.0f;
+    float out = 0.0f;
+    for (std::size_t axis = 0; axis < 3; ++axis)
+    {
+      into -= in[axis] * push[axis] / size;
+      out += pace * way[axis] * push[axis] / size;
+    }
+    return out >= keep * into;
+  };
+  float low = 0.0f;
+  float high = std::hypot(in[0], in[1], in[2]) + 1.0f;
+  if (possible(low)) return 0.0f;
+  for (int round = 0; round < 30; ++round)
+  {
+    const float middle = 0.5f * (low + high);
+    (possible(middle) ? high : low) = middle;
+  }
+  return high;
+}
+
+void MatchEngine::cushionHeaderBinturong(MatchPlayer& header)
+{
+  // A cushioned header (heading technique plan step 6): as softly as his
+  // head can send it. The least pace comes straight back along the line it
+  // came on (all its pace into his head), so he heads it that way, within
+  // what his head can do there (headerLimitsBinturong), at the least it can
+  // leave with; it drops in front of him. He owns it from here, as after a
+  // first touch, and collects it once it is down at his feet. A
+  // team-mate's ball counts as completed when he collects it.
+  const bool receivingPass = ball.isPass && ball.passByHome == header.isHomeTeam;
+  const Player* passer = ball.lastPossessor;
+  if (!receivingPass) recordPassCompletion(header);
+  const TouchMoment moment = strikeMomentBinturong(header);
+  ContactRequest request;
+  request.kind = ContactRequest::Kind::STRIKE;
+  request.strike = StrikeKind::HEADER;
+  const float level = length(ball.velocity);
+  const Vector2F facing = normalized(
+      {std::cos(header.facingAngle) * MatchTuning::Pitch::LENGTH_METRES,
+       std::sin(header.facingAngle) * MatchTuning::Pitch::WIDTH_METRES});
+  request.aim = level > MatchTuning::Ball::STOP_SPEED
+                    ? Vector2F{-ball.velocity.x / level, -ball.velocity.y / level}
+                    : facing;
+  request.speed = level;
+  request.lift = -ball.velocityZ;
+  ContactProfile limits = strikeProfileBinturong(StrikeKind::HEADER);
+  headerLimitsBinturong(header, moment, request, limits);
+  const float elevation = std::atan2(request.lift, request.speed);
+  request.paceFloor = headerFloorBinturong(header, request.aim, elevation);
+  request.speed = request.paceFloor * std::cos(elevation);
+  request.lift = request.paceFloor * std::sin(elevation);
+  const ContactResult result = contactBinturong(header, request, moment);
+
+  setPossession(header);
+  sendBallOff(header,
+              {std::clamp(moment.contactPoint.x, 0.001f, 0.999f),
+               std::clamp(moment.contactPoint.y, 0.001f, 0.999f)},
+              moment.height / MatchTuning::Units::BALL_Z_METRES,
+              result.outcome.velocity, result.outcome.verticalSpeed, BallSpin{},
+              0.0f);
+  ball.inTouch = true;
+  ball.touchCollected = false;
+  ball.touchHeaded = true;
+  ball.touchPasser = receivingPass ? passer : nullptr;
+  ball.touchContactGap = moment.gap;
+  ball.touchContactHeight = moment.height;
+  ball.touchLaunchSpeed = result.outcome.actualSpeed;
+  const float gap = distance(header.position, ball.position);
+  ball.touchGap = gap;
+  ball.touchPeakGap = gap;
+  ball.dribbleExposure = gap;
+  ball.dribbleTouchLength = std::max(gap, MatchTuning::Dribble::MAX_TOUCH_METRES);
+}
+
+float MatchEngine::headerCeilingBinturong(const MatchPlayer& header,
+                                          Vector2F aim, float elevation,
+                                          bool byAngle) const
+{
+  // The fastest the ball can leave his head along `aim` (metric unit, seen
+  // from above) at `elevation` (rad, + up), as a ball bounces off a head
+  // (heading technique plan step 3): his head pushes only along one line,
+  // straight out of his forehead, which he angles. Across that line the
+  // ball keeps the pace it came with; along it, a share of the pace it hits
+  // him with springs back, and his power adds to that. So the ball leaves
+  // with its incoming velocity plus (power + (1 + spring) x pace into his
+  // head) along the line. With `byAngle`, his power is his body's share of
+  // it for a header that far off the way he faces.
+  using A = MatchTuning::Aerial;
+  float power = headerPowerBinturong(header);
+  if (byAngle)
+  {
+    const ContactProfile profile = strikeProfileBinturong(StrikeKind::HEADER);
+    const Vector2F facing = normalized(
+        {std::cos(header.facingAngle) * MatchTuning::Pitch::LENGTH_METRES,
+         std::sin(header.facingAngle) * MatchTuning::Pitch::WIDTH_METRES});
+    const float degrees =
+        std::acos(std::clamp(aim.x * facing.x + aim.y * facing.y, -1.0f, 1.0f)) *
+        180.0f / std::numbers::pi_v<float>;
+    power *= powerByAngleShare(degrees, profile.powerInwardSquare,
+                               profile.powerBehind);
+  }
+  const float spring = A::HEADER_SPRING;
+  const float c = std::cos(elevation);
+  const std::array<float, 3> way{aim.x * c, aim.y * c, std::sin(elevation)};
+  const std::array<float, 3> in{ball.velocity.x, ball.velocity.y, ball.velocityZ};
+  // The power a launch at `pace` along the way asks of him: the push along
+  // the line from the incoming velocity to the one he means, less what
+  // springs back.
+  const auto asked = [&](float pace)
+  {
+    std::array<float, 3> push{};
+    float size = 0.0f;
+    float into = 0.0f;
+    for (std::size_t axis = 0; axis < 3; ++axis)
+    {
+      push[axis] = pace * way[axis] - in[axis];
+      size += push[axis] * push[axis];
+    }
+    size = std::sqrt(size);
+    if (size < EPSILON) return 0.0f;
+    for (std::size_t axis = 0; axis < 3; ++axis)
+      into += in[axis] * push[axis] / size;
+    return size + (1.0f + spring) * into;
+  };
+  const float incoming = std::hypot(in[0], in[1], in[2]);
+  float low = 0.0f;
+  float high = power + 2.0f * incoming + 1.0f;
+  if (asked(high) <= power) return high;
+  for (int round = 0; round < 30; ++round)
+  {
+    const float middle = 0.5f * (low + high);
+    (asked(middle) <= power ? low : high) = middle;
+  }
+  return low;
+}
+
+std::pair<float, float> MatchEngine::headerPaceBinturong(const MatchPlayer& header,
+                                                         HeaderPace purpose,
+                                                         Vector2F target,
+                                                         float speed,
+                                                         float lift) const
+{
+  // The pace of a header, over the ground and upward (m/s), from the body
+  // (heading technique plan step 3): to a spot, weighted to land on it at
+  // a set elevation, no harder than he can head it that way (beyond, at his
+  // limit, short); a clearance as hard as he can at its elevation; anything
+  // else as hard as he can, at the elevation of `speed` and `lift`.
+  using A = MatchTuning::Aerial;
+  const Vector2F aim = metricDirection(ball.position, target);
+  const float elevation = purpose == HeaderPace::TO_SPOT ? A::HEADER_PASS_ELEVATION
+                          : purpose == HeaderPace::CLEAR ? A::HEADER_CLEAR_ELEVATION
+                                                         : std::atan2(lift, speed);
+  float pace = headerCeilingBinturong(header, aim, elevation);
+  if (purpose == HeaderPace::TO_SPOT)
+    pace = std::min(pace, landingPaceBinturong(distance(ball.position, target),
+                                               elevation,
+                                               ball.z * MatchTuning::Units::BALL_Z_METRES));
+  return {pace * std::cos(elevation), pace * std::sin(elevation)};
+}
+
+float MatchEngine::landingPaceBinturong(float metres, float elevation,
+                                        float startHeight) const
+{
+  // The launch pace at `elevation` (rad) from `startHeight` (m) that first
+  // lands `metres` away, in the match's own flight (bisection: harder, further).
+  constexpr float DT = MatchTuning::Timing::FIXED_STEP_SECONDS /
+                       static_cast<float>(MatchTuning::Timing::BALL_SUBSTEPS);
+  const auto landing = [&](float pace)
+  {
+    FlightState flight{pace * std::cos(elevation), pace * std::sin(elevation),
+                       startHeight, false, {}};
+    float gone = 0.0f;
+    for (float time = 0.0f; time < MatchTuning::Ball::MAX_FLIGHT_SECONDS &&
+                            flight.horizontalSpeed > 0.0f && !flight.bounced;
+         time += DT)
+      gone += stepFlight(flight, DT);
+    return gone;
+  };
+  float low = 0.0f;
+  float high = 60.0f;
+  for (int round = 0; round < 30; ++round)
+  {
+    const float middle = 0.5f * (low + high);
+    (landing(middle) < metres ? low : high) = middle;
+  }
+  return high;
+}
+
+float MatchEngine::jumpingReachBinturong(const MatchPlayer& player) const
+{
+  return derivedPhysicalValue(DerivedStat::JUMPING_REACH,
+                              player.derivedStat(DerivedStat::JUMPING_REACH));
+}
+
+std::optional<HeadPart> MatchEngine::headMeetBinturong(const MatchPlayer& player,
+                                                       Vector2F toBall, float gap,
+                                                       float heightMetres) const
+{
+  // Heading technique plan step 4: within a lean of the neck of his centre,
+  // from the chest ceiling up to the top of his head at the top of his jump.
+  using A = MatchTuning::Aerial;
+  const float top = jumpingReachBinturong(player);
+  if (gap > A::HEAD_REACH_METRES || heightMetres < A::CONTROL_CEILING_METRES ||
+      heightMetres > top)
+    return std::nullopt;
+  const Vector2F facing = normalized(
+      {std::cos(player.facingAngle) * MatchTuning::Pitch::LENGTH_METRES,
+       std::sin(player.facingAngle) * MatchTuning::Pitch::WIDTH_METRES});
+  // Beside or behind him the forehead can't get to it: only the top of his
+  // head, rising to a ball at or above it.
+  if (inTouchDeadZone(facing, toBall, gap, A::HEAD_COMFORT_GAP_METRES,
+                      A::HEAD_DEAD_ZONE_DEGREES))
+  {
+    if (heightMetres < player.heightMetres) return std::nullopt;
+    return HeadPart::TOP;
+  }
+  // Above his forehead's reach, the top of his head.
+  return heightMetres > top - A::HEAD_OFFSET_METRES ? HeadPart::TOP
+                                                    : HeadPart::FOREHEAD;
 }
 
 Vector2F MatchEngine::knockDownPointBinturong(const MatchPlayer& /*header*/,
@@ -4416,7 +4789,7 @@ bool MatchEngine::ballBehindReachBinturong(const MatchPlayer& player,
                                player.velocity.y * player.velocity.y;
     const bool running = speedSquared > P::MOVEMENT_FACING_THRESHOLD *
                                             P::MOVEMENT_FACING_THRESHOLD;
-    const std::optional<float> passFacing = turnToPassFacingBinturong(player);
+    const std::optional<float> passFacing = strikeFacingBinturong(player);
     if (passFacing || player.facingRequested || running)
     {
       const float target =
@@ -5050,6 +5423,89 @@ std::optional<float> MatchEngine::turnToPassFacingBinturong(
   }
   return std::atan2(line.y / MatchTuning::Pitch::WIDTH_METRES,
                     line.x / MatchTuning::Pitch::LENGTH_METRES);
+}
+
+void MatchEngine::planHeaderTurnBinturong()
+{
+  // Turning to head (heading technique plan step 7): a player who knows the
+  // header he means before the ball comes down to him turns his body to it,
+  // as far as his time allows, so he strikes it nearer straight ahead. He
+  // knows it when a drill forces it, or when a team-mate's high ball is
+  // played to him and his brain's choice is a headed shot (towards the
+  // goal) or a cushion (facing the ball, to send it straight back). A
+  // knock-down's or a clearance's aim is chosen only as he meets it.
+  headerTurn.reset();
+  if (state != MatchState::PLAYING || ball.possessedBy || ball.isShot) return;
+  if (ball.z * MatchTuning::Units::BALL_Z_METRES <=
+          MatchTuning::Aerial::CONTROL_CEILING_METRES &&
+      ball.velocityZ <= 0.0f)
+    return;
+  const MatchPlayer* header = nullptr;
+  std::optional<Vector2F> aimAt;
+  bool faceBall = false;
+  if (forcedHeader)
+  {
+    if (!forcedHeader->knownEarly) return;
+    for (const MatchPlayer& player : players)
+      if (player.player && player.player->getId() == forcedHeader->player)
+        header = &player;
+    if (!header) return;
+    switch (forcedHeader->aim)
+    {
+      case ForcedHeaderAim::SPOT:
+        aimAt = forcedHeader->spot;
+        break;
+      case ForcedHeaderAim::GOAL:
+        aimAt = Vector2F{header->isHomeTeam ? 1.0f : 0.0f,
+                         MatchTuning::Pitch::CENTRE +
+                             forcedHeader->goalAim.x / MatchTuning::Pitch::WIDTH_METRES};
+        break;
+      case ForcedHeaderAim::KEEP:
+        faceBall = true;
+        break;
+    }
+  }
+  else if (ball.isPass && ball.intendedReceiver)
+  {
+    MatchPlayer* receiver = findMatchPlayer(ball.intendedReceiver);
+    if (!receiver || receiver->isHomeTeam != ball.passByHome ||
+        getBody(receiver->isHomeTeam) != BodyId::BINTURONG)
+      return;
+    header = receiver;
+    switch (chooseHeaderAttempt(*receiver, true))
+    {
+      case HeaderAttempt::SHOOT:
+        aimAt = Vector2F{receiver->isHomeTeam ? 1.0f : 0.0f, MatchTuning::Pitch::CENTRE};
+        break;
+      case HeaderAttempt::CUSHION:
+        faceBall = true;
+        break;
+      case HeaderAttempt::PLAY:
+        return;
+    }
+  }
+  if (!header || !active(*header)) return;
+  Vector2F way{};
+  if (faceBall)
+  {
+    const float level = length(ball.velocity);
+    if (level <= MatchTuning::Ball::STOP_SPEED) return;
+    way = {-ball.velocity.x / level, -ball.velocity.y / level};
+  }
+  else
+  {
+    way = unitOf(toMetres({aimAt->x - header->position.x, aimAt->y - header->position.y}));
+    if (way.x == 0.0f && way.y == 0.0f) return;
+  }
+  headerTurn = HeaderTurn{header, std::atan2(way.y / MatchTuning::Pitch::WIDTH_METRES,
+                                             way.x / MatchTuning::Pitch::LENGTH_METRES)};
+}
+
+std::optional<float> MatchEngine::strikeFacingBinturong(const MatchPlayer& player) const
+{
+  if (const std::optional<float> pass = turnToPassFacingBinturong(player)) return pass;
+  if (headerTurn && headerTurn->player == &player) return headerTurn->facing;
+  return std::nullopt;
 }
 
 bool MatchEngine::turnedToPassBinturong(const MatchPlayer& player) const

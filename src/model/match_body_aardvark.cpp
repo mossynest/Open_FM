@@ -959,6 +959,13 @@ float MatchEngine::headerClearanceSpeedAardvark(const MatchPlayer& /*header*/)
          randomFloat(MatchTuning::Aerial::MIN_CLEARANCE_SHARE, 1.0f);
 }
 
+std::pair<float, float> MatchEngine::headerPaceAardvark(
+    const MatchPlayer& /*header*/, HeaderPace /*purpose*/, Vector2F /*target*/,
+    float speed, float lift) const
+{
+  return {speed, lift};
+}
+
 Vector2F MatchEngine::knockDownPointAardvark(const MatchPlayer& /*header*/,
                                              Vector2F aim)
 {

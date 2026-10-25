@@ -15,7 +15,8 @@
 //    are the BaseAttribute a recipe blends.
 // 2. FUTURE game stats (DerivedLayer::FUTURE_GAME_STAT): stats the game is
 //    meant to carry one day as stats of their own (shown, trained, stored).
-//    Until it does, each is derived here from current stats by a recipe.
+//    Until it does, each is derived here from current stats by a recipe
+//    (and, for a stat built on his body, his height).
 //    When the game carries one, the handshake loads it in place of its
 //    recipe, and nothing downstream changes: the engine reads the same
 //    slot.
@@ -56,6 +57,8 @@ enum class DerivedStat : std::uint8_t
   FIRST_TOUCH,
   ACCELERATION,
   TECHNIQUE,
+  HEADING,
+  JUMPING_REACH,
   // Match-engine-only stats.
   ENDURANCE,
   BURST_CAPACITY,
@@ -63,7 +66,7 @@ enum class DerivedStat : std::uint8_t
   RECOVERY_RATE,
   FAST_RECOVERY,
 };
-inline constexpr std::size_t DERIVED_STAT_COUNT = 9;
+inline constexpr std::size_t DERIVED_STAT_COUNT = 11;
 
 enum class DerivedLayer : std::uint8_t
 {
@@ -95,6 +98,17 @@ struct DerivedRecipe
   /** Weights on future game stats (DerivedStat ids); a future stat's own
    * recipe leaves these 0. */
   std::array<float, DERIVED_STAT_COUNT> futureWeights{};
+  /** A stat in metres built on his height (Jumping reach): the blend rates
+   * only the part on top of his height, worth heightPartLow metres at
+   * STAT_1_RATING to heightPartHigh at STAT_99_RATING (a straight line);
+   * his height is added, and the total is rated on the stat's own line.
+   * Both 0: not built on his height. */
+  float heightPartLow = 0.0f;
+  float heightPartHigh = 0.0f;
+  [[nodiscard]] constexpr bool onHeight() const
+  {
+    return heightPartLow != 0.0f || heightPartHigh != 0.0f;
+  }
 };
 using DerivedRecipes = std::array<DerivedRecipe, DERIVED_STAT_COUNT>;
 
@@ -154,6 +168,18 @@ inline constexpr std::array<DerivedStatInfo, DERIVED_STAT_COUNT> DERIVED_STATS{{
      "Clean striking of the ball with either foot: how little his weaker "
      "foot costs him.",
      "", 0.0f, 0.0f, 0.0f, 0.0f},
+    {DerivedLayer::FUTURE_GAME_STAT, "Heading", "Hea",
+     "Making a header go where he means it: the pace he puts on it, how "
+     "accurately he places it, and how much pace he can take off it. How "
+     "high he gets is Jumping reach.",
+     "", 0.0f, 0.0f, 0.0f, 0.0f},
+    // The heading technique plan (step 1): 1 is a 1.60 m man with a poor
+    // jump (0.25 m), 99 a 2.00 m man with an elite leap (0.70 m; Ronaldo's
+    // header against Sampdoria in 2019 was about 0.7 m off the ground).
+    {DerivedLayer::FUTURE_GAME_STAT, "Jumping reach", "Jmp",
+     "How high he can get the top of his head at the peak of his jump: his "
+     "height plus his jump.",
+     "m", 1.85f, 2.70f, 1.80f, 2.75f, STAT_1_RATING, STAT_99_RATING},
     // ---- Match-engine-only stats ------------------------------------------
     // The fatigue plan (4.1): from the research ranges, a little wider.
     {DerivedLayer::MATCH_ENGINE_ONLY, "Endurance", "End",
@@ -231,6 +257,28 @@ constexpr DerivedRecipe techniqueRecipe()
   return recipe;
 }
 
+constexpr DerivedRecipe headingRecipe()
+{
+  // A stand-in until the game carries Heading: strikers and centre-backs
+  // both head the ball well.
+  DerivedRecipe recipe;
+  recipe.weights[static_cast<std::size_t>(BaseAttribute::SHOOTING)] = 0.5f;
+  recipe.weights[static_cast<std::size_t>(BaseAttribute::DEFENDING)] = 0.5f;
+  return recipe;
+}
+
+constexpr DerivedRecipe jumpingReachRecipe()
+{
+  // His height plus his jump. The jump is a stand-in blend of Pace (spring)
+  // and Physicality until the game carries a jumping stat.
+  DerivedRecipe recipe;
+  recipe.weights[static_cast<std::size_t>(BaseAttribute::PACE)] = 0.5f;
+  recipe.weights[static_cast<std::size_t>(BaseAttribute::PHYSICALITY)] = 0.5f;
+  recipe.heightPartLow = MatchTuning::Aerial::JUMP_LOW_METRES;
+  recipe.heightPartHigh = MatchTuning::Aerial::JUMP_HIGH_METRES;
+  return recipe;
+}
+
 constexpr DerivedRecipe burstRecipe()
 {
   // D' grows with the speed reserve above critical speed, so half Stamina,
@@ -245,14 +293,17 @@ constexpr DerivedRecipe burstRecipe()
 
 /** The recipes a handshake uses unless it has its own (the Aardvark's).
  * Future stats: agility and acceleration blend Pace and Physicality, first
- * touch Dribbling and Passing, technique Passing, Dribbling and Shooting.
- * Match-engine-only: the endurance stats echo Stamina, except burst
- * capacity (half Stamina, half Acceleration). */
+ * touch Dribbling and Passing, technique Passing, Dribbling and Shooting,
+ * heading Shooting and Defending, jumping reach his height plus a jump from
+ * Pace and Physicality. Match-engine-only: the endurance stats echo
+ * Stamina, except burst capacity (half Stamina, half Acceleration). */
 inline constexpr DerivedRecipes DEFAULT_DERIVED_RECIPES{{
     DerivedStats::agilityRecipe(),
     DerivedStats::firstTouchRecipe(),
     DerivedStats::accelerationRecipe(),
     DerivedStats::techniqueRecipe(),
+    DerivedStats::headingRecipe(),
+    DerivedStats::jumpingReachRecipe(),
     DerivedStats::only(BaseAttribute::STAMINA),
     DerivedStats::burstRecipe(),
     DerivedStats::only(BaseAttribute::STAMINA),
@@ -280,4 +331,25 @@ inline float derivedPhysicalValue(DerivedStat stat, float rating)
       (rating - info.lowRating) / (info.highRating - info.lowRating);
   const float value = info.lowValue + (info.highValue - info.lowValue) * share;
   return std::clamp(value, info.minValue, info.maxValue);
+}
+
+/** The rating of a physical value (stats with a unit): the inverse of
+ * derivedPhysicalValue's line, unclamped. */
+inline float derivedRatingOf(DerivedStat stat, float value)
+{
+  const DerivedStatInfo& info = derivedStatInfo(stat);
+  const float share = (value - info.lowValue) / (info.highValue - info.lowValue);
+  return info.lowRating + (info.highRating - info.lowRating) * share;
+}
+
+/** A stat built on his height (DerivedRecipe::onHeight): the rating of his
+ * height plus the part `blend` rates, unclamped. */
+inline float derivedRatingOnHeight(DerivedStat stat, const DerivedRecipe& recipe,
+                                   float blend, float heightMetres)
+{
+  const float share =
+      (blend - STAT_1_RATING) / (STAT_99_RATING - STAT_1_RATING);
+  const float part = recipe.heightPartLow +
+                     (recipe.heightPartHigh - recipe.heightPartLow) * share;
+  return derivedRatingOf(stat, heightMetres + part);
 }
