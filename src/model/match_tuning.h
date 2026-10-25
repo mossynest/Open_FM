@@ -1175,6 +1175,11 @@ struct MatchTuning final
       static constexpr float WEAKER_FOOT = HIGH;
       static constexpr float OFF_GROUND = HIGH;
       static constexpr float PRESSURE = MEDIUM;
+      /** Where the ball comes from against his facing (1 from behind), as
+       * the touch weighs it. Only a ball coming to him has a direction:
+       * his own ball at his feet reads where it lies, in front of him. */
+      static constexpr float APPROACH_ANGLE = FirstTouch::APPROACH.angle;
+      static constexpr float APPROACH_WEIGHT = FirstTouch::APPROACH.weight;
       /** As the touch's: a body in the way (1.5 m). */
       static constexpr float PRESSURE_RADIUS_METRES = 1.5f;
       // Technique: how often each job goes wrong, and how badly.
@@ -1337,6 +1342,9 @@ struct MatchTuning final
       static constexpr float REFERENCE_SPEED = 25.0f;
       static constexpr float WEAKER_FOOT = 0.0f;
       static constexpr float OFF_GROUND = 0.0f;
+      // Passes and shots with the foot only, for now.
+      static constexpr float APPROACH_ANGLE = 0.0f;
+      static constexpr float APPROACH_WEIGHT = 0.0f;
     };
 
     /** Shot types (shooting technique plan step 5, 2026-10-24; first
@@ -1380,6 +1388,9 @@ struct MatchTuning final
       static constexpr float REFERENCE_SPEED = 35.0f;
       static constexpr float WEAKER_FOOT = MEDIUM;
       static constexpr float OFF_GROUND = MEDIUM;
+      // Passes and shots only, for now.
+      static constexpr float APPROACH_ANGLE = 0.0f;
+      static constexpr float APPROACH_WEIGHT = 0.0f;
       static constexpr float SKILL_REDUCTION = 0.9f;
       static constexpr float ANGLE_MISS_ABSOLUTE_BASE = 0.1f;
       static constexpr float ANGLE_MISS_ABSOLUTE_RANGE = 0.3f;
@@ -1401,6 +1412,8 @@ struct MatchTuning final
       static constexpr float STRETCH = 0.0f;
       static constexpr float WEAKER_FOOT = 0.0f;
       static constexpr float OFF_GROUND = 0.0f;
+      static constexpr float APPROACH_ANGLE = 0.0f;
+      static constexpr float APPROACH_WEIGHT = 0.0f;
       static constexpr float ANGLE_FAIL_BASE = 0.03f;
       static constexpr float ANGLE_FAIL_RANGE = 0.4f;
       static constexpr float ANGLE_MISS_ABSOLUTE_RANGE = 0.15f;

@@ -87,12 +87,15 @@ class ContactViewScene : public GUIScene
   void renderSideView(const ContactAssessment& contact);
   /** The stretch map, editable; it goes into every contact shown here. */
   void renderStretchMap();
+  /** The chosen contact's knobs (the sandbox's tuning), editable. */
+  void renderKnobs();
+  /** The tuning as a whole: what changed, copy, reset, the bench. */
+  void renderTuning();
+  void openBench();
 
   Inputs inputs;
   /** The chosen contact's profile, for this frame. */
   ContactProfile profile;
-  /** The stretch map being tried (starts as the game.s). */
-  StretchMap stretchMap;
   /** 0 zones, 1 angle job, 2 weight job, 3 + factor index. */
   int view = 0;
   /** What a drag on the circle moves: 0 none, 1 where he meets it, 2 where

@@ -1217,7 +1217,20 @@ void MatchEngine::simulateStepBody(float dt)
   {
     runAiSubstitutions();
     if (state == MatchState::FULL_TIME) return;
-    if (state != MatchState::KICK_OFF) updateRestartMovement(dt);
+    if (state != MatchState::KICK_OFF)
+    {
+      updateRestartMovement(dt);
+    }
+    else if (MatchPlayer* taker = restartTaker(); taker && restartLineUp)
+    {
+      // At a kick-off only the taker moves: he lines the ball up.
+      steerRestartLineUp(*taker, dt);
+      taker->targetVelocity = {0.0f, 0.0f};
+      taker->routeWaypoints = 0;
+      taker->arriveAtSpeed = false;
+      const auto slot = static_cast<std::uint8_t>(slotOf(*taker));
+      movePlayers(&slot, 1, dt, true);
+    }
     if (stateClockRuns(state)) advanceClock(dt);
     const float restartRate = matchClockRate();
     if (playHalfMinutes > 0)
@@ -1225,7 +1238,10 @@ void MatchEngine::simulateStepBody(float dt)
           std::min(setPieceTimer,
                    MatchTuning::Timing::PLAY_STOPPAGE_SECONDS * restartRate);
     setPieceTimer -= dt * restartRate;
-    if (userRestartPassRequested() || setPieceTimer <= 0.0F) completeRestart();
+    // Once his time is up (or his controller asks), and every step while
+    // he lines the ball up.
+    if (userRestartPassRequested() || setPieceTimer <= 0.0F || restartLineUp)
+      completeRestart();
   }
   else
   {
@@ -1325,6 +1341,7 @@ void MatchEngine::announceAddedTime()
 void MatchEngine::endPeriod()
 {
   restartTakerIndex.reset();
+  restartLineUp.reset();
   clearPossession();
   ball.velocity = {0.0f, 0.0f};
   ball.velocityZ = 0.0f;
@@ -1452,6 +1469,7 @@ void MatchEngine::startShootout()
   shootout.inFlight = false;
   shootout.timer = MatchTuning::Timing::SHOOTOUT_START_SECONDS;
   restartTakerIndex.reset();
+  restartLineUp.reset();
   ball = MatchBall{};
   std::array<int, 2> placed{};
   for (MatchPlayer& player : players)
@@ -1938,6 +1956,7 @@ void MatchEngine::updateRestartMovement(float dt)
     player.routeWaypoints = 0;
     player.arriveAtSpeed = false;
     player.facingRequested = false;
+    if (&player == taker && restartLineUp) steerRestartLineUp(player, dt);
     batch[batched++] = static_cast<std::uint8_t>(slot);
   }
   movePlayers(batch.data(), batched, dt, true);
@@ -5020,6 +5039,7 @@ MatchPlayer* MatchEngine::restartTaker()
 
 void MatchEngine::setRestartTaker(MatchPlayer* taker)
 {
+  restartLineUp.reset();
   if (taker)
     restartTakerIndex = slotOf(*taker);
   else
@@ -5067,7 +5087,11 @@ bool MatchEngine::userRestartPassRequested() const
 
 void MatchEngine::takeSetPiece(MatchPlayer& taker, MatchState restartState)
 {
-  const RestartPlay play = chooseRestartPlay(taker, restartState);
+  playRestart(taker, chooseRestartPlay(taker, restartState));
+}
+
+void MatchEngine::playRestart(MatchPlayer& taker, const RestartPlay& play)
+{
   switch (play.kind)
   {
     case RestartPlay::Kind::DIRECT_SHOT:
@@ -5079,6 +5103,95 @@ void MatchEngine::takeSetPiece(MatchPlayer& taker, MatchState restartState)
     case RestartPlay::Kind::HOLD:
       setPossession(taker);
       return;
+  }
+}
+
+bool MatchEngine::linesUpRestart(const MatchPlayer& taker,
+                                 MatchState restart) const
+{
+  // The dead zone is the Binturong body's, and an outfielder's (a keeper
+  // reaches all round); a throw-in is taken with the hands.
+  return getBody(taker.isHomeTeam) == BodyId::BINTURONG &&
+         !taker.isGoalkeeper && restart != MatchState::THROW_IN;
+}
+
+bool MatchEngine::lineUpRestart(MatchPlayer& taker, MatchState restart,
+                                bool userPass)
+{
+  if (!restartLineUp)
+  {
+    // His time is up: he decides what to do with it, then lines it up.
+    RestartLineUp lineUp;
+    const Vector2F goal{taker.isHomeTeam ? 1.0f : 0.0f,
+                        MatchTuning::Pitch::CENTRE};
+    if (userPass)
+    {
+      lineUp.userAction = controlInput.action;
+      controlInput.action = MatchInputAction::NONE;
+      controlActionRemaining = 0.0F;
+    }
+    else if (restart == MatchState::PENALTY)
+    {
+      lineUp.play.kind = RestartPlay::Kind::DIRECT_SHOT;
+      lineUp.line = metricDirection(ball.position, goal);
+    }
+    else
+    {
+      lineUp.play = chooseRestartPlay(taker, restart);
+      if (lineUp.play.kind == RestartPlay::Kind::PASS && lineUp.play.pass)
+        lineUp.line = metricDirection(ball.position, lineUp.play.pass->targetPoint);
+      else if (lineUp.play.kind == RestartPlay::Kind::DIRECT_SHOT)
+        lineUp.line = metricDirection(ball.position, goal);
+    }
+    restartLineUp = lineUp;
+  }
+  const RestartLineUp& lineUp = *restartLineUp;
+  // Kept, not kicked: nothing to line up.
+  if (lineUp.userAction == MatchInputAction::NONE &&
+      lineUp.play.kind == RestartPlay::Kind::HOLD)
+    return true;
+  // In his reach and out of his dead zone, as for any contact.
+  const Vector2F fromBall = toMetres({taker.position.x - ball.position.x,
+                                      taker.position.y - ball.position.y});
+  const float gap = length(fromBall);
+  if (gap > feetReach(taker) ||
+      ballBehindReach(taker, fromBall.x, fromBall.y, gap))
+    return false;
+  // Turned to his line, or out of time to turn further.
+  if (!lineUp.line ||
+      lineUp.seconds >= MatchTuning::Dribble::TURN_TO_PASS_MAX_SECONDS)
+    return true;
+  const Vector2F facing = normalized(
+      {std::cos(taker.facingAngle) * MatchTuning::Pitch::LENGTH_METRES,
+       std::sin(taker.facingAngle) * MatchTuning::Pitch::WIDTH_METRES});
+  return facing.x * lineUp.line->x + facing.y * lineUp.line->y >=
+         std::cos(MatchTuning::Dribble::TURN_TO_PASS_READY_DEGREES *
+                  std::numbers::pi_v<float> / 180.0f);
+}
+
+void MatchEngine::steerRestartLineUp(MatchPlayer& taker, float dt)
+{
+  // To just behind the ball on his line (his comfort gap from it), facing
+  // along it; with no line (a controller's pass), to the ball the way he
+  // comes at it.
+  RestartLineUp& lineUp = *restartLineUp;
+  lineUp.seconds += dt;
+  const Vector2F line =
+      lineUp.line.value_or(metricDirection(taker.position, ball.position));
+  const float back = touchKnobs[TouchKnob::COMFORT_GAP];
+  const Vector2F offset = toPitch({-line.x * back, -line.y * back});
+  taker.movementTarget = {
+      std::clamp(ball.position.x + offset.x, MatchTuning::Pitch::PLAYER_MIN_X,
+                 MatchTuning::Pitch::PLAYER_MAX_X),
+      std::clamp(ball.position.y + offset.y, MatchTuning::Pitch::PLAYER_MIN_Y,
+                 MatchTuning::Pitch::PLAYER_MAX_Y)};
+  taker.tacticalTarget = taker.movementTarget;
+  if (lineUp.line)
+  {
+    taker.facingRequested = true;
+    taker.facingRequest =
+        std::atan2(line.y / MatchTuning::Pitch::WIDTH_METRES,
+                   line.x / MatchTuning::Pitch::LENGTH_METRES);
   }
 }
 

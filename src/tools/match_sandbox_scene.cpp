@@ -39,6 +39,7 @@
 #include "tools/lab_fixtures.h"
 #include "tools/match_sandbox_drill_scene.h"
 #include "tools/match_sandbox_contact_view.h"
+#include "tools/match_sandbox_bench_scene.h"
 #include "tools/match_sandbox_measure_scene.h"
 #include "tools/match_sandbox_pickers.h"
 #include "tools/match_sandbox_test_teams.h"
@@ -236,6 +237,12 @@ void MatchSandboxScene::update(float /*deltaTime*/)
     mode = 3;
     guiView->overlayScene(std::make_unique<ContactViewScene>(guiView));
   }
+  if (drill_view == 4)
+  {
+    drill_view = 0;
+    mode = 3;
+    guiView->overlayScene(std::make_unique<TechniqueBenchScene>(guiView, true));
+  }
   if (!drill_pending.empty())
   {
     const auto lower = [](std::string text)
@@ -410,15 +417,32 @@ void MatchSandboxScene::renderVisualisers()
   ImGui::PushTextWrapPos(0.0f);
   ImGui::TextUnformatted(
       "How hard a touch or strike is across his reach (Binturong body, "
-      "default knobs): his reach circle coloured by where he meets the ball, "
-      "a ring by where it comes from and a ring by where he sends it, with "
-      "every condition's share of the angle and weight jobs.");
+      "the sandbox's tuning, editable): his reach circle coloured by where "
+      "he meets the ball, a ring by where it comes from and a ring by where "
+      "he sends it, with every condition's share of the angle and weight "
+      "jobs, and every knob of the contact.");
   ImGui::PopTextWrapPos();
   ImGui::Spacing();
   if (UI::primaryButton("Open"))
     guiView->overlayScene(std::make_unique<ContactViewScene>(guiView));
   ImGui::SameLine(0.0f, Theme::Space::L * scale);
   ImGui::TextDisabled("Also: match_sandbox --contact-view");
+  UI::endCard();
+
+  UI::beginCard("##bench_page", "Technique bench", ImVec2(0.0f, 0.0f), true);
+  ImGui::PushTextWrapPos(0.0f);
+  ImGui::TextUnformatted(
+      "A catalogue of pass and shot tests (short and long, ground, driven, "
+      "lofted, chipped and curled, still and moving balls, standing and on "
+      "the run, at angles to the body) swept over Passing or Shooting with "
+      "many seeds, run with the tuning the contact view edits: success "
+      "curves and a grid, filtered by tag, compared with the run before.");
+  ImGui::PopTextWrapPos();
+  ImGui::Spacing();
+  if (UI::primaryButton("Open##bench"))
+    guiView->overlayScene(std::make_unique<TechniqueBenchScene>(guiView));
+  ImGui::SameLine(0.0f, Theme::Space::L * scale);
+  ImGui::TextDisabled("Also: match_sandbox --bench-view, or --bench headless");
   UI::endCard();
 }
 

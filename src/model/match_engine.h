@@ -1940,6 +1940,10 @@ class MatchEngine
    * way. */
   void setStrikeKnobs(const StrikeKnobs& knobs) { strikeKnobs = knobs; }
   const StrikeKnobs& getStrikeKnobs() const { return strikeKnobs; }
+  /** Drills: the stretch map every contact profile uses (the touch and
+   * every strike), the same way; defaults to FirstTouch::STRETCH_*. */
+  void setStretchMap(const StretchMap& map) { contactStretchMap = map; }
+  const StretchMap& getStretchMap() const { return contactStretchMap; }
   MatchRecorder* getRecorder() const { return recorderLink.target; }
 
  private:
@@ -2253,6 +2257,7 @@ class MatchEngine
   StrikeContactStats strikeContacts;
   FirstTouchKnobs touchKnobs;
   StrikeKnobs strikeKnobs;
+  StretchMap contactStretchMap;
   std::array<LoadProfileStats, 2> loadProfile{};
   struct JitterTrack
   {
@@ -2635,6 +2640,33 @@ class MatchEngine
     bool lofted = false;
   };
   RestartPlay chooseRestartPlay(MatchPlayer& taker, MatchState restartState);
+  /** Releases a restart as chosen. */
+  void playRestart(MatchPlayer& taker, const RestartPlay& play);
+  /**
+   * A Binturong body's taker lining up a dead ball (restart lining-up): the
+   * play he chose when his time was up (or the pass his controller asked
+   * for), the line he means to strike it along (metric unit; none for a
+   * controller's pass), and how long he has been at it. He walks to a spot
+   * just behind the ball on that line, turning to it, and kicks it once it
+   * is in his reach and out of his dead zone, turned or out of time.
+   */
+  struct RestartLineUp
+  {
+    RestartPlay play;
+    MatchInputAction userAction = MatchInputAction::NONE;
+    std::optional<Vector2F> line;
+    float seconds = 0.0f;
+  };
+  std::optional<RestartLineUp> restartLineUp;
+  /** Whether this taker lines the ball up before kicking it: a Binturong
+   * body's outfielder, at any restart he kicks (not a throw-in). */
+  bool linesUpRestart(const MatchPlayer& taker, MatchState restart) const;
+  /** Lines the taker up, choosing his play the first time (a controller's
+   * pass if `userPass`); whether the ball is ready to kick. */
+  bool lineUpRestart(MatchPlayer& taker, MatchState restart, bool userPass);
+  /** Steers a lining-up taker this step: to his spot behind the ball,
+   * turning to his line. */
+  void steerRestartLineUp(MatchPlayer& taker, float dt);
   /**
    * How the score and the gap in quality bend a side's tactics: in front it
    * sits deeper and takes fewer risks, behind it pushes on; the underdog

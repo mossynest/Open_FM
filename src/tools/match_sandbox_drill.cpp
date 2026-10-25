@@ -30,7 +30,8 @@ constexpr PlayerID FIRST_ID = 900'000;
 constexpr std::size_t SQUAD = 11;
 }  // namespace
 
-DrillRun::DrillRun(Drill& drill_ref, const StatsConfig& config, bool record)
+DrillRun::DrillRun(Drill& drill_ref, const StatsConfig& config, bool record,
+                   const std::function<void(MatchEngine&)>& prepare)
     : drill(drill_ref), log(std::make_unique<SandboxRecorder>())
 {
   // Two full squads of reference players, the drill's own players in the
@@ -114,6 +115,7 @@ DrillRun::DrillRun(Drill& drill_ref, const StatsConfig& config, bool record)
   }
   if (record) match->setRecorder(log.get());
   drill.begin(*match, drillIds);
+  if (prepare) prepare(*match);
 }
 
 DrillRun::~DrillRun()

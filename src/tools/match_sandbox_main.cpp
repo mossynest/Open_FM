@@ -57,6 +57,7 @@
 #include "global/logger.h"
 #include "gui/gui_view.h"
 #include "tools/match_sandbox_checks.h"
+#include "tools/match_sandbox_bench.h"
 #include "tools/match_sandbox_measure.h"
 #include "tools/match_sandbox_shot_map.h"
 #include "tools/match_sandbox_scene.h"
@@ -90,6 +91,7 @@ int main(int argc, char* argv[])
   std::string drill;
   int drillView = 0;
   std::optional<std::vector<std::string>> shotMapArguments;
+  std::optional<std::vector<std::string>> benchArguments;
   std::optional<std::string> measureDrill;
   std::vector<std::string> measureArguments;
   bool brainsGiven = false;
@@ -189,6 +191,11 @@ int main(int argc, char* argv[])
       drillView = 3;
       continue;
     }
+    else if (argument == "--bench-view")
+    {
+      drillView = 4;
+      continue;
+    }
     else if (argument == "--shot-map-view")
     {
       drill = "shot";
@@ -206,6 +213,13 @@ int main(int argc, char* argv[])
     {
       drill = argv[++index];
       continue;
+    }
+    else if (argument == "--bench")
+    {
+      // The rest of the line belongs to the bench.
+      benchArguments.emplace();
+      while (++index < argc) benchArguments->emplace_back(argv[index]);
+      break;
     }
     else if (argument == "--measure" && index + 1 < argc)
     {
@@ -255,7 +269,12 @@ int main(int argc, char* argv[])
            "   [--set NAME=VALUE]... [--repeats N] [--seed N] [--csv [PATH]]]\n"
            "  [--shot-map [--line A:B:N] [--side A:B:N] [--repeats N]\n"
            "   [--set NAME=VALUE]... [--csv [PATH]]]\n"
-           "  [--measure-view DRILL] [--shot-map-view] [--contact-view]\n";
+           "  [--measure-view DRILL] [--shot-map-view] [--contact-view]"
+           " [--bench-view]\n"
+           "  [--bench [--tests P0*,S1*] [--tag KEY=VALUE]... [--skills LIST]\n"
+           "   [--repeats N] [--seed N] [--threads N] [--skill SETTING]\n"
+           "   [--catalogue PATH] [--csv PATH]] (Binturong on both sides\n"
+           "   unless --brains/--bodies say otherwise)\n";
     return 2;
   }
 
@@ -277,6 +296,13 @@ int main(int argc, char* argv[])
     if (checkMatches) return runSandboxChecks(controller, *checkMatches);
     if (shotMapArguments)
       return runShotMapCommand(controller.getStatsConfig(), *shotMapArguments);
+    if (benchArguments)
+    {
+      // The technique bench measures the Binturong body's technique.
+      if (!brainsGiven) sandboxBrains() = {BrainId::BINTURONG, BrainId::BINTURONG};
+      if (!bodiesGiven) sandboxBodies() = {BodyId::BINTURONG, BodyId::BINTURONG};
+      return runBenchCommand(controller.getStatsConfig(), *benchArguments);
+    }
     if (measureDrill)
       return runMeasureCommand(controller.getStatsConfig(), *measureDrill,
                                measureArguments);

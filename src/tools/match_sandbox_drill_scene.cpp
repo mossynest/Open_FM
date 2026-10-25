@@ -35,9 +35,11 @@ constexpr std::array<float, 7> SPEEDS{0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f,
                                       16.0f};
 }  // namespace
 
-DrillScene::DrillScene(GUIView* guiView_ptr, Drill& drill_ref)
+DrillScene::DrillScene(GUIView* guiView_ptr, Drill& drill_ref,
+                       std::function<void(MatchEngine&)> prepare)
     : GUIScene(guiView_ptr),
       drill(drill_ref),
+      prepareRun(std::move(prepare)),
       renderer(std::make_unique<MatchRenderer2D>())
 {
   // The debugger's Step buttons run the drill's script too.
@@ -83,8 +85,8 @@ void DrillScene::restart()
   inspector.reset();
   if (run && play.isActive()) play.end(run->engine());
   run.reset();
-  run = std::make_unique<DrillRun>(drill,
-                                   guiView->getController().getStatsConfig());
+  run = std::make_unique<DrillRun>(
+      drill, guiView->getController().getStatsConfig(), true, prepareRun);
   accumulator = 0.0f;
   // You run: the run waits for you to press Space.
   paused = drill.humanControl();

@@ -155,8 +155,10 @@ class DrillRun
   static constexpr float REFERENCE_RATING = 70.0f;
 
   /** `record`: attach the recorder (the debugger needs it; Measure runs
-   * do without). */
-  DrillRun(Drill& drill, const StatsConfig& config, bool record = true);
+   * do without). `prepare`: called on the engine once the drill has set the
+   * run up (the technique bench sets its tuning there, over the drill's). */
+  DrillRun(Drill& drill, const StatsConfig& config, bool record = true,
+           const std::function<void(MatchEngine&)>& prepare = {});
   ~DrillRun();
   DrillRun(const DrillRun&) = delete;
   DrillRun& operator=(const DrillRun&) = delete;

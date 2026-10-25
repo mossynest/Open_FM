@@ -2239,7 +2239,9 @@ TouchResult MatchEngine::dribbleTouchBinturong(const MatchPlayer& player,
 }
 ContactProfile MatchEngine::touchProfileBinturong() const
 {
-  return touchContactProfile(touchKnobs);
+  ContactProfile profile = touchContactProfile(touchKnobs);
+  profile.stretchMap = contactStretchMap;
+  return profile;
 }
 
 ContactProfile touchContactProfile(const FirstTouchKnobs& knob)
@@ -2285,7 +2287,9 @@ ContactProfile touchContactProfile(const FirstTouchKnobs& knob)
 
 ContactProfile MatchEngine::strikeProfileBinturong(StrikeKind kind) const
 {
-  return strikeContactProfile(strikeKnobs, kind, touchKnobs);
+  ContactProfile profile = strikeContactProfile(strikeKnobs, kind, touchKnobs);
+  profile.stretchMap = contactStretchMap;
+  return profile;
 }
 
 ContactProfile strikeContactProfile(const StrikeKnobs& strikeKnobs,
@@ -2360,12 +2364,12 @@ TouchMoment MatchEngine::strikeMomentBinturong(const MatchPlayer& striker) const
   // his feet: unified kick plan step 3).
   if (strikeAt) return *strikeAt;
   // Otherwise (a dead ball, a keeper's from his hands, or the brain looking
-  // ahead): the ball where it lies, how far from his centre against the
-  // 0.9 m in which he may strike it, and its height.
+  // ahead): the ball where it lies, how far from his centre against his
+  // feet's reach (as for a touch), and its height.
   TouchMoment moment;
   moment.contactPoint = ball.position;
   moment.gap = distance(striker.position, ball.position);
-  moment.reach = MatchTuning::Dribble::KICK_REACH_METRES;
+  moment.reach = feetReachBinturong(striker);
   moment.height = ball.z * MatchTuning::Units::BALL_Z_METRES;
   return moment;
 }

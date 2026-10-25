@@ -226,10 +226,10 @@ constexpr float strikeProfileDefault(StrikeKnob knob)
     case StrikeKnob::OFF_GROUND_WEIGHT: return P::OFF_GROUND;
     case StrikeKnob::PRESSURE_ANGLE:
     case StrikeKnob::PRESSURE_WEIGHT: return P::PRESSURE;
-    // The approach angle (where it comes from against his facing) is the
-    // first touch's; for strikes no weight yet (first-time strikes, later).
-    case StrikeKnob::APPROACH_ANGLE:
-    case StrikeKnob::APPROACH_WEIGHT: return 0.0f;
+    // The approach angle (where it comes from against his facing), as the
+    // first touch weighs it, for passes and shots.
+    case StrikeKnob::APPROACH_ANGLE: return P::APPROACH_ANGLE;
+    case StrikeKnob::APPROACH_WEIGHT: return P::APPROACH_WEIGHT;
     // Spin: in the model, nothing set yet (it comes off as asked).
     case StrikeKnob::SPIN_ASKED_ANGLE:
     case StrikeKnob::SPIN_ASKED_WEIGHT:

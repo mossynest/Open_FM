@@ -32,7 +32,10 @@ struct StatsConfig;
 class DrillScene : public GUIScene
 {
  public:
-  DrillScene(GUIView* guiView_ptr, Drill& drill);
+  /** `prepare`: called on each run's engine once the drill has set it up
+   * (the technique bench sets its tuning there). */
+  DrillScene(GUIView* guiView_ptr, Drill& drill,
+             std::function<void(MatchEngine&)> prepare = {});
   ~DrillScene() override;
 
   void onEnter() override;
@@ -54,6 +57,7 @@ class DrillScene : public GUIScene
   void updateBasis();
 
   Drill& drill;
+  std::function<void(MatchEngine&)> prepareRun;
   std::unique_ptr<DrillRun> run;
   bool paused = false;
   float speed = 1.0f;

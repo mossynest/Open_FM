@@ -12,14 +12,19 @@
 #include <array>
 #include <cmath>
 #include <format>
+#include <memory>
 #include <numbers>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 #include "gui/gui_view.h"
 #include "gui/widgets/theme.h"
 #include "gui/widgets/widgets.h"
+#include "tools/match_sandbox_bench_scene.h"
+#include "tools/match_sandbox_tuning.h"
 
 namespace
 {
@@ -161,34 +166,33 @@ void ContactViewScene::update(float /*deltaTime*/) {}
 
 ContactProfile ContactViewScene::chosenProfile() const
 {
-  static const FirstTouchKnobs touchKnobs;
-  static const StrikeKnobs strikeKnobs;
+  const FirstTouchKnobs& touchKnobs = sandboxTuning().touch;
+  const StrikeKnobs& strikeKnobs = sandboxTuning().strike;
   ContactProfile chosen =
       isTouch() ? touchContactProfile(touchKnobs)
                 : strikeContactProfile(
                       strikeKnobs, static_cast<StrikeKind>(inputs.contact - 1),
                       touchKnobs);
-  chosen.stretchMap = stretchMap;
+  chosen.stretchMap = sandboxTuning().stretch;
   return chosen;
 }
 
 float ContactViewScene::reach() const
 {
-  // As the engine measures it: his feet reach for a touch (the knob), the
-  // kicking reach for a strike.
-  return isTouch() ? FirstTouchKnobs{}[TouchKnob::FEET_REACH]
-                   : MatchTuning::Dribble::KICK_REACH_METRES;
+  // As the engine measures it: his feet reach (the knob), for a touch and
+  // a strike alike.
+  return sandboxTuning().touch[TouchKnob::FEET_REACH];
 }
 
 bool ContactViewScene::inDeadZone(ImVec2 point) const
 {
-  if (!isTouch()) return false;
+  // Every contact: he cannot touch or strike a ball in his dead zone.
   const float gap = std::hypot(point.x, point.y);
   const Vector2F toBall = gap > 1e-4f ? Vector2F{point.x / gap, point.y / gap}
                                       : compass(inputs.facing);
   return inTouchDeadZone(compass(inputs.facing), toBall, gap,
                          profile.comfortGap,
-                         FirstTouchKnobs{}[TouchKnob::DEAD_ZONE_ANGLE]);
+                         sandboxTuning().touch[TouchKnob::DEAD_ZONE_ANGLE]);
 }
 
 ContactAssessment ContactViewScene::assess(ImVec2 point, float from,
@@ -292,9 +296,9 @@ void ContactViewScene::renderPanel(float width)
   ImGui::PushTextWrapPos(0.0f);
   ImGui::TextDisabled(
       "How hard a touch or strike is across his reach (Binturong body, "
-      "default knobs). Drag on the circle: the disc moves the ball, the "
-      "inner ring where it comes from, the outer ring where he sends it; "
-      "right-drag turns him.");
+      "the sandbox's tuning, shared with the technique bench). Drag on the "
+      "circle: the disc moves the ball, the inner ring where it comes "
+      "from, the outer ring where he sends it; right-drag turns him.");
   ImGui::PopTextWrapPos();
   ImGui::PushItemWidth(-140.0f * Theme::scale());
 
@@ -390,6 +394,8 @@ void ContactViewScene::renderPanel(float width)
                       "with; 0 sends it off level, cushioning any drop.");
   ImGui::PopItemWidth();
 
+  renderTuning();
+
   ImGui::Dummy(ImVec2(0.0f, Theme::Space::L * Theme::scale()));
   if (ImGui::Button("Back to the sandbox")) guiView->popScene();
   ImGui::EndChild();
@@ -458,7 +464,7 @@ void ContactViewScene::renderCircle(ImVec2 size)
     case 4: inputs.facing = compassOf(offset); break;
     default: break;
   }
-  // A shorter reach (a strike) pulls the ball in.
+  // A shorter reach (the Feet reach knob turned down) pulls the ball in.
   if (const float gap = std::hypot(inputs.probe.x, inputs.probe.y);
       gap > reachMetres)
     inputs.probe = ImVec2(inputs.probe.x * reachMetres / gap,
@@ -588,16 +594,13 @@ void ContactViewScene::renderCircle(ImVec2 size)
     }
   }
   // The dead zone's edges, from the comfort gap out to his reach.
-  if (isTouch())
+  const float deadAngle = sandboxTuning().touch[TouchKnob::DEAD_ZONE_ANGLE];
+  for (const float sideOf : {-1.0f, 1.0f})
   {
-    const float deadAngle = FirstTouchKnobs{}[TouchKnob::DEAD_ZONE_ANGLE];
-    for (const float sideOf : {-1.0f, 1.0f})
-    {
-      const Vector2F edge = compass(inputs.facing + sideOf * deadAngle);
-      draw.AddLine(at(edge.x * profile.comfortGap, edge.y * profile.comfortGap),
-                   at(edge.x * reachMetres, edge.y * reachMetres), line,
-                   1.5f * scale);
-    }
+    const Vector2F edge = compass(inputs.facing + sideOf * deadAngle);
+    draw.AddLine(at(edge.x * profile.comfortGap, edge.y * profile.comfortGap),
+                 at(edge.x * reachMetres, edge.y * reachMetres), line,
+                 1.5f * scale);
   }
   for (const float multiple : {FROM_INNER, FROM_OUTER, AIM_INNER, AIM_OUTER})
     draw.AddCircle(centre, radius * multiple, faint, 96, 1.0f * scale);
@@ -686,7 +689,7 @@ void ContactViewScene::renderCircle(ImVec2 size)
       contact = assess(offset, inputs.incomingFrom, inputs.aim);
       where = std::format("Met {:.2f} m from his centre, at {:.0f}°",
                           std::hypot(offset.x, offset.y), compassOf(offset));
-      if (inDeadZone(offset)) where += "\nDead zone: he cannot touch it here";
+      if (inDeadZone(offset)) where += "\nDead zone: he cannot play it here";
     }
     else if (mouseRadius >= FROM_INNER && mouseRadius <= FROM_OUTER)
     {
@@ -791,7 +794,7 @@ void ContactViewScene::renderBreakdown(float width)
   ImGui::SeparatorText("At the ball");
   if (inDeadZone(inputs.probe))
     ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.45f, 1.0f),
-                       "In his dead zone: he cannot touch it here.");
+                       "In his dead zone: he cannot play it here (touch or strike).");
   ImGui::Text("Turn %.0f° %s%s · pace change %+.1f m/s",
               std::abs(contact.turn) * 180.0f / std::numbers::pi_v<float>,
               contact.outward ? "outward" : "inward",
@@ -910,6 +913,7 @@ void ContactViewScene::renderBreakdown(float width)
       "(the technique knobs, cut by his skill).");
   ImGui::PopTextWrapPos();
   renderStretchMap();
+  renderKnobs();
   ImGui::EndChild();
 }
 
@@ -922,8 +926,8 @@ void ContactViewScene::renderStretchMap()
       "Stretch (0-1) by angle off his facing (rows, either side) and "
       "distance from his centre as a share of his reach (columns; metres "
       "for a first touch at feet height). Blended between points. Drag, or "
-      "Ctrl+click to type. Used for every contact here; the game keeps its "
-      "own until the values are copied in.");
+      "Ctrl+click to type. Used for every contact here and in the technique "
+      "bench's runs; the game keeps its own until the values are copied in.");
   ImGui::PopTextWrapPos();
   const ImGuiTableFlags flags = ImGuiTableFlags_Borders |
                                 ImGuiTableFlags_SizingStretchSame;
@@ -939,11 +943,11 @@ void ContactViewScene::renderStretchMap()
       ImGui::TableNextColumn();
       ImGui::PushID(static_cast<int>(column));
       ImGui::SetNextItemWidth(-1.0f);
-      const float low = column == 0 ? 0.0f : stretchMap.distances[column - 1];
+      const float low = column == 0 ? 0.0f : sandboxTuning().stretch.distances[column - 1];
       const float high = column + 1 == StretchMap::DISTANCES
                              ? 1.0f
-                             : stretchMap.distances[column + 1];
-      if (ImGui::DragFloat("##distance", &stretchMap.distances[column], 0.005f,
+                             : sandboxTuning().stretch.distances[column + 1];
+      if (ImGui::DragFloat("##distance", &sandboxTuning().stretch.distances[column], 0.005f,
                            low, high, "%.2f", ImGuiSliderFlags_AlwaysClamp))
         profile = chosenProfile();
       ImGui::PopID();
@@ -955,16 +959,16 @@ void ContactViewScene::renderStretchMap()
       ImGui::PushID(static_cast<int>(100 + row));
       ImGui::TableNextColumn();
       ImGui::SetNextItemWidth(-1.0f);
-      const float low = row == 0 ? 0.0f : stretchMap.angles[row - 1];
+      const float low = row == 0 ? 0.0f : sandboxTuning().stretch.angles[row - 1];
       const float high =
-          row + 1 == StretchMap::ANGLES ? 180.0f : stretchMap.angles[row + 1];
-      if (ImGui::DragFloat("##angle", &stretchMap.angles[row], 0.5f, low, high,
+          row + 1 == StretchMap::ANGLES ? 180.0f : sandboxTuning().stretch.angles[row + 1];
+      if (ImGui::DragFloat("##angle", &sandboxTuning().stretch.angles[row], 0.5f, low, high,
                            "%.0f°", ImGuiSliderFlags_AlwaysClamp))
         profile = chosenProfile();
       for (std::size_t column = 0; column < StretchMap::DISTANCES; ++column)
       {
         ImGui::TableNextColumn();
-        float& value = stretchMap.values[row][column];
+        float& value = sandboxTuning().stretch.values[row][column];
         ImVec4 shade = ImGui::ColorConvertU32ToFloat4(heat(value));
         shade.w = 0.55f;
         ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg,
@@ -982,7 +986,7 @@ void ContactViewScene::renderStretchMap()
   }
   if (ImGui::Button("Reset to the game's"))
   {
-    stretchMap = StretchMap{};
+    sandboxTuning().stretch = StretchMap{};
     profile = chosenProfile();
   }
   ImGui::SameLine(0.0f, Theme::Space::S * scale);
@@ -992,11 +996,11 @@ void ContactViewScene::renderStretchMap()
     std::string text = "    static constexpr std::array<float, 6> STRETCH_ANGLES{";
     for (std::size_t row = 0; row < StretchMap::ANGLES; ++row)
       text += std::format("{}{:.1f}f", row == 0 ? "" : ", ",
-                          stretchMap.angles[row]);
+                          sandboxTuning().stretch.angles[row]);
     text += "};\n    static constexpr std::array<float, 6> STRETCH_DISTANCES{";
     for (std::size_t column = 0; column < StretchMap::DISTANCES; ++column)
       text += std::format("{}{:.3f}f", column == 0 ? "" : ", ",
-                          stretchMap.distances[column]);
+                          sandboxTuning().stretch.distances[column]);
     text += "};\n    static constexpr std::array<std::array<float, 6>, 6> "
             "STRETCH_VALUES{{\n";
     for (std::size_t row = 0; row < StretchMap::ANGLES; ++row)
@@ -1004,7 +1008,7 @@ void ContactViewScene::renderStretchMap()
       text += "        {";
       for (std::size_t column = 0; column < StretchMap::DISTANCES; ++column)
         text += std::format("{}{:.3f}f", column == 0 ? "" : ", ",
-                            stretchMap.values[row][column]);
+                            sandboxTuning().stretch.values[row][column]);
       text += "},\n";
     }
     text += "    }};\n";
@@ -1057,4 +1061,132 @@ void ContactViewScene::renderSideView(const ContactAssessment& contact)
   draw.AddCircleFilled(ball, 4.5f * scale, IM_COL32(255, 255, 255, 255));
   draw.AddText(ImVec2(origin.x + 4.0f * scale, origin.y + 2.0f * scale),
                IM_COL32(170, 170, 170, 255), "Side view");
+}
+
+void ContactViewScene::renderKnobs()
+{
+  // The chosen contact's knobs, by group; a changed one in the warning
+  // colour, with a button back to the game's value.
+  const float scale = Theme::scale();
+  TechniqueTuning& tuning = sandboxTuning();
+  const std::string title =
+      isTouch() ? std::string("Knobs: touch (first and dribble touches)")
+                : std::format("Knobs: {}",
+                              STRIKE_KIND_NAMES[static_cast<std::size_t>(
+                                  inputs.contact - 1)]);
+  ImGui::SeparatorText(title.c_str());
+  ImGui::PushTextWrapPos(0.0f);
+  ImGui::TextDisabled(
+      "The conditions' weights, how they are measured, and the technique "
+      "(how often a job fails and how badly, cut by skill). Drag, or "
+      "Ctrl+click to type (beyond the range if need be). Shared with the "
+      "technique bench.");
+  ImGui::PopTextWrapPos();
+  const auto row = [&](std::string_view name, std::string_view unit, float& value,
+                       float fallback, float low, float high)
+  {
+    ImGui::PushID(name.data(), name.data() + name.size());
+    const bool changed = std::abs(value - fallback) > 1e-6f;
+    ImGui::SetNextItemWidth(-150.0f * scale);
+    if (changed) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.75f, 0.3f, 1.0f));
+    ImGui::DragFloat(std::format("{}{}{}", name, unit.empty() ? "" : " ", unit).c_str(),
+                     &value, (high - low) / 400.0f, 0.0f, 0.0f, "%.4g");
+    if (changed) ImGui::PopStyleColor();
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("The game's value: %g (range %g to %g)",
+                        static_cast<double>(fallback), static_cast<double>(low),
+                        static_cast<double>(high));
+    if (changed)
+    {
+      ImGui::SameLine();
+      if (ImGui::SmallButton("reset")) value = fallback;
+    }
+    ImGui::PopID();
+  };
+  // Each group once, in the order it first appears, with all its knobs
+  // (the registries are not sorted by group: the strike knobs come back to
+  // a group further down).
+  const auto groups = [](const auto& registry)
+  {
+    std::vector<std::string_view> found;
+    for (const auto& info : registry)
+      if (std::ranges::find(found, info.group) == found.end())
+        found.push_back(info.group);
+    return found;
+  };
+  if (isTouch())
+  {
+    const FirstTouchKnobs defaults;
+    for (const std::string_view group : groups(TOUCH_KNOBS))
+    {
+      if (!ImGui::TreeNodeEx(std::format("{}##touch", group).c_str(),
+                             ImGuiTreeNodeFlags_NoTreePushOnOpen))
+        continue;
+      for (std::size_t index = 0; index < TOUCH_KNOB_COUNT; ++index)
+      {
+        const TouchKnobInfo& info = TOUCH_KNOBS[index];
+        if (info.group == group)
+          row(info.name, info.unit, tuning.touch.values[index],
+              defaults.values[index], info.min, info.max);
+      }
+    }
+  }
+  else
+  {
+    const auto kind = static_cast<StrikeKind>(inputs.contact - 1);
+    for (const std::string_view group : groups(STRIKE_KNOBS))
+    {
+      if (!ImGui::TreeNodeEx(std::format("{}##strike", group).c_str(),
+                             ImGuiTreeNodeFlags_NoTreePushOnOpen))
+        continue;
+      for (std::size_t index = 0; index < STRIKE_KNOB_COUNT; ++index)
+      {
+        const StrikeKnobInfo& info = STRIKE_KNOBS[index];
+        const auto knob = static_cast<StrikeKnob>(index);
+        if (info.group == group)
+          row(info.name, info.unit, tuning.strike.at(kind, knob),
+              strikeKnobDefault(kind, knob), info.min, info.max);
+      }
+    }
+  }
+  profile = chosenProfile();
+}
+
+void ContactViewScene::renderTuning()
+{
+  ImGui::SeparatorText("Tuning");
+  TechniqueTuning& tuning = sandboxTuning();
+  const std::vector<std::string> changes = tuning.changes();
+  if (changes.empty())
+    ImGui::TextUnformatted("The game's values.");
+  else
+    ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f),
+                       "%zu changes from the game's values.", changes.size());
+  if (!changes.empty() && ImGui::IsItemHovered())
+  {
+    std::string tip;
+    for (const std::string& line : changes) tip += line + "\n";
+    ImGui::SetTooltip("%s", tip.c_str());
+  }
+  if (UI::primaryButton("Technique bench")) openBench();
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Pass and shot tests over skill, run with this tuning.");
+  ImGui::SameLine();
+  ImGui::BeginDisabled(changes.empty());
+  if (ImGui::Button("Copy")) ImGui::SetClipboardText(tuning.changesText().c_str());
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    ImGui::SetTooltip("Every change as text, to copy into match_tuning.h.");
+  ImGui::SameLine();
+  if (ImGui::Button("Reset all")) tuning = TechniqueTuning{};
+  ImGui::EndDisabled();
+}
+
+void ContactViewScene::openBench()
+{
+  // Back to it if this view was opened from the bench, so the two don't
+  // stack up.
+  if (dynamic_cast<TechniqueBenchScene*>(guiView->getSceneBelowTop()))
+    guiView->popScene();
+  else
+    guiView->overlayScene(std::make_unique<TechniqueBenchScene>(guiView));
 }

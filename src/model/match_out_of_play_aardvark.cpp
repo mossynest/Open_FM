@@ -197,6 +197,7 @@ void MatchEngine::scoreGoalAardvark(bool homeTeam)
   ball.shotByHome = homeTeam;
   pendingAdvantage.active = false;
   restartTakerIndex.reset();
+  restartLineUp.reset();
   restartIsSetPiece = false;
   // Everyone walks back to the kick-off formation during the celebration.
   for (auto& player : players)
@@ -455,7 +456,14 @@ void MatchEngine::completeRestartAardvark()
   const MatchState restartState = state;
   MatchPlayer* taker = restartTaker();
   const bool userPass = userRestartPassRequested();
+  // A Binturong body's taker lines the ball up first: he moves until it is
+  // in his reach and out of his dead zone (restart lining-up).
+  if (taker && active(*taker) && linesUpRestart(*taker, restartState) &&
+      !lineUpRestart(*taker, restartState, userPass))
+    return;
+  const std::optional<RestartLineUp> linedUp = restartLineUp;
   restartTakerIndex.reset();
+  restartLineUp.reset();
   if (!taker || !active(*taker))
   {
     clearPossession();
@@ -468,15 +476,16 @@ void MatchEngine::completeRestartAardvark()
     return;
   }
 
-  // The taker has walked to the spot; line him up exactly on the ball.
-  if (restartState != MatchState::KICK_OFF)
+  // The taker has walked to the spot; line him up exactly on the ball
+  // (one who lined it up kicks it from where he stands).
+  if (restartState != MatchState::KICK_OFF && !linedUp)
   {
     taker->position = ball.position;
     taker->velocity = {0.0f, 0.0f};
   }
   if (restartState == MatchState::PENALTY)
   {
-    ball.position = taker->position;
+    if (!linedUp) ball.position = taker->position;
     takeShot(*taker, MatchTuning::Shooting::PENALTY_XG);
     state = MatchState::PLAYING;
     restartIsSetPiece = false;
@@ -495,14 +504,19 @@ void MatchEngine::completeRestartAardvark()
     setPiecePhaseRemaining = MatchTuning::SetPiece::SET_PIECE_PHASE_SECONDS;
     setPieceHome = taker->isHomeTeam;
   }
-  if (userPass)
+  if (linedUp ? linedUp->userAction != MatchInputAction::NONE : userPass)
   {
-    const MatchInputAction action = controlInput.action;
+    const MatchInputAction action =
+        linedUp && linedUp->userAction != MatchInputAction::NONE
+            ? linedUp->userAction
+            : controlInput.action;
     playControlledPass(*taker, action);
     controlInput.action = MatchInputAction::NONE;
     controlActionRemaining = 0.0F;
     ++controlledActions[taker->isHomeTeam ? 0 : 1];
   }
+  else if (linedUp)
+    playRestart(*taker, linedUp->play);
   else
     takeSetPiece(*taker, restartState);
   if (state == restartState) state = MatchState::PLAYING;
