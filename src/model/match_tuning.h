@@ -1985,6 +1985,44 @@ struct MatchTuning final
     // (along the line it pushes) comes back off it, at Heading 1 and 99.
     static constexpr float CUSHION_KEEP_LOW = 0.5f;
     static constexpr float CUSHION_KEEP_HIGH = 0.2f;
+    // Jumping (aerial challenge plan step 1). His running jump (one-footed,
+    // off a run-up) takes the top of his head to his Jumping reach; his
+    // standing jump (two-footed, from the spot) rises this share of it
+    // (a placeholder). A running jump needs at least this pace (m/s, about
+    // a jog; a placeholder).
+    static constexpr float STANDING_JUMP_SHARE = 0.85f;
+    static constexpr float RUNNING_JUMP_MIN_SPEED = 3.0f;
+    /** Landing takes half his time in the air (decision 5); meanwhile he
+     * has this share of his acceleration, braking and turning (a
+     * placeholder). */
+    static constexpr float LANDING_MOVEMENT_SHARE = 0.5f;
+    /** Standing, he can duck his head this share of his height below his
+     * forehead to meet a ball (about 0.3 m for a 1.80 m man; decision 7). */
+    static constexpr float DUCK_HEIGHT_SHARE = 0.167f;
+    /** How far ahead (s) he reads the ball's flight to time a jump. */
+    static constexpr float JUMP_LOOKAHEAD_SECONDS = 1.5f;
+    /** He times his jump for his forehead to be this far above the ball's
+     * centre (m), so it meets the forehead. */
+    static constexpr float JUMP_FOREHEAD_ABOVE_METRES = 0.03f;
+    // Going for a loose high ball (aerial challenge plan step 2;
+    // placeholders). He holds the spot only if he gets there this long
+    // before the ball; a running jump needs at least this run-up (m) unless
+    // he is already moving at a jog. The other side contests if it can get
+    // to the meet within this long after the ball. The ball's flight is read
+    // this far ahead (s).
+    static constexpr float CHALLENGE_SETTLE_SECONDS = 0.3f;
+    static constexpr float CHALLENGE_RUN_UP_METRES = 2.0f;
+    static constexpr float CHALLENGE_TOLERANCE_SECONDS = 0.2f;
+    static constexpr float CHALLENGE_PATH_SECONDS = 4.0f;
+    // The duel on jumps (aerial challenge plan step 3; placeholders). The
+    // first head the ball reaches wins it; an opponent's head reaching it
+    // within this long after makes it a close call, decided by strength
+    // (Physicality), how far his head is above the ball (up to this margin,
+    // m: up to twice as strong), and holding the spot against attacking it
+    // (the holder this much stronger), with some chance.
+    static constexpr float DUEL_CLOSE_CALL_SECONDS = 0.05f;
+    static constexpr float DUEL_HEIGHT_MARGIN_METRES = 0.3f;
+    static constexpr float DUEL_HOLD_ADVANTAGE = 1.2f;
     static constexpr float ARRIVAL_HEIGHT_METRES = 2.1f;
   };
 

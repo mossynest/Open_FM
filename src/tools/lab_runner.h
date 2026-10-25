@@ -113,6 +113,13 @@ struct MatchSample
   int interceptions = 0;
   int clearances = 0;
   int aerial_duels = 0;
+  /** Header sequences (MatchStats::headerSequences and the rest). */
+  int header_sequences = 0;
+  int header_sequence_headers = 0;
+  int header_sequences_long = 0;
+  int header_sequence_longest = 0;
+  int header_sequences_to_control = 0;
+  int header_sequences_kept = 0;
   int pressures = 0;
   int key_passes = 0;
   int saves = 0;

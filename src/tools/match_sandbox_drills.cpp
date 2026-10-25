@@ -6293,6 +6293,13 @@ class HeaderTargetDrill final : public Drill
                 "At goal: the spot's height."),
         "Header");
 
+    add(setting("Runs in from (m)", &runIn, 0.0f, 20.0f, false,
+                "0: he stands on his spot. Otherwise he starts this far "
+                "behind it and runs up the pitch through it, flat out."),
+        "Player");
+    add(setting("Run starts after (s)", &runDelay, 0.0f, 4.0f, false,
+                "Running in: how long after the ball is played he sets off."),
+        "Player");
     add(setting("Heading", &heading, 1.0f, 100.0f, true,
                 "His Heading (overrides the derived stat): his header power, "
                 "and how accurately he places it."),
@@ -6417,13 +6424,17 @@ class HeaderTargetDrill final : public Drill
     target = along(stand, rotated(up, direction * PI / 180.0f), length);
     target = {std::clamp(target.x, 0.01f, 0.99f), std::clamp(target.y, 0.01f, 0.99f)};
 
+    // Running in: from behind his spot, through it.
+    start = along(stand, up, -runIn);
+    start = {std::clamp(start.x, 0.01f, 0.99f), start.y};
+    running = false;
     MatchScenario scenario;
-    scenario.players.push_back({playerId, stand, false});
+    scenario.players.push_back({playerId, start, false});
     scenario.carrierId = 0;
     scenario.ballPosition = feedFrom;
     engine.startDrill(scenario);
-    // He holds his spot, facing up the pitch.
-    engine.setDrillTarget(playerId, stand, false, {}, 0.0f, 0.0f,
+    // He holds his spot (or his start), facing up the pitch.
+    engine.setDrillTarget(playerId, start, false, {}, 0.0f, 0.0f,
                           facingAngleOf(0.0f));
     if (aim() == ForcedHeaderAim::KEEP) engine.keepBall(playerId, true);
     engine.forceHeader(playerId, aim(),
@@ -6447,6 +6458,8 @@ class HeaderTargetDrill final : public Drill
       headingRating = player->derivedStat(DerivedStat::HEADING);
     }
     header.reset();
+    tookOff.reset();
+    tookOffRunning = false;
     dropped.reset();
     droppedAt = 0.0;
     collectedAt.reset();
@@ -6468,6 +6481,19 @@ class HeaderTargetDrill final : public Drill
     const MatchPlayer* player = slotOf(engine, playerId);
     if (engine.getSimulatedSteps() % 2 == 0) ballPath.push_back(ball.position);
     const bool his = ball.possessedBy && ball.possessedBy->getId() == playerId;
+    if (runIn > 0.0f && !running && now >= fedAt + runDelay)
+    {
+      // Off he goes, flat out up the pitch through his spot.
+      running = true;
+      const Vector2F beyond = along(stand, {1.0f, 0.0f}, 15.0f);
+      engine.setDrillTarget(playerId, Vector2F{std::min(beyond.x, 0.99f), beyond.y},
+                            true, {}, 0.0f, 0.0f, facingAngleOf(0.0f), true);
+    }
+    if (player && player->airborne() && !tookOff)
+    {
+      tookOff = now;
+      tookOffRunning = player->runningJump;
+    }
 
     if (!header && !cushioned && !touched && outcome.empty())
     {
@@ -6692,6 +6718,11 @@ class HeaderTargetDrill final : public Drill
     constexpr float DEGREES = 180.0f / PI;
     out.push_back({"Top of head", flag(header->topOfHead)});
     out.push_back({"Body off its line (deg)", header->bodyOff});
+    out.push_back({"Jumped", flag(tookOff.has_value())});
+    out.push_back({"Running jump", flag(tookOff && tookOffRunning)});
+    out.push_back({"Feet at meet (m)", header->feet});
+    out.push_back({"Speed at meet (m/s)", header->runSpeed});
+    if (tookOff) out.push_back({"Take-off before meet (s)", header->at - *tookOff});
     out.push_back({"Feed to header (s)", header->at - fedAt});
     out.push_back({"Pace off (m/s)", std::hypot(header->speed, header->lift)});
     out.push_back({"Launch speed (m/s)", header->speed});
@@ -6783,6 +6814,9 @@ class HeaderTargetDrill final : public Drill
     bool topOfHead = false;
     /** His body against the line it left his head on (deg). */
     float bodyOff = 0.0f;
+    /** His feet's height (m) and his speed (m/s) as he headed it. */
+    float feet = 0.0f;
+    float runSpeed = 0.0f;
     /** A headed shot: where it crosses the line (m across, m up). */
     float crossingY = 0.0f;
     float crossingZ = 0.0f;
@@ -6793,9 +6827,11 @@ class HeaderTargetDrill final : public Drill
     return static_cast<ForcedHeaderAim>(static_cast<int>(aimChoice));
   }
 
+ public:
   /** The upward speed (m/s) that has a ball played along the ground at
    * `speed` (m/s) `height` metres up when it has gone `metres`, in the
-   * match's own flight (bisection: more lift, higher there). */
+   * match's own flight (bisection: more lift, higher there). Shared with the
+   * Loose high ball drill. */
   static float liftFor(const MatchEngine& engine, float metres, float speed,
                        float height)
   {
@@ -6829,6 +6865,7 @@ class HeaderTargetDrill final : public Drill
     return 0.5f * (low + high);
   }
 
+ private:
   /** The header: a header strike the contact model has read since the
    * feed. */
   void readHeader(const MatchEngine& engine, double now)
@@ -6867,6 +6904,11 @@ class HeaderTargetDrill final : public Drill
     reading.meet.height = ball.sentHeightMetres;
     reading.meetPlayer = lastPlayer;
     reading.topOfHead = engine.getLastHeadPart() == HeadPart::TOP;
+    if (const MatchPlayer* player = slotOf(engine, playerId))
+    {
+      reading.feet = player->feetHeight;
+      reading.runSpeed = std::hypot(player->velocity.x, player->velocity.y);
+    }
     if (const MatchPlayer* player = slotOf(engine, playerId);
         player && reading.speed > 0.1f)
     {
@@ -6915,6 +6957,14 @@ class HeaderTargetDrill final : public Drill
   // Header
   float aimChoice = 0.0f;
   float knownEarly = 1.0f;
+  float runIn = 0.0f;
+  float runDelay = 0.0f;
+  /** Running in: where he starts, and whether he has set off. */
+  Vector2F start{};
+  bool running = false;
+  /** When he took off, and whether with his running jump. */
+  std::optional<double> tookOff;
+  bool tookOffRunning = false;
   float length = 10.0f;
   float direction = 0.0f;
   float outFromGoal = 10.0f;
@@ -6960,6 +7010,252 @@ class HeaderTargetDrill final : public Drill
   std::array<std::string, STRIKE_KNOB_COUNT> knobNames;
   std::array<std::string, STRIKE_KNOB_COUNT> knobSections;
 };
+
+// --- Loose high ball ---------------------------------------------------------
+
+/**
+ * Loose high ball (aerial challenge plan step 2): a long ball dropping
+ * between one player from each side, both left to the brain. Who goes,
+ * where to, whether the other contests or backs off, who gets to it first,
+ * and with what jump.
+ */
+class LooseHighBallDrill final : public Drill
+{
+ public:
+  static constexpr float Z_METRES = MatchTuning::Units::BALL_Z_METRES;
+  /** Where the ball comes down (pitch). */
+  static constexpr Vector2F LANDS{0.55f, 0.5f};
+
+  const char* name() const override { return "Loose high ball"; }
+  const char* summary() const override
+  {
+    return "A long ball dropping between a home and an away player, both "
+           "left to the brain. Who goes for it, where to, whether the other "
+           "contests it or backs off, who gets to it first, and with what "
+           "jump.";
+  }
+
+  std::vector<DrillParameter> parameters() override
+  {
+    std::vector<DrillParameter> list;
+    list.push_back(setting("Ball speed (m/s)", &ballSpeed, 6.0f, 30.0f, false,
+                           "Its pace over the ground when played."));
+    list.push_back(setting("Feed distance (m)", &feedDistance, 10.0f, 60.0f, false,
+                           "How far it travels before it comes down."));
+    list.push_back(setting("Home from it (m)", &homeDistance, 0.0f, 25.0f, false,
+                           "How far the home player starts from where it comes "
+                           "down."));
+    list.push_back(setting("Home angle (deg)", &homeAngle, -180.0f, 180.0f, true,
+                           "Where he starts: 0 beyond where it comes down (along "
+                           "its flight), 180 short of it, 90 to its left."));
+    list.push_back(setting("Away from it (m)", &awayDistance, 0.0f, 25.0f, false));
+    list.push_back(setting("Away angle (deg)", &awayAngle, -180.0f, 180.0f, true));
+    list.push_back(setting("Home height (cm)", &homeHeight, 150.0f, 210.0f, true));
+    list.push_back(setting("Away height (cm)", &awayHeight, 150.0f, 210.0f, true));
+    list.push_back(setting("Home Physicality", &homePhysicality, 1.0f, 100.0f, true));
+    list.push_back(setting("Away Physicality", &awayPhysicality, 1.0f, 100.0f, true));
+    return list;
+  }
+
+  std::vector<DrillPreset> presets() const override
+  {
+    const std::map<std::string, float> base{
+        {"Ball speed (m/s)", 14.0f},  {"Feed distance (m)", 35.0f},
+        {"Home from it (m)", 6.0f},   {"Home angle (deg)", 180.0f},
+        {"Away from it (m)", 6.0f},   {"Away angle (deg)", 0.0f}};
+    const auto with = [&base](std::map<std::string, float> changes)
+    {
+      std::map<std::string, float> settings = base;
+      for (const auto& [name, value] : changes) settings[name] = value;
+      return settings;
+    };
+    return {
+        {"Even race", "Both 6 m from where it comes down, one either side.", base},
+        {"Away too far", "Away starts 18 m off: he can't contest it.",
+         with({{"Away from it (m)", 18.0f}})},
+        {"Tall against short", "Even race, a 1.95 m home player against a 1.70 m one.",
+         with({{"Home height (cm)", 195.0f}, {"Away height (cm)", 170.0f}})},
+    };
+  }
+
+  std::vector<DrillPlayerSpec> players() const override
+  {
+    return {{"Home", PlayerRole::ST, true, {{"Physicality", homePhysicality}},
+             static_cast<int>(homeHeight)},
+            {"Away", PlayerRole::CB, false, {{"Physicality", awayPhysicality}},
+             static_cast<int>(awayHeight)}};
+  }
+
+  void begin(MatchEngine& engine, const std::vector<PlayerID>& ids) override
+  {
+    homeId = ids[0];
+    awayId = ids[1];
+    const Vector2F travel{1.0f, 0.0f};
+    const auto startAt = [&](float metres, float degrees)
+    {
+      const Vector2F at = along(LANDS, rotated(travel, degrees * PI / 180.0f), metres);
+      return Vector2F{std::clamp(at.x, 0.02f, 0.98f), std::clamp(at.y, 0.02f, 0.98f)};
+    };
+    feedFrom = along(LANDS, travel, -feedDistance);
+    feedFrom = {std::clamp(feedFrom.x, 0.005f, 0.995f), feedFrom.y};
+    MatchScenario scenario;
+    scenario.players.push_back({homeId, startAt(homeDistance, homeAngle), false});
+    scenario.players.push_back({awayId, startAt(awayDistance, awayAngle), false});
+    scenario.ballPosition = feedFrom;
+    engine.startDrill(scenario);
+    const float lift = HeaderTargetDrill::liftFor(
+        engine, metresBetween(feedFrom, LANDS), ballSpeed, 0.05f);
+    engine.feedBall(feedFrom, {travel.x * ballSpeed, travel.y * ballSpeed}, lift, 0);
+    fedAt = secondsOf(engine);
+    duelsBefore = engine.getStats().aerialDuelsContested;
+    headersBefore = engine.getStrikeContacts()
+                        .byKind[static_cast<std::size_t>(StrikeKind::HEADER)]
+                        .strikes;
+    contact.reset();
+    jumped = {};
+    running = {};
+    ran = {};
+    last = {};
+    for (std::size_t index = 0; index < 2; ++index)
+      if (const MatchPlayer* player = slotOf(engine, index == 0 ? homeId : awayId))
+        last[index] = player->position;
+    endAt.reset();
+  }
+
+  bool afterStep(MatchEngine& engine) override
+  {
+    const double now = secondsOf(engine);
+    const MatchBall& ball = engine.getBall();
+    std::array<const MatchPlayer*, 2> who{slotOf(engine, homeId), slotOf(engine, awayId)};
+    for (std::size_t index = 0; index < 2; ++index)
+    {
+      if (!who[index]) continue;
+      ran[index] += metresBetween(last[index], who[index]->position);
+      last[index] = who[index]->position;
+      if (!contact && who[index]->airborne() && !jumped[index])
+      {
+        jumped[index] = true;
+        running[index] = who[index]->runningJump;
+      }
+    }
+    if (!contact)
+    {
+      // The first of them to play it (head, chest or foot), or it lands.
+      const PlayerID kicker = ball.kicker ? ball.kicker->getId() : 0;
+      const PlayerID holder = ball.possessedBy ? ball.possessedBy->getId() : 0;
+      const PlayerID by = kicker == homeId || kicker == awayId ? kicker : holder;
+      if (by == homeId || by == awayId)
+      {
+        Contact reading;
+        reading.at = now - fedAt;
+        reading.by = by == homeId ? 1 : 2;
+        reading.height = ball.sentHeightMetres;
+        reading.headed = engine.getStrikeContacts()
+                             .byKind[static_cast<std::size_t>(StrikeKind::HEADER)]
+                             .strikes > headersBefore;
+        reading.duel = engine.getStats().aerialDuelsContested > duelsBefore;
+        for (std::size_t index = 0; index < 2; ++index)
+          if (who[index])
+            reading.gap[index] = metresBetween(who[index]->position, ball.sentFrom);
+        contact = reading;
+        endAt = now + 0.5;
+      }
+      else if (ball.z <= 0.0f && now > fedAt + 0.5)
+      {
+        // Down without either of them getting to it in the air.
+        Contact reading;
+        reading.at = now - fedAt;
+        for (std::size_t index = 0; index < 2; ++index)
+          if (who[index]) reading.gap[index] = metresBetween(who[index]->position, ball.position);
+        contact = reading;
+        endAt = now + 0.5;
+      }
+    }
+    if (engine.getState() != MatchState::PLAYING && !endAt) endAt = now;
+    return !(endAt && now >= *endAt) && now < fedAt + 10.0;
+  }
+
+  std::vector<std::string> report() const override
+  {
+    static constexpr std::array<const char*, 3> WHO{"nobody: it came down", "home",
+                                                   "away"};
+    std::vector<std::string> lines;
+    lines.push_back(std::format(
+        "{:.0f} m/s over {:.0f} m · home {:.0f} m off at {:+.0f} deg ({:.0f} cm), "
+        "away {:.0f} m off at {:+.0f} deg ({:.0f} cm)",
+        ballSpeed, feedDistance, homeDistance, homeAngle, homeHeight, awayDistance,
+        awayAngle, awayHeight));
+    if (contact)
+      lines.push_back(std::format(
+          "OUTCOME  {} at {:.2f} s{}{}, {:.2f} m up · home {} ({:.1f} m away, ran "
+          "{:.1f} m), away {} ({:.1f} m away, ran {:.1f} m)",
+          WHO[static_cast<std::size_t>(contact->by)], contact->at,
+          contact->headed ? ", headed" : "", contact->duel ? ", in a duel" : "",
+          contact->height, jumpName(0), contact->gap[0], ran[0], jumpName(1),
+          contact->gap[1], ran[1]));
+    return lines;
+  }
+
+  std::vector<DrillMetric> metrics() const override
+  {
+    if (!contact) return {};
+    const auto flag = [](bool value) { return value ? 1.0 : 0.0; };
+    return {{"First to it (1 home, 2 away)", static_cast<double>(contact->by)},
+            {"Headed", flag(contact->headed)},
+            {"Duel", flag(contact->duel)},
+            {"Contact at (s)", contact->at},
+            {"Contact height (m)", contact->height},
+            {"Home jumped", flag(jumped[0])},
+            {"Away jumped", flag(jumped[1])},
+            {"Home running jump", flag(jumped[0] && running[0])},
+            {"Away running jump", flag(jumped[1] && running[1])},
+            {"Home gap at contact (m)", contact->gap[0]},
+            {"Away gap at contact (m)", contact->gap[1]},
+            {"Home ran (m)", ran[0]},
+            {"Away ran (m)", ran[1]}};
+  }
+
+ private:
+  struct Contact
+  {
+    double at = 0.0;
+    /** 0 nobody, 1 home, 2 away. */
+    int by = 0;
+    float height = 0.0f;
+    bool headed = false;
+    bool duel = false;
+    /** Each player's distance from the ball at the contact (m). */
+    std::array<float, 2> gap{};
+  };
+  [[nodiscard]] std::string jumpName(std::size_t index) const
+  {
+    return !jumped[index] ? "didn't jump" : running[index] ? "running jump" : "standing jump";
+  }
+
+  float ballSpeed = 14.0f;
+  float feedDistance = 35.0f;
+  float homeDistance = 6.0f;
+  float homeAngle = 180.0f;
+  float awayDistance = 6.0f;
+  float awayAngle = 0.0f;
+  float homeHeight = 180.0f;
+  float awayHeight = 180.0f;
+  float homePhysicality = 60.0f;
+  float awayPhysicality = 60.0f;
+
+  PlayerID homeId = 0;
+  PlayerID awayId = 0;
+  Vector2F feedFrom{};
+  double fedAt = 0.0;
+  int duelsBefore = 0;
+  std::uint64_t headersBefore = 0;
+  std::optional<Contact> contact;
+  std::array<bool, 2> jumped{};
+  std::array<bool, 2> running{};
+  std::array<float, 2> ran{};
+  std::array<Vector2F, 2> last{};
+  std::optional<double> endAt;
+};
 }  // namespace
 
 std::vector<std::unique_ptr<Drill>> makeDrills()
@@ -6983,5 +7279,6 @@ std::vector<std::unique_ptr<Drill>> makeDrills()
   drills.push_back(std::make_unique<DrivenCorridorDrill>());
   drills.push_back(std::make_unique<ChipTargetDrill>());
   drills.push_back(std::make_unique<HeaderTargetDrill>());
+  drills.push_back(std::make_unique<LooseHighBallDrill>());
   return drills;
 }

@@ -67,6 +67,7 @@ enum class PlanBranch : std::uint8_t
   TRANSITION_SUPPORT,
   RECOVER,
   AERIAL_HOLD,
+  AERIAL_CHALLENGE,
   GOALKEEPER,
 };
 
@@ -430,6 +431,157 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
 
   const auto homePressers = closestOutfieldPair(true);
   const auto awayPressers = closestOutfieldPair(false);
+
+  // Going for a loose high ball (aerial challenge plan step 2): goal kicks,
+  // clearances, long balls and the head tennis after them; crosses into
+  // the box keep their own rules (AERIAL_HOLD). From each side one player
+  // goes to where the ball will be at a height he can head it. He holds
+  // the spot and makes his standing jump if he gets there in time to set
+  // himself; otherwise he arrives with the ball and makes his running jump,
+  // higher, so meeting it sooner. The side that meets it first decides the
+  // spot; the other side's player who can get there soonest goes there
+  // too: he contests it if he arrives in time, else he presses the winner.
+  struct AerialRole
+  {
+    MatchPlayer* player = nullptr;
+    Vector2F meet{};
+    bool contests = true;
+    bool running = false;
+  };
+  std::array<AerialRole, 2> aerialRoles{};
+  challengePath.clear();
+  if (!carrier && !ball.isShot && !ball.isAerialDelivery &&
+      (ball.z * MatchTuning::Units::BALL_Z_METRES >
+           MatchTuning::Aerial::CONTROL_CEILING_METRES ||
+       ball.velocityZ > 0.0f))
+  {
+    // Its own flight (drag, spin and curve), run ahead and put back, until
+    // it drops below the chest ceiling.
+    using A = MatchTuning::Aerial;
+    constexpr float TICK = MatchTuning::Timing::FIXED_STEP_SECONDS /
+                           static_cast<float>(MatchTuning::Timing::BALL_SUBSTEPS);
+    const BallMotion saved = ballMotion();
+    for (float seconds = TICK; seconds <= A::CHALLENGE_PATH_SECONDS; seconds += TICK)
+    {
+      integrateBall(TICK);
+      const float height = ball.z * MatchTuning::Units::BALL_Z_METRES;
+      if (height < A::CONTROL_CEILING_METRES && ball.velocityZ <= 0.0f) break;
+      challengePath.push_back({seconds, toMetres(ball.position), height});
+    }
+    setBallMotion(saved);
+  }
+  if (!challengePath.empty())
+  {
+    using A = MatchTuning::Aerial;
+    // How long he takes to get within his head's comfort of a point
+    // (metres), at his pursuit speed, as for a loose ball.
+    const auto runSeconds = [&](const MatchPlayer& candidate, Vector2F point)
+    {
+      const Vector2F from = toMetres(candidate.position);
+      const Vector2F toPoint{point.x - from.x, point.y - from.y};
+      const float metres = length(toPoint);
+      const float toward =
+          metres > EPSILON ? std::max(0.0f, (candidate.velocity.x * toPoint.x +
+                                             candidate.velocity.y * toPoint.y) /
+                                                metres)
+                           : 0.0f;
+      const float pursuit = std::max(
+          currentTopSpeed(candidate) +
+              toward * MatchTuning::Player::CURRENT_VELOCITY_PURSUIT_WEIGHT,
+          MatchTuning::Player::MINIMUM_PURSUIT_SPEED);
+      return std::pair{std::max(0.0f, metres - A::HEAD_COMFORT_GAP_METRES) / pursuit,
+                       metres};
+    };
+    // His earliest meet on the path: the first point he can head it at
+    // that he can get to, holding the spot (standing jump, set in time) or
+    // arriving with it (running jump, with a run-up).
+    struct Meet
+    {
+      float seconds = 0.0f;
+      Vector2F at{};
+      bool running = false;
+    };
+    const auto earliestMeet = [&](const MatchPlayer& candidate) -> std::optional<Meet>
+    {
+      const float reach = derivedPhysicalValue(
+          DerivedStat::JUMPING_REACH, candidate.derivedStat(DerivedStat::JUMPING_REACH));
+      const float rise = std::max(reach - candidate.heightMetres, 0.0f);
+      const float forehead = candidate.heightMetres - A::HEAD_OFFSET_METRES;
+      const float standingTop =
+          forehead + rise * A::STANDING_JUMP_SHARE - A::JUMP_FOREHEAD_ABOVE_METRES;
+      const float runningTop = forehead + rise - A::JUMP_FOREHEAD_ABOVE_METRES;
+      const float lowest = std::max(A::CONTROL_CEILING_METRES,
+                                    forehead - A::DUCK_HEIGHT_SHARE * candidate.heightMetres);
+      const bool moving = length(candidate.velocity) >= A::RUNNING_JUMP_MIN_SPEED;
+      for (const JumpPathPoint& point : challengePath)
+      {
+        if (point.height > runningTop || point.height < lowest) continue;
+        const auto [seconds, metres] = runSeconds(candidate, point.at);
+        if (point.height <= standingTop &&
+            seconds + A::CHALLENGE_SETTLE_SECONDS <= point.seconds)
+          return Meet{point.seconds, point.at, false};
+        if (seconds <= point.seconds && (moving || metres >= A::CHALLENGE_RUN_UP_METRES))
+          return Meet{point.seconds, point.at, true};
+      }
+      return std::nullopt;
+    };
+    // Each side's earliest; a pass's receiver goes for his own side if he
+    // can get to it.
+    std::array<std::optional<Meet>, 2> best{};
+    std::array<MatchPlayer*, 2> bestPlayer{};
+    for (std::size_t side = 0; side < 2; ++side)
+    {
+      const bool home = side == 0;
+      MatchPlayer* receiver = ball.isPass && ball.passByHome == home
+                                  ? findMatchPlayer(ball.intendedReceiver)
+                                  : nullptr;
+      if (receiver && active(*receiver) && !receiver->isGoalkeeper)
+        if (const std::optional<Meet> meet = earliestMeet(*receiver))
+        {
+          best[side] = meet;
+          bestPlayer[side] = receiver;
+          continue;
+        }
+      for (MatchPlayer* const candidate : onPitch(home))
+      {
+        if (candidate->isGoalkeeper) continue;
+        const std::optional<Meet> meet = earliestMeet(*candidate);
+        if (meet && (!best[side] || meet->seconds < best[side]->seconds))
+        {
+          best[side] = meet;
+          bestPlayer[side] = candidate;
+        }
+      }
+    }
+    // The side that meets it first sets the spot.
+    const std::size_t first =
+        !best[1] || (best[0] && best[0]->seconds <= best[1]->seconds) ? 0 : 1;
+    if (best[first])
+    {
+      const Meet& meet = *best[first];
+      aerialRoles[first] = {bestPlayer[first], toPitch(meet.at), true, meet.running};
+      // The other side's player who can get there soonest.
+      const std::size_t other = 1 - first;
+      MatchPlayer* challenger = nullptr;
+      float soonest = std::numeric_limits<float>::max();
+      for (MatchPlayer* const candidate : onPitch(other == 0))
+      {
+        if (candidate->isGoalkeeper) continue;
+        const float seconds = runSeconds(*candidate, meet.at).first;
+        if (seconds < soonest)
+        {
+          soonest = seconds;
+          challenger = candidate;
+        }
+      }
+      if (challenger)
+        aerialRoles[other] = {
+            challenger, toPitch(meet.at),
+            soonest <= meet.seconds + A::CHALLENGE_TOLERANCE_SECONDS,
+            soonest + A::CHALLENGE_SETTLE_SECONDS > meet.seconds &&
+                soonest <= meet.seconds + A::CHALLENGE_TOLERANCE_SECONDS};
+    }
+  }
 
   const auto runPriority = [&](const MatchPlayer& candidate)
   {
@@ -1477,6 +1629,25 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
       }
     }
 
+    // Going for a loose high ball: to the spot, held, or arriving with the
+    // ball for a running jump (he runs through it).
+    bool throughTarget = false;
+    for (const AerialRole& role : aerialRoles)
+    {
+      if (role.player != &player) continue;
+      target = {std::clamp(role.meet.x, MatchTuning::Pitch::PLAYER_MIN_X,
+                           MatchTuning::Pitch::PLAYER_MAX_X),
+                std::clamp(role.meet.y, MatchTuning::Pitch::PLAYER_MIN_Y,
+                           MatchTuning::Pitch::PLAYER_MAX_Y)};
+      targetVelocity = {0.0f, 0.0f};
+      pinned = true;
+      player.intent =
+          role.contests ? PlayerIntent::CLAIM_LOOSE_BALL : PlayerIntent::PRESS_BALL;
+      throughTarget = role.running;
+      job = planJob(PlanBranch::AERIAL_CHALLENGE,
+                    (role.contests ? 1U : 0U) | (role.running ? 2U : 0U));
+    }
+
     // A lofted delivery into the box is attacked by the receiver while the
     // defenders hold their marks instead of drifting back into shape.
     if (ball.isAerialDelivery && !carrier &&
@@ -1542,7 +1713,7 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
     // orientation asked: he heads straight for it, his body following.
     player.routeWaypoints = 0;
     player.facingRequested = false;
-    player.arriveAtSpeed = false;
+    player.arriveAtSpeed = throughTarget;
   }
 }
 

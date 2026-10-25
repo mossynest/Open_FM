@@ -261,6 +261,17 @@ struct MatchPlayer
   float trapTimer = 0.0f;
   bool isDiving = false;
   float diveTimer = 0.0f;
+  /** A jump (Binturong body; aerial challenge plan step 1): his feet's
+   * height (m) and vertical speed (m/s, + up) while he is in the air;
+   * whether it was his running jump (else his standing one); the landing
+   * it will take him, half his time in the air (s); and how much of that
+   * landing is still to come (s). */
+  float feetHeight = 0.0f;
+  float jumpSpeed = 0.0f;
+  bool runningJump = false;
+  float jumpLandingSeconds = 0.0f;
+  float landingSeconds = 0.0f;
+  [[nodiscard]] bool airborne() const { return feetHeight > 0.0f || jumpSpeed > 0.0f; }
   bool isPressing = false;
   bool isMakingRun = false;
 
@@ -925,6 +936,17 @@ struct MatchStats
   int awayAerialDuelsWon = 0;
   /** Aerial duels with both sides involved (each won by one side above). */
   int aerialDuelsContested = 0;
+  /** Header sequences (aerial challenge plan step 4): headers one after
+   * another until someone has the ball or play stops. How many, the
+   * headers in them, those of three or more, the longest; how many ended
+   * with someone having it, and of those how many with the side that
+   * headed it last. */
+  int headerSequences = 0;
+  int headerSequenceHeaders = 0;
+  int headerSequencesLong = 0;
+  int headerSequenceLongest = 0;
+  int headerSequencesToControl = 0;
+  int headerSequencesKept = 0;
   /** Take-ons by the carrier's side, and those that beat the defender. */
   int homeTakeOns = 0;
   int awayTakeOns = 0;
@@ -1836,6 +1858,10 @@ class MatchEngine
   {
     return previousPlayerFacingAngles;
   }
+  const std::vector<float>& getPreviousPlayerFeetHeights() const
+  {
+    return previousPlayerFeetHeights;
+  }
   Vector2F getPreviousBallPosition() const { return previousBallPosition; }
   float getPreviousBallZ() const { return previousBallZ; }
 
@@ -2229,6 +2255,7 @@ class MatchEngine
 
   std::vector<Vector2F> previousPlayerPositions;
   std::vector<float> previousPlayerFacingAngles;
+  std::vector<float> previousPlayerFeetHeights;
   Vector2F previousBallPosition{MatchTuning::Pitch::CENTRE,
                                 MatchTuning::Pitch::CENTRE};
   float previousBallZ = 0.0f;
@@ -2578,6 +2605,19 @@ class MatchEngine
     float facing = 0.0f;
   };
   std::optional<HeaderTurn> headerTurn;
+  /** The loose ball's flight ahead, read once per move for timing jumps
+   * (aerial challenge plan step 1): seconds from now, where (metres), how
+   * high (m). */
+  struct JumpPathPoint
+  {
+    float seconds = 0.0f;
+    Vector2F at{};
+    float height = 0.0f;
+  };
+  std::vector<JumpPathPoint> jumpPath;
+  /** The same, further ahead, for the Binturong brain's challenge for a
+   * loose high ball (aerial challenge plan step 2). */
+  std::vector<JumpPathPoint> challengePath;
   /** Holds `strike` for the sweep when strikes wait for it; false if it is
    * to be played now. */
   bool holdStrikeForSweep(const PendingStrike& strike);
@@ -3059,6 +3099,13 @@ class MatchEngine
   bool headInSweep();
   /** The part of his head of the last unchallenged header. */
   std::optional<HeadPart> lastHeadPart;
+  /** The header sequence under way (MatchStats::headerSequences): headers
+   * so far, and whether the last was by the home side. */
+  int headerRun = 0;
+  bool headerRunLastHome = false;
+  /** Ends the header sequence under way once someone has the ball or play
+   * has stopped (read at the start of each step). */
+  void trackHeaderRun();
   void headBall(MatchPlayer& header);
   /** A defender's touch in front of his own goal that now and then goes
    * toward it instead (true when it did). */

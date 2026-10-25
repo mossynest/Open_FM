@@ -215,13 +215,24 @@
   float landingPaceBinturong(float metres, float elevation, float startHeight) const;
   /** His Jumping reach (m): the top of his head at the top of his jump. */
   float jumpingReachBinturong(const MatchPlayer& player) const;
+  /** The top of his head now (m): his height, plus his feet's in a jump. */
+  float headTopBinturong(const MatchPlayer& player) const;
+  /** How far his running or standing jump lifts him (m). */
+  float jumpRiseBinturong(const MatchPlayer& player, bool running) const;
+  /** A step of his jump: in the air, rising, falling and landing; on the
+   * ground, taking off for a header the ball's flight `path` brings him. */
+  void stepJumpBinturong(MatchPlayer& player, float dt,
+                         const std::vector<JumpPathPoint>& path);
   /** Whether his head can meet a ball `gap` metres from his centre across
    * the ground, the way `toBall` (metric unit), `heightMetres` up, and with
    * which part (heading technique plan step 4); none: out of his head's
    * reach. */
   std::optional<HeadPart> headMeetBinturong(const MatchPlayer& player,
                                             Vector2F toBall, float gap,
-                                            float heightMetres) const;
+                                            float heightMetres,
+                                            float feetHeight) const;
+  /** His feet's height (m) `secondsBefore` the end of this step. */
+  float feetAtBinturong(const MatchPlayer& player, float secondsBefore) const;
   /** Brings a received ball under control: trap time and when he can act
    * (a keeper with it in his hands: how long he holds it). */
   void settleOnBallBinturong(MatchPlayer& player, float touchSkill, bool hands);

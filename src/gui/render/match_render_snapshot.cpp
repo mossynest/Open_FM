@@ -18,6 +18,7 @@ void fillMatchRenderSnapshot(const MatchEngine& engine,
   const auto& players = engine.getPlayers();
   const auto& previousPositions = engine.getPreviousPlayerPositions();
   const auto& previousFacingAngles = engine.getPreviousPlayerFacingAngles();
+  const auto& previousFeetHeights = engine.getPreviousPlayerFeetHeights();
   snapshot.players.clear();
   snapshot.players.reserve(players.size());
   for (std::size_t index = 0; index < players.size(); ++index)
@@ -49,6 +50,10 @@ void fillMatchRenderSnapshot(const MatchEngine& engine,
     renderPlayer.previousFacingAngle = index < previousFacingAngles.size()
                                            ? previousFacingAngles[index]
                                            : renderPlayer.currentFacingAngle;
+    renderPlayer.currentFeetHeightMetres = source.feetHeight;
+    renderPlayer.previousFeetHeightMetres = index < previousFeetHeights.size()
+                                                ? previousFeetHeights[index]
+                                                : source.feetHeight;
   }
 
   const MatchBall& ball = engine.getBall();

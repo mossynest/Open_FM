@@ -2153,8 +2153,11 @@ void MatchRenderer3D::State::addPlayer(const MatchRenderPlayer& player,
   using Q = Tuning::Pose;
   using R = Tuning::Rig;
   using PlayerRig::Event;
-  const Vec3 root = RenderMath::worldFromPitch(lerpRenderPosition(
-      player.previousPosition, player.currentPosition, alpha));
+  // In a jump, his whole body is lifted (his shadow stays on the ground).
+  const Vec3 root = RenderMath::worldFromPitch(
+      lerpRenderPosition(player.previousPosition, player.currentPosition, alpha),
+      player.previousFeetHeightMetres +
+          (player.currentFeetHeightMetres - player.previousFeetHeightMetres) * alpha);
   ScreenPoint anchor;
   if (!projection.project(root + UP * P::HIP_HEIGHT, anchor)) return;
   const RenderMath::ScreenRect& rect = projection.rect;

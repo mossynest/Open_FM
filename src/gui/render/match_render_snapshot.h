@@ -63,6 +63,9 @@ struct MatchRenderPlayer
   bool isInjured = false;
   int yellowCards = 0;
   float heightMetres = MatchTuning::Units::DEFAULT_PLAYER_HEIGHT_METRES;
+  /** His feet's height in a jump (m), at the previous and current step. */
+  float previousFeetHeightMetres = 0.0f;
+  float currentFeetHeightMetres = 0.0f;
   /** Running speed in metres per simulated second (drives the stride). */
   float speedMetresPerSecond = 0.0f;
   /** Seconds before this player may challenge again; it jumps up when he

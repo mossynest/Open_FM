@@ -1148,9 +1148,45 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
   std::array<const MovementStyle*, LANES> styleOf;
   std::array<MatchPlayer*, LANES> movers;
   std::size_t moving = 0;
+  // The ball's flight ahead, for timing jumps (aerial challenge plan step 1):
+  // only a loose ball in open play that is high or rising.
+  jumpPath.clear();
+  if (!walking && state == MatchState::PLAYING && !ball.isShot &&
+      (!ball.possessedBy || ball.inTouch) &&
+      (ball.z * MatchTuning::Units::BALL_Z_METRES >
+           MatchTuning::Aerial::CONTROL_CEILING_METRES ||
+       ball.velocityZ > 0.0f))
+  {
+    // Its own flight (drag, spin and curve), run ahead and put back.
+    constexpr float TICK = MatchTuning::Timing::FIXED_STEP_SECONDS /
+                           static_cast<float>(MatchTuning::Timing::BALL_SUBSTEPS);
+    const BallMotion saved = ballMotion();
+    for (float seconds = TICK; seconds <= MatchTuning::Aerial::JUMP_LOOKAHEAD_SECONDS;
+         seconds += TICK)
+    {
+      integrateBall(TICK);
+      const float height = ball.z * MatchTuning::Units::BALL_Z_METRES;
+      if (height <= 0.0f) break;
+      jumpPath.push_back({seconds, toMetres(ball.position), height});
+    }
+    setBallMotion(saved);
+  }
   for (std::size_t index = 0; index < count; ++index)
   {
     MatchPlayer& player = players[slots[index]];
+    // In the air he carries on as he took off; on the ground he may jump. A
+    // restart walk starts on the ground.
+    if (walking)
+    {
+      player.feetHeight = 0.0f;
+      player.jumpSpeed = 0.0f;
+    }
+    else
+    {
+      const bool wasAirborne = player.airborne() && player.feetHeight > 0.0f;
+      stepJumpBinturong(player, dt, jumpPath);
+      if (wasAirborne || player.feetHeight > 0.0f) continue;
+    }
     Vector2F target = walking ? player.movementTarget : player.tacticalTarget;
     target.x = std::clamp(target.x, Pitch::PLAYER_MIN_X, Pitch::PLAYER_MAX_X);
     target.y = std::clamp(target.y, Pitch::PLAYER_MIN_Y, Pitch::PLAYER_MAX_Y);
@@ -1519,8 +1555,12 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     reserve[lane] = player.sprintReserve;
     injury[lane] =
         player.isInjured ? MatchTuning::Injury::INJURED_SPEED_SCALE : 1.0f;
-    acceleration[lane] = playerAcceleration(player, freeShare);
-    braking[lane] = playerBraking(player, freeShare);
+    // Landing from a jump, he has only a share of his acceleration, braking
+    // and turning.
+    const float landing =
+        player.landingSeconds > 0.0f ? MatchTuning::Aerial::LANDING_MOVEMENT_SHARE : 1.0f;
+    acceleration[lane] = playerAcceleration(player, freeShare) * landing;
+    braking[lane] = playerBraking(player, freeShare) * landing;
     // How hard he chooses to run is his side's brain's.
     const MovementStyle& style = movementStyle(player.isHomeTeam);
     intentScale[lane] =
@@ -1551,7 +1591,7 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     transition[lane] = MatchRules::walkRunTransitionSpeed(player.heightMetres);
     talk[lane] = talkOf(player.isHomeTeam);
     shout[lane] = shoutWorkRate(player.isHomeTeam);
-    turnRate[lane] = bodyTurnRate(player, freeShare);
+    turnRate[lane] = bodyTurnRate(player, freeShare) * landing;
     // Turning to a pass he holds comes before anything else asked of him.
     bodyRequested[lane] =
         passFacing || player.facingRequested || planting ? 1 : 0;
@@ -4285,10 +4325,10 @@ void MatchEngine::headerLimitsBinturong(const MatchPlayer& header,
   else
   {
     // His forehead sends it down only from above it: as steeply as his
-    // forehead, at the top of his jump, can get above the ball's centre,
-    // against its radius (it meets the upper half of the ball).
+    // forehead, where it is, is above the ball's centre, against its radius
+    // (it meets the upper half of the ball).
     const float above =
-        jumpingReachBinturong(header) - A::HEAD_OFFSET_METRES - moment.height;
+        headTopBinturong(header) - A::HEAD_OFFSET_METRES - moment.height;
     profile.lowestElevation = -std::asin(std::clamp(
         above / MatchTuning::Units::BALL_RADIUS_METRES, 0.0f, 1.0f));
   }
@@ -4523,29 +4563,153 @@ float MatchEngine::jumpingReachBinturong(const MatchPlayer& player) const
 
 std::optional<HeadPart> MatchEngine::headMeetBinturong(const MatchPlayer& player,
                                                        Vector2F toBall, float gap,
-                                                       float heightMetres) const
+                                                       float heightMetres,
+                                                       float feetHeight) const
 {
-  // Heading technique plan step 4: within a lean of the neck of his centre,
-  // from the chest ceiling up to the top of his head at the top of his jump.
+  // Heading technique plan step 4: within a lean of the neck of his centre.
+  // Up and down, where his head is then (aerial challenge plan step 1):
+  // from a duck below his forehead (never below the chest ceiling) up to
+  // the top of his head.
   using A = MatchTuning::Aerial;
-  const float top = jumpingReachBinturong(player);
-  if (gap > A::HEAD_REACH_METRES || heightMetres < A::CONTROL_CEILING_METRES ||
-      heightMetres > top)
+  const float top = player.heightMetres + feetHeight;
+  const float forehead = top - A::HEAD_OFFSET_METRES;
+  const float lowest = std::max(A::CONTROL_CEILING_METRES,
+                                forehead - A::DUCK_HEIGHT_SHARE * player.heightMetres);
+  if (gap > A::HEAD_REACH_METRES || heightMetres < lowest || heightMetres > top)
     return std::nullopt;
   const Vector2F facing = normalized(
       {std::cos(player.facingAngle) * MatchTuning::Pitch::LENGTH_METRES,
        std::sin(player.facingAngle) * MatchTuning::Pitch::WIDTH_METRES});
   // Beside or behind him the forehead can't get to it: only the top of his
-  // head, rising to a ball at or above it.
+  // head, for a ball at it.
   if (inTouchDeadZone(facing, toBall, gap, A::HEAD_COMFORT_GAP_METRES,
                       A::HEAD_DEAD_ZONE_DEGREES))
   {
-    if (heightMetres < player.heightMetres) return std::nullopt;
+    if (heightMetres < forehead) return std::nullopt;
     return HeadPart::TOP;
   }
-  // Above his forehead's reach, the top of his head.
-  return heightMetres > top - A::HEAD_OFFSET_METRES ? HeadPart::TOP
-                                                    : HeadPart::FOREHEAD;
+  // Above his forehead, the top of his head.
+  return heightMetres > forehead ? HeadPart::TOP : HeadPart::FOREHEAD;
+}
+
+float MatchEngine::headTopBinturong(const MatchPlayer& player) const
+{
+  return player.heightMetres + player.feetHeight;
+}
+
+float MatchEngine::feetAtBinturong(const MatchPlayer& player, float secondsBefore) const
+{
+  // Back along his flight from where it is at the step's end (players move
+  // before the ball's sub-steps): f(T - s) = f(T) - v(T) s - g s^2 / 2. On
+  // the ground then, 0.
+  if (!player.airborne()) return 0.0f;
+  return std::max(player.feetHeight - player.jumpSpeed * secondsBefore -
+                      0.5f * MatchTuning::Ball::GRAVITY * secondsBefore * secondsBefore,
+                  0.0f);
+}
+
+float MatchEngine::jumpRiseBinturong(const MatchPlayer& player, bool running) const
+{
+  // His running jump takes the top of his head to his Jumping reach; his
+  // standing jump rises a share of that (aerial challenge plan step 1).
+  const float rise = std::max(jumpingReachBinturong(player) - player.heightMetres, 0.0f);
+  return running ? rise : rise * MatchTuning::Aerial::STANDING_JUMP_SHARE;
+}
+
+void MatchEngine::stepJumpBinturong(MatchPlayer& player, float dt,
+                                    const std::vector<JumpPathPoint>& path)
+{
+  // Aerial challenge plan step 1. In the air: his feet rise and fall under
+  // gravity and his run carries on as it was (he can't steer); on landing,
+  // his landing begins. On the ground he jumps for a header that would pass
+  // above his standing head, timed so his head reaches the ball's height as
+  // it arrives (perfectly, for now).
+  using A = MatchTuning::Aerial;
+  constexpr float G = MatchTuning::Ball::GRAVITY;
+  // His run carries on as it was.
+  const auto carry = [&]
+  {
+    const Vector2F moved = toPitch({player.velocity.x * dt, player.velocity.y * dt});
+    player.position = {
+        std::clamp(player.position.x + moved.x, MatchTuning::Pitch::PLAYER_MIN_X,
+                   MatchTuning::Pitch::PLAYER_MAX_X),
+        std::clamp(player.position.y + moved.y, MatchTuning::Pitch::PLAYER_MIN_Y,
+                   MatchTuning::Pitch::PLAYER_MAX_Y)};
+  };
+  if (player.airborne())
+  {
+    player.feetHeight += player.jumpSpeed * dt - 0.5f * G * dt * dt;
+    player.jumpSpeed -= G * dt;
+    if (player.feetHeight <= 0.0f)
+    {
+      player.feetHeight = 0.0f;
+      player.jumpSpeed = 0.0f;
+      player.landingSeconds = player.jumpLandingSeconds;
+    }
+    carry();
+    return;
+  }
+  player.landingSeconds = std::max(player.landingSeconds - dt, 0.0f);
+  if (path.empty() || player.landingSeconds > 0.0f || player.isGoalkeeper ||
+      player.trapTimer > 0.0f || !active(player) ||
+      (ball.kickerLockout > 0.0f && ball.kicker == player.player) ||
+      (ball.inTouch && ball.possessedBy == player.player))
+    return;
+  // Where the ball passes closest to him on its way (he carries on as he is
+  // going), between the points of its path, and when and how high it is
+  // there.
+  const Vector2F at = toMetres(player.position);
+  const auto relative = [&](const JumpPathPoint& point)
+  {
+    return Vector2F{point.at.x - (at.x + player.velocity.x * point.seconds),
+                    point.at.y - (at.y + player.velocity.y * point.seconds)};
+  };
+  std::optional<JumpPathPoint> closest;
+  float closestGap = std::numeric_limits<float>::max();
+  for (std::size_t index = 1; index < path.size(); ++index)
+  {
+    const Vector2F from = relative(path[index - 1]);
+    const Vector2F to = relative(path[index]);
+    const Vector2F step{to.x - from.x, to.y - from.y};
+    const float stepSquared = step.x * step.x + step.y * step.y;
+    const float share =
+        stepSquared > EPSILON
+            ? std::clamp(-(from.x * step.x + from.y * step.y) / stepSquared, 0.0f, 1.0f)
+            : 0.0f;
+    const float gap = length({from.x + step.x * share, from.y + step.y * share});
+    if (gap > closestGap) break;
+    closestGap = gap;
+    const JumpPathPoint& a = path[index - 1];
+    const JumpPathPoint& b = path[index];
+    closest = JumpPathPoint{a.seconds + (b.seconds - a.seconds) * share, {},
+                            a.height + (b.height - a.height) * share};
+  }
+  if (!closest || closestGap > A::HEAD_REACH_METRES || closest->seconds <= 0.0f)
+    return;
+  // Only above his standing forehead; only as high as his jump reaches.
+  const float standing = player.heightMetres;
+  const float forehead = standing - A::HEAD_OFFSET_METRES;
+  const bool running = length(player.velocity) >= A::RUNNING_JUMP_MIN_SPEED;
+  const float rise = jumpRiseBinturong(player, running);
+  if (closest->height <= forehead || closest->height > standing + rise) return;
+  // His forehead a little above the ball's centre, or at the top of his
+  // jump the top of his head.
+  const float needed =
+      std::min(closest->height - forehead + A::JUMP_FOREHEAD_ABOVE_METRES, rise);
+  const float launch = std::sqrt(2.0f * G * rise);
+  const float upSeconds =
+      (launch - std::sqrt(std::max(launch * launch - 2.0f * G * needed, 0.0f))) / G;
+  // He takes off during this step if he must before it ends (the ball's
+  // sub-steps read him part-way through it: feetAtBinturong), and is that
+  // far into his jump by its end.
+  const float wait = closest->seconds - upSeconds;
+  if (wait >= dt) return;
+  const float into = dt - std::max(wait, 0.0f);
+  player.feetHeight = std::max(launch * into - 0.5f * G * into * into, 0.0f);
+  player.jumpSpeed = launch - G * into;
+  player.runningJump = running;
+  player.jumpLandingSeconds = launch / G;
+  carry();
 }
 
 Vector2F MatchEngine::knockDownPointBinturong(const MatchPlayer& /*header*/,

@@ -185,6 +185,12 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
   sample.keeper_claims = {stats.homeKeeperClaims, stats.awayKeeperClaims};
   sample.aerial_contested = stats.aerialDuelsContested;
   sample.aerial_home_won = stats.homeAerialDuelsWon;
+  sample.header_sequences = stats.headerSequences;
+  sample.header_sequence_headers = stats.headerSequenceHeaders;
+  sample.header_sequences_long = stats.headerSequencesLong;
+  sample.header_sequence_longest = stats.headerSequenceLongest;
+  sample.header_sequences_to_control = stats.headerSequencesToControl;
+  sample.header_sequences_kept = stats.headerSequencesKept;
   sample.added_minutes = engine.getAddedMinutes(1) + engine.getAddedMinutes(2);
   sample.ball_in_play = static_cast<double>(stats.ballInPlayMinutes);
   sample.match_length = static_cast<double>(engine.getElapsedMatchMinutes());
@@ -680,6 +686,21 @@ std::map<std::string, Estimate> matchMetrics(
       perTeam([](const MatchSample& s) { return s.clearances; });
   metrics["aerial_duels_per_match"] =
       meanEstimate(column([](const MatchSample& s) { return s.aerial_duels; }));
+  // Header sequences (aerial challenge plan step 4).
+  const std::vector<double> sequences =
+      column([](const MatchSample& s) { return s.header_sequences; });
+  metrics["header_sequences_per_match"] = meanEstimate(sequences);
+  metrics["headers_per_sequence"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.header_sequence_headers; }), sequences);
+  metrics["head_tennis_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.header_sequences_long; }), sequences);
+  metrics["longest_header_sequence"] = meanEstimate(
+      column([](const MatchSample& s) { return s.header_sequence_longest; }));
+  const std::vector<double> toControl =
+      column([](const MatchSample& s) { return s.header_sequences_to_control; });
+  metrics["header_sequences_to_control"] = ratioEstimate(toControl, sequences);
+  metrics["header_sequences_kept"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.header_sequences_kept; }), toControl);
   metrics["pressures_per_team"] =
       perTeam([](const MatchSample& s) { return s.pressures; });
   metrics["key_passes_per_team"] =

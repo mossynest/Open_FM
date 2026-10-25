@@ -1056,10 +1056,12 @@ void MatchEngine::captureInterpolationFrame()
 {
   previousPlayerPositions.resize(players.size());
   previousPlayerFacingAngles.resize(players.size());
+  previousPlayerFeetHeights.resize(players.size());
   for (std::size_t index = 0; index < players.size(); ++index)
   {
     previousPlayerPositions[index] = players[index].position;
     previousPlayerFacingAngles[index] = players[index].facingAngle;
+    previousPlayerFeetHeights[index] = players[index].feetHeight;
   }
   previousBallPosition = ball.position;
   previousBallZ = ball.z;
@@ -1129,6 +1131,7 @@ void MatchEngine::simulateStepBody(float dt)
   // Replayed touchline changes happen between the same two steps as live.
   if (commandCursor < commandLog.size()) applyDueCommands();
   captureInterpolationFrame();
+  if (headerRun > 0) trackHeaderRun();
   stepCounter += stepTicks;
   if (inputCursor < inputLog.size()) applyDueInputs();
   // A substituted or dismissed player hands control back (play mode).
@@ -3471,7 +3474,8 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     if (position.x < boundMinX || position.x > boundMaxX ||
         position.y < boundMinY || position.y > boundMaxY)
       continue;
-    if (!active(player) || player.trapTimer > 0.0f) continue;
+    // In the air (a jump), only his head plays it (headInSweep).
+    if (!active(player) || player.trapTimer > 0.0f || player.airborne()) continue;
     if (touchOwner)
     {
       // He plays his own ball once collected; in his reach nobody else
@@ -3876,10 +3880,14 @@ bool MatchEngine::resolveAerialContest()
     (player.isHomeTeam ? homeInvolved : awayInvolved) = true;
   }
   const bool contested = homeInvolved && awayInvolved;
-  // Unchallenged on a Binturong body: he meets it with his head where it
-  // passes through his head's reach (headInSweep), not here.
-  if (count == 0 ||
-      (!contested && getBody(candidates[0]->isHomeTeam) == BodyId::BINTURONG))
+  // On Binturong bodies he meets it with his head where it passes through
+  // his head's reach (headInSweep), not here: unchallenged, or in a duel
+  // for a loose ball (aerial challenge plan step 3). A cross into the box
+  // keeps this contest for now.
+  bool allBinturong = count > 0;
+  for (std::size_t index = 0; index < count; ++index)
+    allBinturong = allBinturong && getBody(candidates[index]->isHomeTeam) == BodyId::BINTURONG;
+  if (count == 0 || (allBinturong && (!contested || !ball.isAerialDelivery)))
     return false;
 
   float pick = randomFloat(0.0f, totalStrength);
@@ -3958,8 +3966,11 @@ bool MatchEngine::resolveAerialContest()
 bool MatchEngine::headInSweep()
 {
   // The first Binturong body on the ball's path over the last stretch whose
-  // head it passed within reach of (headMeetBinturong) meets it there.
-  constexpr float HEAD_REACH = MatchTuning::Aerial::HEAD_REACH_METRES;
+  // head it passed within reach of (headMeetBinturong) meets it there. With
+  // an opponent's head reaching it at about the same moment, the duel
+  // decides which of them (aerial challenge plan step 3).
+  using A = MatchTuning::Aerial;
+  constexpr float HEAD_REACH = A::HEAD_REACH_METRES;
   const Vector2F start = toMetres(substepBallPosition);
   const Vector2F end = toMetres(ball.position);
   const Vector2F segment{end.x - start.x, end.y - start.y};
@@ -3973,8 +3984,24 @@ bool MatchEngine::headInSweep()
     float gap = 0.0f;
     HeadPart part = HeadPart::FOREHEAD;
   };
-  std::optional<Meet> first;
-  for (std::size_t slot = 0; slot < players.size(); ++slot)
+  // Players have moved to where they are at the step's end; the ball's
+  // sub-steps fill the step. Each is read where he was at this sub-step's
+  // end: part-way along his move, and in a jump his feet back along it.
+  const int substepsPerStep =
+      MatchTuning::Timing::BALL_SUBSTEPS * static_cast<int>(stepTicks);
+  const float stepShare =
+      1.0f - static_cast<float>(substepsLeftInStep) / static_cast<float>(substepsPerStep);
+  const float secondsBefore = ballStepSeconds * (1.0f - stepShare);
+  const float substepSeconds = ballStepSeconds / static_cast<float>(substepsPerStep);
+  struct Header
+  {
+    std::size_t slot = 0;
+    Vector2F position{};
+    float feet = 0.0f;
+  };
+  std::array<Header, 32> headers{};
+  std::size_t headerCount = 0;
+  for (std::size_t slot = 0; slot < players.size() && headerCount < headers.size(); ++slot)
   {
     const MatchPlayer& player = players[slot];
     // Not his own touched ball (a cushion dropping to him).
@@ -3983,57 +4010,148 @@ bool MatchEngine::headInSweep()
         (ball.inTouch && ball.possessedBy == player.player) ||
         getBody(player.isHomeTeam) != BodyId::BINTURONG)
       continue;
-    const Vector2F position = toMetres(player.position);
+    const Vector2F was = slot < previousPlayerPositions.size()
+                             ? previousPlayerPositions[slot]
+                             : player.position;
+    headers[headerCount++] = {
+        slot,
+        toMetres({was.x + (player.position.x - was.x) * stepShare,
+                  was.y + (player.position.y - was.y) * stepShare}),
+        feetAtBinturong(player, secondsBefore)};
+  }
+  // Where on this stretch it passes closest to his head, and whether he
+  // can head it there.
+  const auto meetNow = [&](const Header& header) -> std::optional<Meet>
+  {
+    const MatchPlayer& player = players[header.slot];
     const float along = segmentSquared > EPSILON
-                            ? std::clamp(((position.x - start.x) * segment.x +
-                                          (position.y - start.y) * segment.y) /
+                            ? std::clamp(((header.position.x - start.x) * segment.x +
+                                          (header.position.y - start.y) * segment.y) /
                                              segmentSquared,
                                          0.0f, 1.0f)
                             : 0.0f;
-    if (first && along >= first->along) continue;
-    const Vector2F toBall{start.x + segment.x * along - position.x,
-                          start.y + segment.y * along - position.y};
+    const Vector2F toBall{start.x + segment.x * along - header.position.x,
+                          start.y + segment.y * along - header.position.y};
     const float gap = length(toBall);
-    if (gap > HEAD_REACH) continue;
+    if (gap > HEAD_REACH) return std::nullopt;
     const float height = startHeight + (endHeight - startHeight) * along;
     const std::optional<HeadPart> part = headMeetBinturong(
         player, gap > EPSILON ? Vector2F{toBall.x / gap, toBall.y / gap} : Vector2F{},
-        gap, height);
-    if (!part) continue;
-    // Still closing on him at the stretch's end: he lets it come closer to
-    // the middle of his head, if a sub-step on (or where it passes closest,
-    // if sooner) it will still be his to head (its height there from its
-    // flight, without drag).
-    if (along >= 1.0f)
-    {
-      const Vector2F velocity = substepEndMotion.velocity;
-      const float speedSquared = velocity.x * velocity.x + velocity.y * velocity.y;
-      const Vector2F fromHim{end.x - position.x, end.y - position.y};
-      const float closing = -(fromHim.x * velocity.x + fromHim.y * velocity.y);
-      if (speedSquared > EPSILON && closing > 0.0f)
-      {
-        const float seconds =
-            std::min(closing / speedSquared,
-                     ballStepSeconds /
-                         static_cast<float>(MatchTuning::Timing::BALL_SUBSTEPS *
-                                            static_cast<int>(stepTicks)));
-        const Vector2F later{fromHim.x + velocity.x * seconds,
-                             fromHim.y + velocity.y * seconds};
-        const float laterGap = length(later);
-        const float laterHeight =
-            endHeight + substepEndMotion.velocityZ * seconds -
-            0.5f * MatchTuning::Ball::GRAVITY * seconds * seconds;
-        if (headMeetBinturong(player,
-                              laterGap > EPSILON
-                                  ? Vector2F{later.x / laterGap, later.y / laterGap}
+        gap, height, header.feet);
+    if (!part) return std::nullopt;
+    return Meet{header.slot, along, gap, *part};
+  };
+  // Whether he can head it `seconds` after the stretch's end, it and he
+  // carrying on as they are (its height from its flight, without drag).
+  const auto meetsLater = [&](const Header& header, float seconds)
+  {
+    const MatchPlayer& player = players[header.slot];
+    const Vector2F velocity{substepEndMotion.velocity.x - player.velocity.x,
+                            substepEndMotion.velocity.y - player.velocity.y};
+    const Vector2F later{end.x - header.position.x + velocity.x * seconds,
+                         end.y - header.position.y + velocity.y * seconds};
+    const float laterGap = length(later);
+    const float laterHeight = endHeight + substepEndMotion.velocityZ * seconds -
+                              0.5f * MatchTuning::Ball::GRAVITY * seconds * seconds;
+    return headMeetBinturong(
+               player,
+               laterGap > EPSILON ? Vector2F{later.x / laterGap, later.y / laterGap}
                                   : Vector2F{},
-                              laterGap, laterHeight))
-          continue;
-      }
+               laterGap, laterHeight,
+               feetAtBinturong(player, std::max(secondsBefore - seconds, 0.0f)))
+        .has_value();
+  };
+  // An opponent near enough the ball to be challenging him for it.
+  const auto challenged = [&](const MatchPlayer& player)
+  {
+    for (std::size_t index = 0; index < headerCount; ++index)
+    {
+      const Header& other = headers[index];
+      if (players[other.slot].isHomeTeam != player.isHomeTeam &&
+          length({other.position.x - end.x, other.position.y - end.y}) <=
+              A::DUEL_RADIUS_METRES)
+        return true;
     }
-    first = Meet{slot, along, gap, *part};
+    return false;
+  };
+  std::optional<Meet> first;
+  for (std::size_t index = 0; index < headerCount; ++index)
+  {
+    const Header& header = headers[index];
+    const MatchPlayer& player = players[header.slot];
+    const std::optional<Meet> meet = meetNow(header);
+    if (!meet || (first && meet->along >= first->along)) continue;
+    // Still closing on him at the stretch's end, and nobody challenging
+    // him: he lets it come closer to the middle of his head, if a sub-step
+    // on (or where it passes closest, if sooner) it will still be his to
+    // head. Challenged, he heads it as soon as he can.
+    if (meet->along >= 1.0f && !challenged(player))
+    {
+      const Vector2F velocity{substepEndMotion.velocity.x - player.velocity.x,
+                              substepEndMotion.velocity.y - player.velocity.y};
+      const float speedSquared = velocity.x * velocity.x + velocity.y * velocity.y;
+      const float closing = -((end.x - header.position.x) * velocity.x +
+                              (end.y - header.position.y) * velocity.y);
+      if (speedSquared > EPSILON && closing > 0.0f &&
+          meetsLater(header, std::min(closing / speedSquared, substepSeconds)))
+        continue;
+    }
+    first = meet;
   }
   if (!first) return false;
+
+  // The duel. Opponents whose heads it reaches within the close call of
+  // his: by strength, how far above the ball each head is, and holding the
+  // spot against attacking it, with some chance.
+  const MatchPlayer& leader = players[first->slot];
+  const float meetHeight = startHeight + (endHeight - startHeight) * first->along;
+  const float leaderSeconds = first->along * substepStretchSeconds;
+  std::array<std::size_t, 8> close{};
+  std::size_t closeCount = 0;
+  for (std::size_t index = 0; index < headerCount && closeCount < close.size(); ++index)
+  {
+    const Header& header = headers[index];
+    if (players[header.slot].isHomeTeam == leader.isHomeTeam) continue;
+    const std::optional<Meet> meet = meetNow(header);
+    const float after = leaderSeconds + A::DUEL_CLOSE_CALL_SECONDS - substepStretchSeconds;
+    if ((meet && (meet->along - first->along) * substepStretchSeconds <=
+                     A::DUEL_CLOSE_CALL_SECONDS) ||
+        (!meet && after > 0.0f && meetsLater(header, after)))
+      close[closeCount++] = index;
+  }
+  if (closeCount > 0)
+  {
+    const auto strength = [&](const Header& header)
+    {
+      const MatchPlayer& player = players[header.slot];
+      const float above = player.heightMetres + header.feet - meetHeight;
+      const bool holding = !player.airborne() || !player.runningJump;
+      return (0.35f + std::clamp(player.physicality, 0.0f, 1.0f)) *
+             (1.0f + std::clamp(above / A::DUEL_HEIGHT_MARGIN_METRES, 0.0f, 1.0f)) *
+             (holding ? A::DUEL_HOLD_ADVANTAGE : 1.0f);
+    };
+    const Header* leaderHeader = nullptr;
+    for (std::size_t index = 0; index < headerCount; ++index)
+      if (headers[index].slot == first->slot) leaderHeader = &headers[index];
+    float total = strength(*leaderHeader);
+    for (std::size_t index = 0; index < closeCount; ++index)
+      total += strength(headers[close[index]]);
+    float pick = randomFloat(0.0f, total) - strength(*leaderHeader);
+    for (std::size_t index = 0; index < closeCount && pick > 0.0f; ++index)
+    {
+      const Header& rival = headers[close[index]];
+      pick -= strength(rival);
+      if (pick <= 0.0f)
+      {
+        // He wins it where they meet it.
+        const float gap =
+            length({start.x + segment.x * first->along - rival.position.x,
+                    start.y + segment.y * first->along - rival.position.y});
+        first = Meet{rival.slot, first->along, std::min(gap, HEAD_REACH),
+                     meetNow(rival).value_or(*first).part};
+      }
+    }
+  }
 
   // Met where it reaches him, as a foot meets it (resolveLooseBall): the
   // ball travels that share of the stretch, he heads it there, and it goes
@@ -4050,9 +4168,47 @@ bool MatchEngine::headInSweep()
     setBallMotion(substepEndMotion);
     contactAlong.reset();
   }
+  // A duel if an opponent who could have got his head to it is close: it is
+  // counted, and a push or a hold in it may be a foul.
+  std::array<MatchPlayer*, 8> beaten{};
+  std::size_t beatenCount = 0;
+  const Vector2F meetAt = toMetres(ball.position);
+  for (std::size_t index = 0; index < headerCount && beatenCount < beaten.size(); ++index)
+  {
+    MatchPlayer& other = players[headers[index].slot];
+    if (other.isHomeTeam != player.isHomeTeam &&
+        length({headers[index].position.x - meetAt.x,
+                headers[index].position.y - meetAt.y}) <= A::DUEL_RADIUS_METRES &&
+        jumpingReachBinturong(other) >= meetHeight)
+      beaten[beatenCount++] = &other;
+  }
+  if (beatenCount > 0)
+  {
+    ++statsOf(player).aerialDuelsWon;
+    for (std::size_t index = 0; index < beatenCount; ++index)
+      ++statsOf(*beaten[index]).aerialDuelsLost;
+    ++stats.aerialDuelsContested;
+    ++(player.isHomeTeam ? stats.homeAerialDuelsWon : stats.awayAerialDuelsWon);
+    // Pushing or holding in the air: the defender's foul in his own box is a
+    // penalty; an attacker's push gives the defence a free kick.
+    if (incidentRoll() < A::DUEL_FOUL_CHANCE)
+    {
+      const bool attackerFouls = incidentRoll() < 0.6f;
+      const bool winnerAttacking = ball.passByHome == player.isHomeTeam;
+      MatchPlayer& attacker = winnerAttacking ? player : *beaten[0];
+      MatchPlayer& defender = winnerAttacking ? *beaten[0] : player;
+      clearFlightState();
+      ball.velocity = {0.0f, 0.0f};
+      ball.velocityZ = 0.0f;
+      contactAlong.reset();
+      if (attackerFouls)
+        commitFoul(attacker, defender, true, false);
+      else
+        commitFoul(defender, attacker, true, false);
+      return true;
+    }
+  }
   lastHeadPart = first->part;
-  const int substepsPerStep =
-      MatchTuning::Timing::BALL_SUBSTEPS * static_cast<int>(stepTicks);
   strikeAt = TouchMoment{ball.position,
                          first->gap,
                          HEAD_REACH,
@@ -4115,9 +4271,31 @@ void MatchEngine::clearBall(MatchPlayer& defender)
   defender.actionCooldown = recoverySeconds(defender, Recovery::PASS);
 }
 
+void MatchEngine::trackHeaderRun()
+{
+  // Over once someone has it (a touch he owns, or in his hands) or play has
+  // stopped; a ball still loose (in the air or not) keeps it going.
+  const bool stopped = state != MatchState::PLAYING;
+  if (!stopped && !ball.possessedBy) return;
+  ++stats.headerSequences;
+  stats.headerSequenceHeaders += headerRun;
+  if (headerRun >= 3) ++stats.headerSequencesLong;
+  stats.headerSequenceLongest = std::max(stats.headerSequenceLongest, headerRun);
+  if (!stopped)
+  {
+    ++stats.headerSequencesToControl;
+    if (const MatchPlayer* holder = findMatchPlayer(ball.possessedBy);
+        holder && holder->isHomeTeam == headerRunLastHome)
+      ++stats.headerSequencesKept;
+  }
+  headerRun = 0;
+}
+
 void MatchEngine::headBall(MatchPlayer& header)
 {
   trackTouch(header);
+  ++headerRun;
+  headerRunLastHome = header.isHomeTeam;
   const bool fromTeammate = ball.isPass && ball.passByHome == header.isHomeTeam;
   const MatchPlayer* deliverer = findMatchPlayer(ball.lastPossessor);
   if (fromTeammate && ball.passWasOffside &&
