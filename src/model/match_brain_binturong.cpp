@@ -433,8 +433,9 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
   const auto awayPressers = closestOutfieldPair(false);
 
   // Going for a loose high ball (aerial challenge plan step 2): goal kicks,
-  // clearances, long balls and the head tennis after them; crosses into
-  // the box keep their own rules (AERIAL_HOLD). From each side one player
+  // clearances, long balls and the head tennis after them, and crosses
+  // (everyone else in the box keeps his man or his slot: AERIAL_HOLD). From
+  // each side one player
   // goes to where the ball will be at a height he can head it. He holds
   // the spot and makes his standing jump if he gets there in time to set
   // himself; otherwise he arrives with the ball and makes his running jump,
@@ -450,7 +451,7 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
   };
   std::array<AerialRole, 2> aerialRoles{};
   challengePath.clear();
-  if (!carrier && !ball.isShot && !ball.isAerialDelivery &&
+  if (!carrier && !ball.isShot &&
       (ball.z * MatchTuning::Units::BALL_Z_METRES >
            MatchTuning::Aerial::CONTROL_CEILING_METRES ||
        ball.velocityZ > 0.0f))
@@ -1632,9 +1633,11 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
     // Going for a loose high ball: to the spot, held, or arriving with the
     // ball for a running jump (he runs through it).
     bool throughTarget = false;
+    bool challenging = false;
     for (const AerialRole& role : aerialRoles)
     {
       if (role.player != &player) continue;
+      challenging = true;
       target = {std::clamp(role.meet.x, MatchTuning::Pitch::PLAYER_MIN_X,
                            MatchTuning::Pitch::PLAYER_MAX_X),
                 std::clamp(role.meet.y, MatchTuning::Pitch::PLAYER_MIN_Y,
@@ -1649,8 +1652,9 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
     }
 
     // A lofted delivery into the box is attacked by the receiver while the
-    // defenders hold their marks instead of drifting back into shape.
-    if (ball.isAerialDelivery && !carrier &&
+    // defenders hold their marks instead of drifting back into shape; the
+    // one going for it (above) is released from his.
+    if (ball.isAerialDelivery && !carrier && !challenging &&
         ball.passByHome != player.isHomeTeam &&
         player.intent != PlayerIntent::CLAIM_LOOSE_BALL)
     {

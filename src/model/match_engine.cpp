@@ -3881,14 +3881,13 @@ bool MatchEngine::resolveAerialContest()
   }
   const bool contested = homeInvolved && awayInvolved;
   // On Binturong bodies he meets it with his head where it passes through
-  // his head's reach (headInSweep), not here: unchallenged, or in a duel
-  // for a loose ball (aerial challenge plan step 3). A cross into the box
-  // keeps this contest for now.
+  // his head's reach (headInSweep), not here, challenged or not, a cross
+  // as well as a loose ball (aerial challenge plan step 3). Mixed bodies
+  // keep this contest.
   bool allBinturong = count > 0;
   for (std::size_t index = 0; index < count; ++index)
     allBinturong = allBinturong && getBody(candidates[index]->isHomeTeam) == BodyId::BINTURONG;
-  if (count == 0 || (allBinturong && (!contested || !ball.isAerialDelivery)))
-    return false;
+  if (count == 0 || allBinturong) return false;
 
   float pick = randomFloat(0.0f, totalStrength);
   std::size_t winnerIndex = count - 1;
@@ -4061,15 +4060,15 @@ bool MatchEngine::headInSweep()
                feetAtBinturong(player, std::max(secondsBefore - seconds, 0.0f)))
         .has_value();
   };
-  // An opponent near enough the ball to be challenging him for it.
-  const auto challenged = [&](const MatchPlayer& player)
+  // Whether an opponent's head could get to it within `seconds` after the
+  // stretch's end (or on this stretch): then he can't wait for it.
+  const auto opponentFirst = [&](const MatchPlayer& player, float seconds)
   {
     for (std::size_t index = 0; index < headerCount; ++index)
     {
       const Header& other = headers[index];
       if (players[other.slot].isHomeTeam != player.isHomeTeam &&
-          length({other.position.x - end.x, other.position.y - end.y}) <=
-              A::DUEL_RADIUS_METRES)
+          (meetNow(other) || meetsLater(other, seconds)))
         return true;
     }
     return false;
@@ -4081,19 +4080,21 @@ bool MatchEngine::headInSweep()
     const MatchPlayer& player = players[header.slot];
     const std::optional<Meet> meet = meetNow(header);
     if (!meet || (first && meet->along >= first->along)) continue;
-    // Still closing on him at the stretch's end, and nobody challenging
-    // him: he lets it come closer to the middle of his head, if a sub-step
-    // on (or where it passes closest, if sooner) it will still be his to
-    // head. Challenged, he heads it as soon as he can.
-    if (meet->along >= 1.0f && !challenged(player))
+    // Still closing on him at the stretch's end: he lets it come closer to
+    // the middle of his head, if a sub-step on (or where it passes closest,
+    // if sooner) it will still be his to head, and no opponent's head could
+    // get to it by then. Otherwise he heads it now.
+    if (meet->along >= 1.0f)
     {
       const Vector2F velocity{substepEndMotion.velocity.x - player.velocity.x,
                               substepEndMotion.velocity.y - player.velocity.y};
       const float speedSquared = velocity.x * velocity.x + velocity.y * velocity.y;
       const float closing = -((end.x - header.position.x) * velocity.x +
                               (end.y - header.position.y) * velocity.y);
-      if (speedSquared > EPSILON && closing > 0.0f &&
-          meetsLater(header, std::min(closing / speedSquared, substepSeconds)))
+      const float wait =
+          speedSquared > EPSILON ? std::min(closing / speedSquared, substepSeconds) : 0.0f;
+      if (closing > 0.0f && wait > 0.0f && meetsLater(header, wait) &&
+          !opponentFirst(player, wait))
         continue;
     }
     first = meet;
