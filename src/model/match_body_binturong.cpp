@@ -4991,6 +4991,7 @@ void MatchEngine::takeDirectFreeKickBinturong(MatchPlayer& taker)
     ball.isShot = false;
     ball.shotOnTarget = false;
     ball.shotSaveResolved = true;
+    notePathChange();
     ball.velocity = {outward * speed * randomFloat(0.3f, 1.0f),
                      speed * randomFloat(-0.8f, 0.8f)};
     ball.velocityZ = randomFloat(0.0f, MatchTuning::Aerial::HEADER_LIFT);
@@ -5844,4 +5845,62 @@ bool MatchEngine::dribbleTouchNeededEarlyBinturong(const MatchPlayer& player,
       return true;
   }
   return false;
+}
+
+Vector2F MatchEngine::tackleNudgeSpotBinturong(const MatchPlayer& tackler,
+                                               const MatchPlayer& attacker,
+                                               Vector2F contact) const
+{
+  // Tackling plan step 3. Coming from the side or behind (the attacker
+  // nearer the goal he defends), he nicks it out square to the attacker's
+  // line, on his own side. Goal-side and face on, forward (away from his
+  // goal) and to the side, past the attacker: the side he is on of the
+  // attacker's line, or dead centre his weaker foot's (his stronger foot
+  // makes the tackle). It stops closer to him the better his Tackling
+  // (Defending stands in until the stat exists).
+  using D = MatchTuning::Defending;
+  const Vector2F goal{tackler.isHomeTeam ? 0.0f : 1.0f, MatchTuning::Pitch::CENTRE};
+  const bool goalSide = distance(tackler.position, goal) < distance(attacker.position, goal);
+  const Vector2F away = metricDirection(goal, contact);
+  // The attacker's line: his run, or (barely moving) from him to the ball.
+  Vector2F line = length(attacker.velocity) > MatchTuning::Ball::STOP_SPEED
+                      ? normalized(attacker.velocity)
+                      : metricDirection(attacker.position, contact);
+  if (length(line) <= EPSILON) line = away;
+  // Which side of that line he is on, in metres.
+  const Vector2F offset = toMetres({tackler.position.x - contact.x,
+                                    tackler.position.y - contact.y});
+  const float along = offset.x * line.x + offset.y * line.y;
+  const Vector2F lateral{offset.x - line.x * along, offset.y - line.y * along};
+  const float lateralMetres = length(lateral);
+  const auto weakerSide = [&](Vector2F facing)
+  {
+    // Left of `facing` is it turned a quarter anticlockwise.
+    const bool rightFooted = !tackler.player || tackler.player->getFoot() == Foot::Right;
+    const Vector2F left{-facing.y, facing.x};
+    return rightFooted ? left : Vector2F{-left.x, -left.y};
+  };
+  Vector2F aim;
+  if (!goalSide)
+  {
+    aim = lateralMetres > EPSILON
+              ? Vector2F{lateral.x / lateralMetres, lateral.y / lateralMetres}
+              : weakerSide(line);
+  }
+  else
+  {
+    const Vector2F side =
+        lateralMetres > D::NUDGE_CENTRE_METRES
+            ? Vector2F{lateral.x / lateralMetres, lateral.y / lateralMetres}
+            : weakerSide(away);
+    const float round = D::FACE_ON_NUDGE_DEGREES * std::numbers::pi_v<float> / 180.0f;
+    aim = normalized({away.x * std::cos(round) + side.x * std::sin(round),
+                      away.y * std::cos(round) + side.y * std::sin(round)});
+  }
+  const float metres =
+      D::NUDGE_METRES_POOR +
+      (D::NUDGE_METRES_BEST - D::NUDGE_METRES_POOR) * std::clamp(tackler.defending, 0.0f, 1.0f);
+  const Vector2F reach = toPitch({aim.x * metres, aim.y * metres});
+  return {std::clamp(contact.x + reach.x, 0.001f, 0.999f),
+          std::clamp(contact.y + reach.y, 0.001f, 0.999f)};
 }

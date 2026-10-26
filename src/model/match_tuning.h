@@ -536,6 +536,15 @@ struct MatchTuning final
      * with the best, in whole 0.1 s steps (the ball's ticks). */
     static constexpr float TOUCH_INTERVAL_POOR_SECONDS = 0.5f;
     static constexpr float TOUCH_INTERVAL_BEST_SECONDS = 0.2f;
+    /** In a contest (tackling plan step 2, agreed placeholder): within this
+     * long of his planned touch the carrier's swing can't be called off. */
+    static constexpr float COMMIT_SECONDS = 0.2f;
+    /** The commit rule (agreed 2026-10-26, a hard-wired standard): a feet
+     * first touch (receiving, a loose ball, a free-ball tackle; not an
+     * interception, a contest or a dribble touch) needs the ball on its
+     * current path at least this long: he can't flinch at a ball that has
+     * just changed. Committed to its old path, he misses it cleanly. */
+    static constexpr float FIRST_TOUCH_COMMIT_SECONDS = 0.2f;
     /** He touches a ball heading this far off the way he wants to go... */
     static constexpr float LOOSE_REDIRECT_RADIANS = 0.5f;
     /** ...but at pace turns it at most this far off his run per touch, and
@@ -1492,6 +1501,17 @@ struct MatchTuning final
     static constexpr float TECHNIQUE_FOUL_BONUS = 0.10f;
     static constexpr float WINNING_TACKLE_FOUL_SHARE = 0.25f;
     static constexpr float PENALTY_AREA_FOUL_SCALE = 0.13f;
+    /** A free-ball tackle's "win it" nudge (tackling plan step 3, agreed
+     * 2026-10-26): it stops this far from where he met it, by Tackling
+     * (Defending stands in): far for the worst, close for the best. */
+    static constexpr float NUDGE_METRES_POOR = 3.0f;
+    static constexpr float NUDGE_METRES_BEST = 1.5f;
+    /** Goal-side and face on, forward (away from his goal) and this far
+     * round to the side. */
+    static constexpr float FACE_ON_NUDGE_DEGREES = 45.0f;
+    /** Within this of the attacker's line he is dead centre: the side is
+     * his weaker foot's (placeholder). */
+    static constexpr float NUDGE_CENTRE_METRES = 0.2f;
     // A won challenge often only pokes the ball loose.
     static constexpr float POKE_LOOSE_CHANCE = 0.45f;
     static constexpr float MIN_POKE_SPEED = 3.5f;

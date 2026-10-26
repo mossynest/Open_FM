@@ -306,6 +306,10 @@ struct MatchPlayer
   bool isSprinting = false;
   float tackleCooldown = 0.0f;
   float actionCooldown = 0.0f;
+  /** His foot is committed after a swing in a contest (tackling plan step
+   * 2: the attacker's ball inside both reaches): no foot touch of the ball
+   * until it has run down (s). Started only by the contest. */
+  float footCooldown = 0.0f;
 
   float pace = MatchTuning::Player::DEFAULT_ATTRIBUTE;
   float shooting = MatchTuning::Player::DEFAULT_ATTRIBUTE;
@@ -875,6 +879,12 @@ struct MatchBall
   float kickerLockout = 0.0f;
   /** Players (by slot bit) who already tried to reach this ball in flight. */
   std::uint32_t touchAttempts = 0;
+  /** When its path last changed (a touch, kick or deflection; engine
+   * seconds): a feet first touch needs it COMMIT_SECONDS old (tackling plan,
+   * the commit rule). And the players (by slot bit) whose touch it has
+   * already left too soon on this path. */
+  double pathSince = 0.0;
+  std::uint32_t commitMisses = 0;
   /** Players (by slot bit) letting this loose ball come closer before they
    * touch it (first-touch timing). */
   std::uint32_t touchWaiting = 0;
@@ -983,6 +993,24 @@ struct MatchStats
   int awayFreeBallTackles = 0;
   int homeFreeBallTacklesWon = 0;
   int awayFreeBallTacklesWon = 0;
+  /** Contest tackles (tackling plan step 2): the tackler's touch on the
+   * carrier's ball inside both reaches; counted in the tackle attempts and
+   * settled like a free-ball tackle. */
+  int homeContestTackles = 0;
+  int awayContestTackles = 0;
+  int homeContestTacklesWon = 0;
+  int awayContestTacklesWon = 0;
+  /** Swings at nothing in a contest, by the swinger's side: a carrier
+   * whose ball the tackler played first, and a tackler whose ball the
+   * carrier played first. */
+  int homeCarrierAirSwings = 0;
+  int awayCarrierAirSwings = 0;
+  int homeTacklerAirSwings = 0;
+  int awayTacklerAirSwings = 0;
+  /** Feet first touches missed because the ball's path had changed too
+   * recently to commit to (the commit rule), by the player's side. */
+  int homeCommitMisses = 0;
+  int awayCommitMisses = 0;
   /** A keeper coming for a high ball in his box, and catching it. */
   int homeKeeperClaimAttempts = 0;
   int awayKeeperClaimAttempts = 0;
@@ -1049,7 +1077,22 @@ enum class MatchCommandType : std::uint8_t
    * and can act. */
   FORCE_PASS,
   /** Drills: what the player does with the next header he wins. */
-  FORCE_HEADER
+  FORCE_HEADER,
+  /** Drills: what the player means by a tackle on a free ball. */
+  FORCE_TACKLE_INTENT
+};
+
+/** What a tackle on a free ball means to do (tackling plan step 3). */
+enum class TackleIntent : std::uint8_t
+{
+  /** Bring it under control (his first touch, as before). */
+  CONTROL,
+  /** Nudge it away from the attacker, to step across and win it. */
+  WIN,
+  /** Clear it, struck where he meets it. */
+  CLEAR,
+  /** Pass it first time to a team-mate. */
+  PASS,
 };
 
 /** What a drill's forced header does (forceHeader). */
@@ -1183,6 +1226,8 @@ struct MatchCommandRecord
   bool headerKnownEarly = true;
   /** KEEP_BALL: how hard he carries it (older recordings: flat out). */
   float keepUrgency = 1.0f;
+  /** FORCE_TACKLE_INTENT: what his free-ball tackles mean to do. */
+  TackleIntent tackleIntent = TackleIntent::CONTROL;
 };
 
 /** One-shot action requested by an external controller (play mode). */
@@ -2046,6 +2091,15 @@ class MatchEngine
    * SPOT), at `goalAim` in the goal (metres across from the middle and up;
    * GOAL), or is cushioned and kept (KEEP), instead of what the brain
    * would choose. Logged and replayed. */
+  /** Drills: from now on the player's tackles on a free ball (an
+   * opponent's ball outside his reach) mean `intent`, instead of the
+   * control touch (tackling plan step 3; the brain chooses in step 5).
+   * Logged and replayed. */
+  void forceTackleIntent(PlayerID playerId, TackleIntent intent);
+  /** Where the last free-ball tackle's "win it" nudge was aimed to stop,
+   * and how many there have been. For drills. */
+  [[nodiscard]] Vector2F getLastNudgeSpot() const { return lastNudgeSpot; }
+  [[nodiscard]] int getNudges() const { return nudges; }
   void forceHeader(PlayerID playerId, ForcedHeaderAim aim,
                    std::optional<Vector2F> spot = std::nullopt,
                    std::optional<Vector2F> goalAim = std::nullopt,
@@ -2171,6 +2225,11 @@ class MatchEngine
   ForcedPass forcedPass;
   /** Players who only carry the ball (keepBall), and how hard each does. */
   std::vector<PlayerID> ballKeepers;
+  /** Drills: players whose free-ball tackles mean something other than
+   * control (forceTackleIntent). */
+  std::vector<std::pair<PlayerID, TackleIntent>> forcedTackleIntents;
+  Vector2F lastNudgeSpot{};
+  int nudges = 0;
   std::vector<std::pair<PlayerID, float>> ballKeeperUrgency;
   /** Places the scenario's players and ball; the carrier (null when the
    * ball is loose), or nothing when a player is unknown. */
@@ -3340,14 +3399,31 @@ class MatchEngine
   void setPossession(MatchPlayer& player);
   /** A tackle on a free ball: counted as attempted now, and won if his side
    * next has the ball under control (settleTackle). */
-  void noteFreeBallTackle(MatchPlayer& tackler);
+  void noteFreeBallTackle(MatchPlayer& tackler, bool contest = false);
   /** `homeTeam`'s side has the ball under control: a pending free-ball
    * tackle is won if that is the tackler's side, lost otherwise. */
   void settleTackle(bool homeTeam);
+  /** The ball's path has just changed (a touch, kick or deflection). */
+  void notePathChange();
+  /** Engine seconds on the ball's clock: inside the ball's sub-steps, the
+   * sub-step's own time. */
+  double ballNow() const;
+  double ballClockSeconds = 0.0;
+  bool ballClockRunning = false;
+  /** Whether `player` can contest `owner`'s collected ball while it is
+   * inside the owner's reach (tackling plan step 2): an outfield opponent,
+   * both on the Binturong body. */
+  bool contestsBall(const MatchPlayer& player, const MatchPlayer& owner) const;
+  /** The tackler has played the owner's ball inside both reaches: both
+   * feet's cooldowns (rows 1, 2 and 5 of the step 2 table). */
+  void commitContestTouch(MatchPlayer& tackler, MatchPlayer& owner);
+  /** A contest swing at nothing: his foot committed for `seconds`. */
+  void swingAtNothing(MatchPlayer& player, float seconds, bool carrier);
   struct PendingTackle
   {
     const Player* tackler = nullptr;
     bool homeTeam = false;
+    bool contest = false;
   };
   /** A free-ball tackle not yet won or lost; play stopping lapses it. */
   std::optional<PendingTackle> pendingTackle;
@@ -3363,7 +3439,14 @@ class MatchEngine
    * the goal he attacks. */
   TouchIntent defaultTouchIntent(const MatchPlayer& player) const;
   /** Plays the touch where he meets the ball and claims it. */
-  void playFirstTouch(MatchPlayer& player, const TouchMoment& moment);
+  /** `forced`: this intent instead of the brain's (a tackle's nudge). */
+  void playFirstTouch(MatchPlayer& player, const TouchMoment& moment,
+                      const TouchIntent* forced = nullptr);
+  /** A tackle on a free ball played with its intent (tackling plan step
+   * 3): the nudge, a clearance or a first-time pass, from where he meets
+   * it. False for control (played as his first touch). */
+  bool playTackleIntent(MatchPlayer& tackler, const MatchPlayer& attacker,
+                        const TouchMoment& moment);
   /** Where a dribbler wants to go: the metric direction and the pace he
    * wants (m/s): the AI toward his plan's target (ball.dribbleGoal) at the
    * pace his brain would run there, the controlled player along his stick. */

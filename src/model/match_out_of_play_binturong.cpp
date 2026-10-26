@@ -83,6 +83,7 @@ void MatchEngine::checkOutOfBoundsBinturong()
       ball.shotOnTarget = false;
       ball.position.x = rightGoalLine ? 1.0f - 0.004f : 0.004f;
       ball.position.y = crossingY;
+      notePathChange();
       ball.velocity = {
           -ball.velocity.x * MatchTuning::Shooting::WOODWORK_REBOUND,
           ball.velocity.y + randomFloat(-3.0f, 3.0f)};

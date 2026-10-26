@@ -2625,8 +2625,9 @@ class TackleDrill final : public Drill
   {
     return "An attacker dribbles straight at a lone defender, only carrying "
            "it. Whether the defender takes it, and how: a free ball (outside "
-           "the attacker's reach, played as a touch) or the tackle roll; or "
-           "the attacker reaches the end, 15 m beyond the defender, with it.";
+           "the attacker's reach, played with his intent), a contest (inside "
+           "it) or a slide's roll; or the attacker reaches the end, 15 m "
+           "beyond the defender, with it.";
   }
 
   std::vector<DrillParameter> parameters() override
@@ -2649,6 +2650,22 @@ class TackleDrill final : public Drill
                                    "decides the tackle).");
     moves.choices = {"His brain", "Straight at the ball"};
     list.push_back(moves);
+    DrillParameter intent = setting(
+        "Defender's intent", &intentChoice, 0.0f, 3.0f, true,
+        "What his tackle on a free ball means (a ball outside the "
+        "attacker's reach): control it; win it (a nudge away from the "
+        "attacker, closer the better his Defending); clear it; or a "
+        "first-time pass to his team-mate.");
+    intent.choices = {"Control", "Win it", "Clear", "First-time pass"};
+    list.push_back(intent);
+    list.push_back(setting("Team-mate behind (m)", &mateBehindSetting, -20.0f,
+                           30.0f, false,
+                           "First-time pass: the defender's team-mate, this "
+                           "far behind his start (towards his own goal)."));
+    list.push_back(setting("Team-mate across (m)", &mateAcrossSetting, -30.0f,
+                           30.0f, false,
+                           "First-time pass: and this far across (+ to the "
+                           "attacker's left)."));
     return list;
   }
 
@@ -2664,27 +2681,45 @@ class TackleDrill final : public Drill
 
   std::vector<DrillPlayerSpec> players() const override
   {
-    return {{"Attacker", PlayerRole::ST, true,
-             {{"Dribbling", dribbling}, {"Pace", attackerPace}}},
-            {"Defender", PlayerRole::CB, false,
-             {{"Defending", defending}, {"Pace", defenderPace}}}};
+    std::vector<DrillPlayerSpec> list{
+        {"Attacker", PlayerRole::ST, true,
+         {{"Dribbling", dribbling}, {"Pace", attackerPace}}},
+        {"Defender", PlayerRole::CB, false,
+         {{"Defending", defending}, {"Pace", defenderPace}}}};
+    if (intentOf() == TackleIntent::PASS)
+      list.push_back({"Team-mate", PlayerRole::CB, false});
+    return list;
   }
 
   void begin(MatchEngine& engine, const std::vector<PlayerID>& ids) override
   {
     attackerId = ids[0];
     defenderId = ids[1];
+    mateId = ids.size() > 2 ? ids[2] : 0;
     gap = gapSetting;
     atBall = moveChoice >= 0.5f;
     const Vector2F attackerAt{0.3f, 0.5f};
     defenderStart = along(attackerAt, {1.0f, 0.0f}, gap);
+    mateAt = along(along(defenderStart, {1.0f, 0.0f}, mateBehindSetting),
+                   {0.0f, 1.0f}, mateAcrossSetting);
     MatchScenario scenario;
     scenario.players.push_back({attackerId, attackerAt, false});
     scenario.players.push_back({defenderId, defenderStart, false});
+    if (mateId != 0) scenario.players.push_back({mateId, mateAt, false});
     scenario.carrierId = attackerId;
     scenario.ballPosition = attackerAt;
     engine.startDrill(scenario);
     engine.keepBall(attackerId, true, paceChoice / 3.0f);
+    engine.forceTackleIntent(defenderId, intentOf());
+    // The team-mate stays on his spot to be found.
+    if (mateId != 0) engine.setDrillTarget(mateId, mateAt, false);
+    tackleAt.reset();
+    endGap = 0.0f;
+    travelled = 0.0f;
+    nudgesBefore = engine.getNudges();
+    nudgeFrom.reset();
+    nudgeEnd.reset();
+    nudgeAttackerGap = 0.0f;
     // Straight on, through where the defender stands, to the end.
     endPoint = along(defenderStart, {1.0f, 0.0f}, BEYOND_METRES);
     engine.setDrillTarget(attackerId, along(endPoint, {1.0f, 0.0f}, RUN_THROUGH_METRES),
@@ -2714,25 +2749,51 @@ class TackleDrill final : public Drill
     if (after.awayFreeBallTackles != engine.getStats().awayFreeBallTackles &&
         lastGap <= MatchTuning::Ball::OUTFIELD_CONTROL_RADIUS_METRES)
       ++freeBehind;
+    // Where his first free-ball tackle met it (about: the ball this step).
+    if (!tackleAt && after.awayFreeBallTackles != engine.getStats().awayFreeBallTackles)
+      tackleAt = ball.position;
+    // His first nudge: followed until the ball has (nearly) stopped, he no
+    // longer owns it, or a second and a half.
+    if (!nudgeFrom && engine.getNudges() > nudgesBefore)
+    {
+      nudgeFrom = tackleAt.value_or(ball.position);
+      nudgeAim = engine.getLastNudgeSpot();
+      nudgeSince = now;
+    }
+    if (nudgeFrom && !nudgeEnd &&
+        (std::hypot(ball.velocity.x, ball.velocity.y) < 0.5f ||
+         ball.possessedBy != defender->player || now - nudgeSince > 1.5))
+    {
+      nudgeEnd = ball.position;
+      nudgeAttackerGap = metresBetween(attacker->position, ball.position);
+    }
     after = engine.getStats();
     lastGap = metresBetween(attacker->position, ball.position);
     if (outcome == Outcome::NONE && ball.possessedBy == attacker->player)
       largestGap = std::max(largestGap, lastGap);
     if (outcome == Outcome::NONE)
     {
-      const bool defenderHasIt =
-          ball.possessedBy == defender->player &&
+      const MatchPlayer* mate = mateId ? slotOf(engine, mateId) : nullptr;
+      const bool sideHasIt =
+          ball.possessedBy &&
+          (ball.possessedBy == defender->player ||
+           (mate && ball.possessedBy == mate->player)) &&
           (!ball.inTouch || ball.touchCollected);
       if (engine.getState() != MatchState::PLAYING)
         outcome = Outcome::STOPPED;
-      else if (defenderHasIt)
+      else if (sideHasIt)
         outcome = Outcome::WON;
       else if (ball.possessedBy == attacker->player &&
                attacker->position.x >= endPoint.x)
         outcome = Outcome::KEPT;
       else if (now > TIME_LIMIT_SECONDS)
         outcome = Outcome::TIME;
-      if (outcome != Outcome::NONE) endAt = now;
+      if (outcome != Outcome::NONE)
+      {
+        endAt = now;
+        endGap = metresBetween(attacker->position, ball.position);
+        travelled = tackleAt ? metresBetween(*tackleAt, ball.position) : 0.0f;
+      }
     }
     return !(endAt && now > *endAt + 0.5);
   }
@@ -2751,15 +2812,16 @@ class TackleDrill final : public Drill
   std::vector<std::string> report() const override
   {
     static constexpr std::array<const char*, 5> WHAT{
-        "", "the defender won it", "the attacker reached the end with it",
+        "", "the defender's side won it", "the attacker reached the end with it",
         "play stopped", "time up"};
     std::vector<std::string> lines;
     lines.push_back(std::format("Gap {:.0f} m, Dribbling {:.0f}, Defending {:.0f}{}",
                                 gap, dribbling, defending,
                                 atBall ? ", defender sent at the ball" : ""));
     lines.push_back(std::format(
-        "Tackles: {} on a free ball ({} won), {} by the roll ({} won)",
-        freeBall(), freeBallWon(), rolled(), rolledWon()));
+        "Tackles: {} on a free ball ({} won), {} contested ({} won), {} by "
+        "the roll ({} won)",
+        freeBall(), freeBallWon(), contest(), contestWon(), rolled(), rolledWon()));
     if (endAt)
       lines.push_back(std::format("OUTCOME  {} at {:.1f} s",
                                   WHAT[static_cast<int>(outcome)], *endAt));
@@ -2769,12 +2831,35 @@ class TackleDrill final : public Drill
   std::vector<DrillMetric> metrics() const override
   {
     if (!endAt) return {};
-    return {{"Defender won it", outcome == Outcome::WON ? 1.0 : 0.0},
+    return {{"Defender's side won it", outcome == Outcome::WON ? 1.0 : 0.0},
             {"Attacker kept it", outcome == Outcome::KEPT ? 1.0 : 0.0},
             {"Largest gap (m)", largestGap},
+            {"Ball from attacker at the end (m)", endGap},
+            {"Ball from free-ball tackle at the end (m)", travelled},
+            {"Nudged", nudgeEnd ? 1.0 : 0.0},
+            {"Nudge length (m)",
+             nudgeEnd ? metresBetween(*nudgeFrom, *nudgeEnd) : 0.0},
+            {"Nudge aimed (m)",
+             nudgeEnd ? metresBetween(*nudgeFrom, nudgeAim) : 0.0},
+            {"Nudge off its aim (m)",
+             nudgeEnd ? metresBetween(nudgeAim, *nudgeEnd) : 0.0},
+            {"Nudge: ball from attacker (m)", nudgeAttackerGap},
             {"Free-ball tackles", static_cast<double>(freeBall())},
             {"Free-ball tackles won", static_cast<double>(freeBallWon())},
-            {"Free ball behind him", static_cast<double>(freeBehind)},            {"Rolled tackles", static_cast<double>(rolled())},
+            {"Free ball behind him", static_cast<double>(freeBehind)},
+            {"Contest tackles", static_cast<double>(contest())},
+            {"Contest tackles won", static_cast<double>(contestWon())},
+            {"Attacker swung at nothing",
+             static_cast<double>(after.homeCarrierAirSwings -
+                                 before.homeCarrierAirSwings)},
+            {"Defender swung at nothing",
+             static_cast<double>(after.awayTacklerAirSwings -
+                                 before.awayTacklerAirSwings)},
+            {"Attacker missed, path too new",
+             static_cast<double>(after.homeCommitMisses - before.homeCommitMisses)},
+            {"Defender missed, path too new",
+             static_cast<double>(after.awayCommitMisses - before.awayCommitMisses)},
+            {"Rolled tackles", static_cast<double>(rolled())},
             {"Rolled tackles won", static_cast<double>(rolledWon())},
             {"Ended at (s)", *endAt}};
   }
@@ -2799,13 +2884,22 @@ class TackleDrill final : public Drill
   {
     return after.awayFreeBallTacklesWon - before.awayFreeBallTacklesWon;
   }
+  int contest() const
+  {
+    return after.awayContestTackles - before.awayContestTackles;
+  }
+  int contestWon() const
+  {
+    return after.awayContestTacklesWon - before.awayContestTacklesWon;
+  }
   int rolled() const
   {
-    return after.awayTackleAttempts - before.awayTackleAttempts - freeBall();
+    return after.awayTackleAttempts - before.awayTackleAttempts - freeBall() -
+           contest();
   }
   int rolledWon() const
   {
-    return after.awayTackles - before.awayTackles - freeBallWon();
+    return after.awayTackles - before.awayTackles - freeBallWon() - contestWon();
   }
 
   float gapSetting = 12.0f;
@@ -2815,11 +2909,30 @@ class TackleDrill final : public Drill
   float defending = 70.0f;
   float defenderPace = 70.0f;
   float moveChoice = 0.0f;
+  float intentChoice = 0.0f;
+  float mateBehindSetting = 10.0f;
+  float mateAcrossSetting = 15.0f;
+
+  TackleIntent intentOf() const
+  {
+    return static_cast<TackleIntent>(static_cast<int>(intentChoice + 0.5f));
+  }
 
   float gap = 12.0f;
   bool atBall = false;
   PlayerID attackerId = 0;
   PlayerID defenderId = 0;
+  PlayerID mateId = 0;
+  Vector2F mateAt{};
+  std::optional<Vector2F> tackleAt;
+  float endGap = 0.0f;
+  float travelled = 0.0f;
+  int nudgesBefore = 0;
+  std::optional<Vector2F> nudgeFrom;
+  std::optional<Vector2F> nudgeEnd;
+  Vector2F nudgeAim{};
+  double nudgeSince = 0.0;
+  float nudgeAttackerGap = 0.0f;
   Vector2F defenderStart{};
   Vector2F endPoint{};
   float largestGap = 0.0f;

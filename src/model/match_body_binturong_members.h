@@ -383,4 +383,10 @@
    * (normalised pitch). */
   DribbleTurnAhead dribbleTurnAheadBinturong(const MatchPlayer& player,
                                              Vector2F from) const;
+  /** Where a tackle's "win it" nudge sends a free ball met at `contact`
+   * (tackling plan step 3): out of the attacker's line to the defender's
+   * side, or, goal-side and face on, forward and to the side past him. */
+  Vector2F tackleNudgeSpotBinturong(const MatchPlayer& tackler,
+                                    const MatchPlayer& attacker,
+                                    Vector2F contact) const;
 // clang-format on

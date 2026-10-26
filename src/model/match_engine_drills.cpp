@@ -240,6 +240,15 @@ void MatchEngine::forcePassTo(PlayerID playerId, Vector2F spot,
   recordCommand(command);
 }
 
+void MatchEngine::forceTackleIntent(PlayerID playerId, TackleIntent intent)
+{
+  MatchCommandRecord command;
+  command.type = MatchCommandType::FORCE_TACKLE_INTENT;
+  command.player = playerId;
+  command.tackleIntent = intent;
+  recordCommand(command);
+}
+
 void MatchEngine::forceHeader(PlayerID playerId, ForcedHeaderAim aim,
                               std::optional<Vector2F> spot,
                               std::optional<Vector2F> goalAim, bool knownEarly)

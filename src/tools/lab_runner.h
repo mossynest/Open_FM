@@ -134,6 +134,14 @@ struct MatchSample
   /** Tackles on a free ball (tackling plan step 1), and those won. */
   std::array<int, 2> free_ball_tackles{};
   std::array<int, 2> free_ball_tackles_won{};
+  /** Contest tackles (tackling plan step 2), those won, and swings at
+   * nothing by carriers and by tacklers. */
+  int contest_tackles = 0;
+  int contest_tackles_won = 0;
+  int carrier_air_swings = 0;
+  int tackler_air_swings = 0;
+  /** Feet first touches missed under the commit rule. */
+  int commit_misses = 0;
   std::array<int, 2> keeper_claim_attempts{};
   std::array<int, 2> keeper_claims{};
   /** Aerial duels with both sides involved, and those the home side won. */

@@ -468,6 +468,14 @@ bool MatchEngine::executeCommand(const MatchCommandRecord& command)
       lastHeadPart.reset();
       ++inputRevision;
       return true;
+    case MatchCommandType::FORCE_TACKLE_INTENT:
+      if (!drillPlayer(command.player)) return false;
+      std::erase_if(forcedTackleIntents, [&](const auto& forced)
+                    { return forced.first == command.player; });
+      if (command.tackleIntent != TackleIntent::CONTROL)
+        forcedTackleIntents.emplace_back(command.player, command.tackleIntent);
+      ++inputRevision;
+      return true;
     case MatchCommandType::KEEP_BALL:
       if (!drillPlayer(command.player)) return false;
       std::erase(ballKeepers, command.player);
@@ -493,6 +501,7 @@ bool MatchEngine::executeCommand(const MatchCommandRecord& command)
       ball.position = {std::clamp(command.target->x, 0.001f, 0.999f),
                        std::clamp(command.target->y, 0.001f, 0.999f)};
       ball.z = 0.0f;
+      notePathChange();
       ball.velocity = command.feedVelocity;
       ball.velocityZ = command.feedLift;
       ball.spin = {};
@@ -1149,6 +1158,7 @@ void MatchEngine::simulateStepBody(float dt)
   for (auto& player : players)
   {
     player.tackleCooldown = std::max(0.0f, player.tackleCooldown - dt);
+    player.footCooldown = std::max(0.0f, player.footCooldown - dt);
     player.actionCooldown = std::max(0.0f, player.actionCooldown - dt);
     player.trapTimer = std::max(0.0f, player.trapTimer - dt);
     player.plantedSeconds = std::max(0.0f, player.plantedSeconds - dt);
@@ -2312,11 +2322,14 @@ void MatchEngine::resolvePossessionAndActions(float dt)
           sliding ? D::SLIDE_TACKLE_DISTANCE_METRES
                   : D::TACKLE_DISTANCE_METRES +
                         controlled.defending * D::TACKLE_DEFENDING_REACH_METRES;
-      // A loose dribbled ball the carrier's foot couldn't be on is a free
-      // ball, played by touching it, not by a standing tackle (tackling plan
-      // step 1).
-      const bool freeBall = !sliding && ball.inTouch && !ballInReach(*carrier);
-      if (!freeBall && distance(controlled.position, ball.position) <= reach)
+      // A loose dribbled ball is played by touching it, not by a standing
+      // tackle: a free ball (tackling plan step 1) or a contest (step 2,
+      // a Binturong body only).
+      const bool touchedNotRolled =
+          !sliding && ball.inTouch &&
+          (!ballInReach(*carrier) ||
+           getBody(controlled.isHomeTeam) == BodyId::BINTURONG);
+      if (!touchedNotRolled && distance(controlled.position, ball.position) <= reach)
       {
         controlInput.action = MatchInputAction::NONE;
         ++controlledActions[controlled.isHomeTeam ? 0 : 1];
@@ -2562,6 +2575,7 @@ bool MatchEngine::attemptTakeOn(MatchPlayer& carrier, MatchPlayer& defender)
     const float push = groundLaunchSpeed(
         R::TAKE_ON_TOUCH_METRES + speed * R::LOOSE_LEAD_SECONDS,
         speed * R::LOOSE_ARRIVAL_SHARE);
+    notePathChange();
     ball.velocity = {ball.dribbleDirection.x * push,
                      ball.dribbleDirection.y * push};
     ball.touchAttempts = 0;
@@ -2757,6 +2771,7 @@ void MatchEngine::attemptTackle(MatchPlayer& carrier, MatchPlayer& defender,
       ball.lastPossessor = defender.player;
       clearFlightState();
       ball.z = 0.0f;
+      notePathChange();
       ball.velocity = {std::cos(angle) * speed, std::sin(angle) * speed};
       ball.velocityZ = 0.0f;
       ball.kicker = defender.player;
@@ -3209,10 +3224,19 @@ void MatchEngine::updateBall(float dt)
   // there, and the ball goes on through the rest of the sub-step with what
   // the contact gave it (a few at most: the toucher is then kept off it).
   constexpr int MAX_STRETCHES = 4;
+  // The ball's clock: each sub-step at its own time (the commit rule).
+  struct ClockRuns
+  {
+    bool& running;
+    ~ClockRuns() { running = false; }
+  } clockRuns{ballClockRunning};
+  ballClockRunning = true;
+  const double stepStart = getSimulatedSeconds();
   for (int index = 0; index < substeps; ++index)
   {
     substepsLeftInStep = substeps - 1 - index;
     ballStepSeconds = dt;
+    ballClockSeconds = stepStart + static_cast<double>(index) * substep;
     float remaining = substep;
     for (int stretch = 0; stretch < MAX_STRETCHES && remaining > EPSILON;
          ++stretch)
@@ -3366,6 +3390,7 @@ void MatchEngine::parryShot(MatchPlayer& keeper, bool overTheBar)
   const float speed =
       length(ball.velocity) * MatchTuning::Goalkeeper::PARRY_SPEED_SHARE;
   const Spill spill = parrySpill(keeper, speed);
+  notePathChange();
   ball.velocity = spill.velocity;
   ball.velocityZ = spill.verticalSpeed;
   ball.position.x = keeper.position.x + outward * 0.004f;
@@ -3489,12 +3514,13 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     if (touchOwner)
     {
       // He plays his own ball once collected; in his reach nobody else
-      // does; a team-mate takes it over only once it is well away from him.
+      // does, but an opponent contesting it (tackling plan step 2); a
+      // team-mate takes it over only once it is well away from him.
       if (&player == touchOwner)
       {
         if (!ball.touchCollected) continue;
       }
-      else if (ownerHasIt ||
+      else if ((ownerHasIt && !contestsBall(player, *touchOwner)) ||
                (player.isHomeTeam == touchOwner->isHomeTeam &&
                 ownerGap <= touchKnobs[TouchKnob::TEAMMATE_DISTANCE]))
       {
@@ -3503,6 +3529,8 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     }
     if (ball.kickerLockout > 0.0f && ball.kicker == player.player) continue;
     if ((ball.touchAttempts & (1U << slot)) != 0U) continue;
+    // His foot is committed from a contest swing.
+    if (&player != touchOwner && player.footCooldown > 1e-4f) continue;
     // Team-mates let a pass run to its receiver, and never block their own
     // side's shot.
     if (ball.isPass && player.isHomeTeam == ball.passByHome &&
@@ -3612,6 +3640,15 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     const Contact& contact = contacts[index];
     MatchPlayer& player = players[contact.slot];
     const bool hands = handsAllowed(player);
+    // A contest (tackling plan step 2): an opponent at the owner's ball
+    // inside both reaches, with his feet. Inside the owner's reach that is
+    // the only way an opponent plays it.
+    const bool contest = touchOwner && &player != touchOwner && ownerHasIt &&
+                         !hands && contestsBall(player, *touchOwner) &&
+                         contact.height <= bodyLines(player).feet;
+    if (touchOwner && &player != touchOwner && ownerHasIt && !contest &&
+        player.isHomeTeam != touchOwner->isHomeTeam)
+      continue;
     const int substepsPerStep =
         MatchTuning::Timing::BALL_SUBSTEPS * static_cast<int>(stepTicks);
     // A Binturong body meets the ball where it reaches him: it travels
@@ -3649,6 +3686,20 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     if (&player == touchOwner)
     {
       const std::uint32_t bit = 1U << contact.slot;
+      // He plays it first: an opponent contesting it, the ball inside his
+      // reach too, swung at nothing (tackling plan step 2, rows 3 and 4).
+      const auto contestersSwingAtNothing = [&]
+      {
+        if (!ownerHasIt) return;
+        for (std::size_t other = 0; other < contactCount; ++other)
+        {
+          MatchPlayer& rival = players[contacts[other].slot];
+          if (&rival != &player && contestsBall(rival, player) &&
+              rival.footCooldown <= 1e-4f &&
+              contacts[other].height <= bodyLines(rival).feet)
+            swingAtNothing(rival, dribbleTouchIntervalBinturong(rival), false);
+        }
+      };
       // A shot meets the ball at foot height or not at all (no volleys
       // yet): above it, it is dropped, he plays the ball as he would, and
       // decides again.
@@ -3667,6 +3718,7 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
           (!pendingStrike->turning || turnedToPassBinturong(player)))
       {
         ball.touchWaiting &= ~bit;
+        contestersSwingAtNothing();
         playPendingStrike(moment);
         return;
       }
@@ -3681,6 +3733,7 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
         continue;
       }
       ball.touchWaiting &= ~bit;
+      contestersSwingAtNothing();
       playDribbleTouch(player, moment);
       return;
     }
@@ -3690,6 +3743,28 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
         !touchNow(player, moment))
     {
       ball.touchWaiting |= 1U << contact.slot;
+      continue;
+    }
+    // The commit rule: a feet first touch on a ball he receives, a loose
+    // one or an opponent's outside his reach needs it on its path long
+    // enough to have committed to; on a path that has just changed he
+    // misses it cleanly. Not an interception (an opponent's pass), a
+    // contest or his own dribble.
+    if (!hands && !player.isGoalkeeper && !ball.isShot && !contest &&
+        &player != touchOwner &&
+        getBody(player.isHomeTeam) == BodyId::BINTURONG &&
+        contact.height <= bodyLines(player).feet &&
+        !(ball.isPass && ball.passByHome != player.isHomeTeam) &&
+        ballNow() - ball.pathSince <
+            MatchTuning::Dribble::FIRST_TOUCH_COMMIT_SECONDS - 1e-6)
+    {
+      const std::uint32_t bit = 1U << contact.slot;
+      ball.touchWaiting &= ~bit;
+      if ((ball.commitMisses & bit) == 0U)
+      {
+        ball.commitMisses |= bit;
+        ++(player.isHomeTeam ? stats.homeCommitMisses : stats.awayCommitMisses);
+      }
       continue;
     }
     ball.touchWaiting &= ~(1U << contact.slot);
@@ -3718,6 +3793,7 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
       ball.isShot = false;
       ball.shotOnTarget = false;
       ball.fromThrowIn = false;
+      notePathChange();
       ball.velocity.x *= MatchTuning::Defending::DEFLECTION_SPEED_FACTOR;
       ball.velocity.y +=
           randomFloat(-MatchTuning::Defending::MAX_DEFLECTION_Y_SPEED,
@@ -3733,7 +3809,11 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     const bool intended = ball.isPass && ball.intendedReceiver == player.player;
     if (!intended && !hands && ballSpeed > B::MAX_HEAVY_TOUCH_SPEED &&
         !reachesBall(player, ballSpeed, stretch))
+    {
+      // Row 6: he went for it and missed; his foot is committed.
+      if (contest) player.footCooldown = dribbleTouchIntervalBinturong(player);
       continue;
+    }
     if (!hands && !player.isGoalkeeper &&
         getBody(player.isHomeTeam) == BodyId::BINTURONG)
     {
@@ -3745,16 +3825,34 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
       ++(receiver ? bodyContacts.receiver : bodyContacts.other)[part];
     }
     // An opponent getting to a touched ball ends the claim, whatever his own
-    // touch then does with it: a tackle on a free ball if the owner had it
-    // under control (tackling plan step 1); before that, the ball he was
+    // touch then does with it: a tackle if the owner had it under control,
+    // on a free ball (tackling plan step 1) or contested inside his reach
+    // (step 2: both feet's cooldowns); before that, the ball he was
     // receiving.
+    // A free-ball tackle (not a contest) by a Binturong outfielder at feet
+    // height is played with its intent (tackling plan step 3).
+    const MatchPlayer* freeBallFrom = nullptr;
     if (ball.inTouch)
     {
       if (touchOwner && touchOwner->isHomeTeam != player.isHomeTeam &&
           ball.touchCollected)
-        noteFreeBallTackle(player);
+      {
+        noteFreeBallTackle(player, contest);
+        if (contest)
+        {
+          if (MatchPlayer* owner = findMatchPlayer(touchOwner->player))
+            commitContestTouch(player, *owner);
+        }
+        else if (!hands && !player.isGoalkeeper &&
+                 getBody(player.isHomeTeam) == BodyId::BINTURONG &&
+                 contact.height <= bodyLines(player).feet)
+        {
+          freeBallFrom = touchOwner;
+        }
+      }
       clearPossession();
     }
+    if (freeBallFrom && playTackleIntent(player, *freeBallFrom, moment)) return;
 
     // A defender meeting a cross close to his own goal line often plays safe
     // and puts it behind; an Aardvark body now and then turns it into his
@@ -3817,6 +3915,7 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
       // away from the player instead of rolling on at full pace.
       player.isTrapping = true;
       player.trapTimer = B::FAILED_TRAP_TIME;
+      notePathChange();
       ball.velocity = heavyTouchVelocity(player, ball.velocity);
       ball.velocityZ = 0.0f;
       ball.z = 0.0f;
@@ -3890,6 +3989,7 @@ bool MatchEngine::resolveAerialContest()
     const float outward = player.isHomeTeam ? 1.0f : -1.0f;
     ball.lastPossessor = player.player;
     clearFlightState();
+    notePathChange();
     ball.velocity = {outward * MatchTuning::Aerial::HEADER_CLEARANCE_SPEED *
                          randomFloat(0.5f, 0.9f),
                      randomFloat(-5.0f, 5.0f)};
@@ -4540,12 +4640,52 @@ void MatchEngine::takePossession(MatchPlayer& player)
   updateTeamPhases();
 }
 
-void MatchEngine::noteFreeBallTackle(MatchPlayer& tackler)
+void MatchEngine::noteFreeBallTackle(MatchPlayer& tackler, bool contest)
 {
   ++(tackler.isHomeTeam ? stats.homeTackleAttempts : stats.awayTackleAttempts);
-  ++(tackler.isHomeTeam ? stats.homeFreeBallTackles : stats.awayFreeBallTackles);
+  if (contest)
+    ++(tackler.isHomeTeam ? stats.homeContestTackles : stats.awayContestTackles);
+  else
+    ++(tackler.isHomeTeam ? stats.homeFreeBallTackles : stats.awayFreeBallTackles);
   ++statsOf(tackler).tacklesAttempted;
-  pendingTackle = PendingTackle{tackler.player, tackler.isHomeTeam};
+  pendingTackle = PendingTackle{tackler.player, tackler.isHomeTeam, contest};
+}
+
+bool MatchEngine::contestsBall(const MatchPlayer& player,
+                               const MatchPlayer& owner) const
+{
+  return player.isHomeTeam != owner.isHomeTeam && !player.isGoalkeeper &&
+         getBody(player.isHomeTeam) == BodyId::BINTURONG &&
+         getBody(owner.isHomeTeam) == BodyId::BINTURONG && ball.inTouch &&
+         ball.touchCollected;
+}
+
+void MatchEngine::swingAtNothing(MatchPlayer& player, float seconds, bool carrier)
+{
+  player.footCooldown = std::max(player.footCooldown, seconds);
+  if (carrier)
+    ++(player.isHomeTeam ? stats.homeCarrierAirSwings : stats.awayCarrierAirSwings);
+  else
+    ++(player.isHomeTeam ? stats.homeTacklerAirSwings : stats.awayTacklerAirSwings);
+}
+
+void MatchEngine::commitContestTouch(MatchPlayer& tackler, MatchPlayer& owner)
+{
+  // The step 2 table: the tackler swung (his touch): his cooldown. The
+  // carrier swung only if his planned touch was within his commit moment
+  // and his foot free (row 2): at nothing. Otherwise (rows 1 and 5) his
+  // current recovery just carries on, now on his foot.
+  tackler.footCooldown = dribbleTouchIntervalBinturong(tackler);
+  const bool swinging = ball.meetFor == owner.player &&
+                        ball.ownTouchCooldown <= 1e-4f &&
+                        owner.footCooldown <= 1e-4f &&
+                        ball.meetSeconds <= MatchTuning::Dribble::COMMIT_SECONDS;
+  if (swinging)
+    swingAtNothing(owner,
+                   std::max(0.0f, ball.meetSeconds) + dribbleTouchIntervalBinturong(owner),
+                   true);
+  else
+    owner.footCooldown = std::max(owner.footCooldown, ball.ownTouchCooldown);
 }
 
 void MatchEngine::settleTackle(bool homeTeam)
@@ -4555,7 +4695,10 @@ void MatchEngine::settleTackle(bool homeTeam)
   pendingTackle.reset();
   if (tackle.homeTeam != homeTeam) return;
   ++(homeTeam ? stats.homeTackles : stats.awayTackles);
-  ++(homeTeam ? stats.homeFreeBallTacklesWon : stats.awayFreeBallTacklesWon);
+  if (tackle.contest)
+    ++(homeTeam ? stats.homeContestTacklesWon : stats.awayContestTacklesWon);
+  else
+    ++(homeTeam ? stats.homeFreeBallTacklesWon : stats.awayFreeBallTacklesWon);
   if (MatchPlayer* tackler = findMatchPlayer(tackle.tackler))
     ++statsOf(*tackler).tacklesWon;
 }
@@ -4598,7 +4741,55 @@ TouchIntent MatchEngine::defaultTouchIntent(const MatchPlayer& player) const
   return intent;
 }
 
-void MatchEngine::playFirstTouch(MatchPlayer& player, const TouchMoment& moment)
+bool MatchEngine::playTackleIntent(MatchPlayer& tackler,
+                                   const MatchPlayer& attacker,
+                                   const TouchMoment& moment)
+{
+  TackleIntent intent = TackleIntent::CONTROL;
+  for (const auto& [id, forced] : forcedTackleIntents)
+    if (tackler.player && tackler.player->getId() == id) intent = forced;
+  switch (intent)
+  {
+    case TackleIntent::CONTROL:
+      return false;
+    case TackleIntent::WIN:
+    {
+      // His touch, weighted to stop at the nudge's spot; how true it goes
+      // is the touch's, as for any first touch.
+      TouchIntent nudge = chooseFirstTouch(tackler, moment);
+      nudge.kind = TouchIntent::Kind::SET;
+      nudge.targetSpot =
+          tackleNudgeSpotBinturong(tackler, attacker, moment.contactPoint);
+      nudge.arrivalSpeed = 0.0f;
+      nudge.liftSpeed = 0.0f;
+      lastNudgeSpot = nudge.targetSpot;
+      ++nudges;
+      playFirstTouch(tackler, moment, &nudge);
+      return true;
+    }
+    case TackleIntent::CLEAR:
+    case TackleIntent::PASS:
+    {
+      // Struck where he meets it, as a first-time pass is. No pass on: he
+      // clears it.
+      takePossession(tackler);
+      std::optional<PassOption> pass;
+      if (intent == TackleIntent::PASS) pass = choosePassTargetBinturong(tackler);
+      PendingStrike strike;
+      strike.kind = pass ? PendingStrike::Kind::PASS : PendingStrike::Kind::CLEAR;
+      strike.striker = &tackler;
+      if (pass) strike.pass = *pass;
+      pendingStrike = strike;
+      notePendingStrikeSlots();
+      playPendingStrike(moment);
+      return true;
+    }
+  }
+  return false;
+}
+
+void MatchEngine::playFirstTouch(MatchPlayer& player, const TouchMoment& moment,
+                                 const TouchIntent* forced)
 {
   // A Binturong body's ball above his feet is his thigh's or chest's (chest
   // and thigh control plan steps 3 and 4).
@@ -4617,7 +4808,7 @@ void MatchEngine::playFirstTouch(MatchPlayer& player, const TouchMoment& moment)
   const bool receivingPass = ball.isPass && ball.passByHome == player.isHomeTeam;
   const Player* passer = ball.lastPossessor;
   if (!receivingPass) recordPassCompletion(player);
-  const TouchIntent intent = chooseFirstTouch(player, moment);
+  const TouchIntent intent = forced ? *forced : chooseFirstTouch(player, moment);
   // Read before setPossession clears the flight (whose pass it was).
   const TouchResult touch = firstTouchBinturong(player, intent, moment);
 
@@ -4652,6 +4843,18 @@ void MatchEngine::sendBallOff(const MatchPlayer& kicker, Vector2F position,
   ball.kicker = kicker.player;
   ball.kickerLockout = kickerLockout;
   ball.touchAttempts = 0;
+  notePathChange();
+}
+
+void MatchEngine::notePathChange()
+{
+  ball.pathSince = ballNow();
+  ball.commitMisses = 0;
+}
+
+double MatchEngine::ballNow() const
+{
+  return ballClockRunning ? ballClockSeconds : getSimulatedSeconds();
 }
 
 bool MatchEngine::holdStrikeForSweep(const PendingStrike& strike)
@@ -5032,7 +5235,9 @@ bool MatchEngine::dribbleTouchDue(const MatchPlayer& player,
 {
   using R = MatchTuning::Dribble;
   // (A cooldown in whole steps counts down to a hair above zero.)
-  if (ball.ownTouchCooldown > 1e-4f || moment.height > bodyLines(player).feet)
+  // (His foot cooldown is only ever from a contest: tackling plan step 2.)
+  if (ball.ownTouchCooldown > 1e-4f || player.footCooldown > 1e-4f ||
+      moment.height > bodyLines(player).feet)
     return false;
   const DribbleAim aim = dribbleAim(player, moment.contactPoint);
   // Just out of a stop (a sharp reversal), he plays the stopped ball on once

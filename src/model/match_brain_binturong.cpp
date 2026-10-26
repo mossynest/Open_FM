@@ -2647,10 +2647,14 @@ MatchEngine::Challenge MatchEngine::chooseChallengeBinturong(
                       defender->defending * D::TACKLE_DEFENDING_REACH_METRES;
   const float ballDistance = distance(defender->position, ball.position);
   if (ballDistance >= D::SLIDE_TACKLE_DISTANCE_METRES) return challenge;
-  // A loose dribbled ball the carrier's foot couldn't be on is a free ball:
-  // whoever gets to it plays it (resolveLooseBall), no standing challenge
-  // (tackling plan step 1). Slides stay as they are until their own plan.
-  if (ball.inTouch && ballDistance <= reach && !ballInReach(carrier))
+  // A loose dribbled ball is played, not rolled for: outside the carrier's
+  // reach as a free ball (tackling plan step 1), inside it as a contest
+  // (step 2), both in resolveLooseBall. No standing challenge; slides stay
+  // as they are until their own plan. (Only a Binturong body contests; an
+  // Aardvark one still rolls inside the carrier's reach.)
+  if (ball.inTouch && ballDistance <= reach &&
+      (!ballInReach(carrier) ||
+       getBody(defender->isHomeTeam) == BodyId::BINTURONG))
     return challenge;
   const float carrierDepth =
       carrier.isHomeTeam ? carrier.position.x : 1.0f - carrier.position.x;

@@ -105,7 +105,8 @@ json toJson(const MatchCommandRecord& command)
                                  : json(nullptr)},
           {"header_aim", static_cast<int>(command.headerAim)},
           {"header_known_early", command.headerKnownEarly},
-          {"keep_urgency", command.keepUrgency}};
+          {"keep_urgency", command.keepUrgency},
+          {"tackle_intent", static_cast<int>(command.tackleIntent)}};
 }
 
 MatchCommandRecord commandFromJson(const json& value)
@@ -167,6 +168,8 @@ MatchCommandRecord commandFromJson(const json& value)
       static_cast<ForcedHeaderAim>(value.value("header_aim", 0));
   command.headerKnownEarly = value.value("header_known_early", true);
   command.keepUrgency = value.value("keep_urgency", 1.0f);
+  command.tackleIntent =
+      static_cast<TackleIntent>(value.value("tackle_intent", 0));
   return command;
 }
 

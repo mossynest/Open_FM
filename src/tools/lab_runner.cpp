@@ -177,9 +177,19 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
   sample.injuries = stats.homeInjuries + stats.awayInjuries;
   sample.take_ons = {stats.homeTakeOns, stats.awayTakeOns};
   sample.take_ons_won = {stats.homeTakeOnsWon, stats.awayTakeOnsWon};
-  // The duel roll's attempts: free-ball tackles have no roll.
-  sample.tackle_duels = {stats.homeTackleAttempts - stats.homeFreeBallTackles,
-                         stats.awayTackleAttempts - stats.awayFreeBallTackles};
+  // The duel roll's attempts: free-ball and contest tackles have no roll.
+  sample.tackle_duels = {stats.homeTackleAttempts - stats.homeFreeBallTackles -
+                             stats.homeContestTackles,
+                         stats.awayTackleAttempts - stats.awayFreeBallTackles -
+                             stats.awayContestTackles};
+  sample.contest_tackles = stats.homeContestTackles + stats.awayContestTackles;
+  sample.contest_tackles_won =
+      stats.homeContestTacklesWon + stats.awayContestTacklesWon;
+  sample.carrier_air_swings =
+      stats.homeCarrierAirSwings + stats.awayCarrierAirSwings;
+  sample.tackler_air_swings =
+      stats.homeTacklerAirSwings + stats.awayTacklerAirSwings;
+  sample.commit_misses = stats.homeCommitMisses + stats.awayCommitMisses;
   sample.tackle_duels_won = {stats.homeTackleDuelsWon,
                              stats.awayTackleDuelsWon};
   sample.free_ball_tackles = {stats.homeFreeBallTackles,
@@ -738,6 +748,17 @@ std::map<std::string, Estimate> matchMetrics(
   metrics["free_ball_tackles_per_team"] = perTeam(
       [](const MatchSample& s)
       { return s.free_ball_tackles[0] + s.free_ball_tackles[1]; });
+  metrics["contest_tackles_per_team"] =
+      perTeam([](const MatchSample& s) { return s.contest_tackles; });
+  metrics["contest_tackle_success"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.contest_tackles_won; }),
+      column([](const MatchSample& s) { return s.contest_tackles; }));
+  metrics["carrier_air_swings_per_team"] =
+      perTeam([](const MatchSample& s) { return s.carrier_air_swings; });
+  metrics["tackler_air_swings_per_team"] =
+      perTeam([](const MatchSample& s) { return s.tackler_air_swings; });
+  metrics["commit_misses_per_team"] =
+      perTeam([](const MatchSample& s) { return s.commit_misses; });
   metrics["free_ball_tackle_success"] = ratioEstimate(
       column([](const MatchSample& s)
              { return s.free_ball_tackles_won[0] + s.free_ball_tackles_won[1]; }),
