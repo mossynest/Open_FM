@@ -4426,7 +4426,7 @@ void MatchEngine::cushionHeaderBinturong(MatchPlayer& header)
   request.lift = request.paceFloor * std::sin(elevation);
   const ContactResult result = contactBinturong(header, request, moment);
 
-  setPossession(header);
+  takePossession(header);
   sendBallOff(header,
               {std::clamp(moment.contactPoint.x, 0.001f, 0.999f),
                std::clamp(moment.contactPoint.y, 0.001f, 0.999f)},
@@ -4515,7 +4515,7 @@ void MatchEngine::playBodyTouchBinturong(MatchPlayer& player,
   request.lift = request.paceFloor * std::sin(elevation);
   const ContactResult result = contactBinturong(player, request, moment);
 
-  setPossession(player);
+  takePossession(player);
   sendBallOff(player,
               {std::clamp(moment.contactPoint.x, 0.001f, 0.999f),
                std::clamp(moment.contactPoint.y, 0.001f, 0.999f)},

@@ -131,6 +131,9 @@ struct MatchSample
   std::array<int, 2> take_ons_won{};
   std::array<int, 2> tackle_duels{};
   std::array<int, 2> tackle_duels_won{};
+  /** Tackles on a free ball (tackling plan step 1), and those won. */
+  std::array<int, 2> free_ball_tackles{};
+  std::array<int, 2> free_ball_tackles_won{};
   std::array<int, 2> keeper_claim_attempts{};
   std::array<int, 2> keeper_claims{};
   /** Aerial duels with both sides involved, and those the home side won. */

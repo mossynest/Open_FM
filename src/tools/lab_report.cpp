@@ -165,7 +165,8 @@ constexpr std::array TARGETS = {
   TargetSpec{"CON-TOA", "take_on_success_away", "Take-on success, away carrier", "", NO_BAND, Info, "contests", Percent, Engine, "defender beaten"},
   TargetSpec{"CON-TKH", "tackle_duel_success_home", "Tackle duel won, home tackler", "", NO_BAND, Info, "contests", Percent, Engine, "the duel roll, fouls included"},
   TargetSpec{"CON-TKA", "tackle_duel_success_away", "Tackle duel won, away tackler", "", NO_BAND, Info, "contests", Percent, Engine, "the duel roll, fouls included"},
-  TargetSpec{"CON-AERH", "aerial_home_share", "Contested aerial duels won by home", "", NO_BAND, Info, "contests", Percent, Engine, "both sides within reach"},
+  TargetSpec{"CON-TKF", "free_ball_tackles_per_team", "Free-ball tackles per team", "", NO_BAND, Info, "contests", Number, Engine, "a ball outside the carrier's reach, played by an opponent"},
+  TargetSpec{"CON-TKFW", "free_ball_tackle_success", "Free-ball tackles won share", "", NO_BAND, Info, "contests", Percent, Engine, "the tackler's side next had it under control"},  TargetSpec{"CON-AERH", "aerial_home_share", "Contested aerial duels won by home", "", NO_BAND, Info, "contests", Percent, Engine, "both sides within reach"},
   TargetSpec{"CON-CLMH", "keeper_claim_success_home", "Keeper claims held, home keeper", "", NO_BAND, Info, "contests", Percent, Engine, "the rest punched clear"},
   TargetSpec{"CON-CLMA", "keeper_claim_success_away", "Keeper claims held, away keeper", "", NO_BAND, Info, "contests", Percent, Engine, "the rest punched clear"},
   // ---- Movement jitter INFO (outfield players, open play) -------------------

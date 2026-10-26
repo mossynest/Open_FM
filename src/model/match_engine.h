@@ -976,6 +976,13 @@ struct MatchStats
    * (homeTackles counts only the clean ones). */
   int homeTackleDuelsWon = 0;
   int awayTackleDuelsWon = 0;
+  /** Tackles on a free ball (tackling plan step 1): an opponent's ball
+   * outside his reach played by the tackler's side, counted in the tackle
+   * attempts too; won once that side next has the ball under control. */
+  int homeFreeBallTackles = 0;
+  int awayFreeBallTackles = 0;
+  int homeFreeBallTacklesWon = 0;
+  int awayFreeBallTacklesWon = 0;
   /** A keeper coming for a high ball in his box, and catching it. */
   int homeKeeperClaimAttempts = 0;
   int awayKeeperClaimAttempts = 0;
@@ -3328,7 +3335,25 @@ class MatchEngine
   /** Whether the keeper stops the shot crossing his plane in the last ball
    * sub-step (reach and save roll only, no consequences). */
   SaveAttempt attemptSave(const MatchPlayer& keeper);
+  /** Gives the player the ball, put still at his feet (takePossession, and
+   * the ball placed). */
   void setPossession(MatchPlayer& player);
+  /** A tackle on a free ball: counted as attempted now, and won if his side
+   * next has the ball under control (settleTackle). */
+  void noteFreeBallTackle(MatchPlayer& tackler);
+  /** `homeTeam`'s side has the ball under control: a pending free-ball
+   * tackle is won if that is the tackler's side, lost otherwise. */
+  void settleTackle(bool homeTeam);
+  struct PendingTackle
+  {
+    const Player* tackler = nullptr;
+    bool homeTeam = false;
+  };
+  /** A free-ball tackle not yet won or lost; play stopping lapses it. */
+  std::optional<PendingTackle> pendingTackle;
+  /** Gives the player the ball without moving it: for a contact that sends
+   * it on from where he met it. */
+  void takePossession(MatchPlayer& player);
   /** Nobody owns the ball any more (kicked, lost, stopped, removed). */
   void clearPossession();
   /** Gives the ball to a player outside open play (restarts, substitutes,
@@ -3516,6 +3541,9 @@ class MatchEngine
                        float heightMetres) const;
   /** How far from his centre he can play a ball at his feet. */
   float feetReach(const MatchPlayer& player) const;
+  /** Whether he could play the ball where it is now: within his feet reach
+   * and not behind him beyond it (his foot could be on it). */
+  bool ballInReach(const MatchPlayer& player) const;
   /** The lowest and highest head lines of the outfielders on the pitch:
    * above the lowest the ball is a header for someone, above the highest
    * for everyone. */

@@ -2608,6 +2608,230 @@ class LooseBallDrill final : public Drill
   std::map<PlayerID, float> ran;
 };
 
+// --- Tackle --------------------------------------------------------------------
+
+/**
+ * Tackle (tackling plan): an attacker dribbles straight at a lone defender,
+ * only carrying it (no pass, shot or take-on). The defender's brain decides
+ * when to go in, or he is sent at the ball. How the ball was taken: as a
+ * free ball (outside the attacker's reach), by the tackle roll, or not at
+ * all.
+ */
+class TackleDrill final : public Drill
+{
+ public:
+  const char* name() const override { return "Tackle"; }
+  const char* summary() const override
+  {
+    return "An attacker dribbles straight at a lone defender, only carrying "
+           "it. Whether the defender takes it, and how: a free ball (outside "
+           "the attacker's reach, played as a touch) or the tackle roll; or "
+           "the attacker reaches the end, 15 m beyond the defender, with it.";
+  }
+
+  std::vector<DrillParameter> parameters() override
+  {
+    std::vector<DrillParameter> list;
+    list.push_back(setting("Gap (m)", &gapSetting, 3.0f, 30.0f, false,
+                           "How far ahead of the attacker the defender starts."));
+    DrillParameter pace = setting("Attacker carries at", &paceChoice, 0.0f, 3.0f,
+                                  true, "How hard he carries it.");
+    pace.choices = {"A walk", "A jog", "A run", "A sprint"};
+    list.push_back(pace);
+    list.push_back(setting("Dribbling", &dribbling, 1.0f, 100.0f, true,
+                           "The attacker's: touch length and rhythm."));
+    list.push_back(setting("Attacker Pace", &attackerPace, 1.0f, 100.0f, true));
+    list.push_back(setting("Defending", &defending, 1.0f, 100.0f, true,
+                           "The defender's."));
+    list.push_back(setting("Defender Pace", &defenderPace, 1.0f, 100.0f, true));
+    DrillParameter moves = setting("Defender", &moveChoice, 0.0f, 1.0f, true,
+                                   "How the defender moves (the brain always "
+                                   "decides the tackle).");
+    moves.choices = {"His brain", "Straight at the ball"};
+    list.push_back(moves);
+    return list;
+  }
+
+  std::vector<DrillPreset> presets() const override
+  {
+    return {
+        {"Close control", "A good dribbler at a jog: the ball rarely leaves his reach.",
+         {{"Attacker carries at", 1.0f}, {"Dribbling", 85.0f}}},
+        {"Knocked on", "A poor dribbler at a sprint: long touches, the ball often out of his reach.",
+         {{"Attacker carries at", 3.0f}, {"Dribbling", 20.0f}}},
+    };
+  }
+
+  std::vector<DrillPlayerSpec> players() const override
+  {
+    return {{"Attacker", PlayerRole::ST, true,
+             {{"Dribbling", dribbling}, {"Pace", attackerPace}}},
+            {"Defender", PlayerRole::CB, false,
+             {{"Defending", defending}, {"Pace", defenderPace}}}};
+  }
+
+  void begin(MatchEngine& engine, const std::vector<PlayerID>& ids) override
+  {
+    attackerId = ids[0];
+    defenderId = ids[1];
+    gap = gapSetting;
+    atBall = moveChoice >= 0.5f;
+    const Vector2F attackerAt{0.3f, 0.5f};
+    defenderStart = along(attackerAt, {1.0f, 0.0f}, gap);
+    MatchScenario scenario;
+    scenario.players.push_back({attackerId, attackerAt, false});
+    scenario.players.push_back({defenderId, defenderStart, false});
+    scenario.carrierId = attackerId;
+    scenario.ballPosition = attackerAt;
+    engine.startDrill(scenario);
+    engine.keepBall(attackerId, true, paceChoice / 3.0f);
+    // Straight on, through where the defender stands, to the end.
+    endPoint = along(defenderStart, {1.0f, 0.0f}, BEYOND_METRES);
+    engine.setDrillTarget(attackerId, along(endPoint, {1.0f, 0.0f}, RUN_THROUGH_METRES),
+                          true);
+    before = engine.getStats();
+    outcome = Outcome::NONE;
+    endAt.reset();
+    largestGap = 0.0f;
+    lastGap = 0.0f;
+    freeBehind = 0;
+    after = before;
+    trail.clear();
+  }
+
+  bool afterStep(MatchEngine& engine) override
+  {
+    const double now = secondsOf(engine);
+    const MatchPlayer* attacker = slotOf(engine, attackerId);
+    const MatchPlayer* defender = slotOf(engine, defenderId);
+    if (!attacker || !defender) return false;
+    const MatchBall& ball = engine.getBall();
+    if (atBall && outcome == Outcome::NONE)
+      engine.setDrillTarget(defenderId, ball.position, true);
+    if (engine.getSimulatedSteps() % 2 == 0) trail.push_back(ball.position);
+    // A free-ball tackle this step: was the ball, a step ago, within his
+    // reach's distance (so behind him, in his dead zone)?
+    if (after.awayFreeBallTackles != engine.getStats().awayFreeBallTackles &&
+        lastGap <= MatchTuning::Ball::OUTFIELD_CONTROL_RADIUS_METRES)
+      ++freeBehind;
+    after = engine.getStats();
+    lastGap = metresBetween(attacker->position, ball.position);
+    if (outcome == Outcome::NONE && ball.possessedBy == attacker->player)
+      largestGap = std::max(largestGap, lastGap);
+    if (outcome == Outcome::NONE)
+    {
+      const bool defenderHasIt =
+          ball.possessedBy == defender->player &&
+          (!ball.inTouch || ball.touchCollected);
+      if (engine.getState() != MatchState::PLAYING)
+        outcome = Outcome::STOPPED;
+      else if (defenderHasIt)
+        outcome = Outcome::WON;
+      else if (ball.possessedBy == attacker->player &&
+               attacker->position.x >= endPoint.x)
+        outcome = Outcome::KEPT;
+      else if (now > TIME_LIMIT_SECONDS)
+        outcome = Outcome::TIME;
+      if (outcome != Outcome::NONE) endAt = now;
+    }
+    return !(endAt && now > *endAt + 0.5);
+  }
+
+  void drawOverlay(const IMatchRenderer& renderer, ImDrawList& draw) const override
+  {
+    DrillDraw::path(renderer, draw, trail, IM_COL32(255, 220, 120, 200),
+                    2.0f * Theme::scale());
+    DrillDraw::marker(renderer, draw, defenderStart, 0.3f,
+                      IM_COL32(240, 80, 80, 255), "defender's start");
+    DrillDraw::line(renderer, draw, along(endPoint, {0.0f, 1.0f}, -6.0f),
+                    along(endPoint, {0.0f, 1.0f}, 6.0f), IM_COL32(120, 220, 120, 255),
+                    3.0f * Theme::scale());
+  }
+
+  std::vector<std::string> report() const override
+  {
+    static constexpr std::array<const char*, 5> WHAT{
+        "", "the defender won it", "the attacker reached the end with it",
+        "play stopped", "time up"};
+    std::vector<std::string> lines;
+    lines.push_back(std::format("Gap {:.0f} m, Dribbling {:.0f}, Defending {:.0f}{}",
+                                gap, dribbling, defending,
+                                atBall ? ", defender sent at the ball" : ""));
+    lines.push_back(std::format(
+        "Tackles: {} on a free ball ({} won), {} by the roll ({} won)",
+        freeBall(), freeBallWon(), rolled(), rolledWon()));
+    if (endAt)
+      lines.push_back(std::format("OUTCOME  {} at {:.1f} s",
+                                  WHAT[static_cast<int>(outcome)], *endAt));
+    return lines;
+  }
+
+  std::vector<DrillMetric> metrics() const override
+  {
+    if (!endAt) return {};
+    return {{"Defender won it", outcome == Outcome::WON ? 1.0 : 0.0},
+            {"Attacker kept it", outcome == Outcome::KEPT ? 1.0 : 0.0},
+            {"Largest gap (m)", largestGap},
+            {"Free-ball tackles", static_cast<double>(freeBall())},
+            {"Free-ball tackles won", static_cast<double>(freeBallWon())},
+            {"Free ball behind him", static_cast<double>(freeBehind)},            {"Rolled tackles", static_cast<double>(rolled())},
+            {"Rolled tackles won", static_cast<double>(rolledWon())},
+            {"Ended at (s)", *endAt}};
+  }
+
+ private:
+  enum class Outcome
+  {
+    NONE,
+    WON,
+    KEPT,
+    STOPPED,
+    TIME
+  };
+  /** The end: this far beyond the defender's start (m). Reached with the
+   * ball, the attacker kept it. */
+  static constexpr float BEYOND_METRES = 15.0f;
+  static constexpr double TIME_LIMIT_SECONDS = 20.0;
+
+  // The defender is the away side.
+  int freeBall() const { return after.awayFreeBallTackles - before.awayFreeBallTackles; }
+  int freeBallWon() const
+  {
+    return after.awayFreeBallTacklesWon - before.awayFreeBallTacklesWon;
+  }
+  int rolled() const
+  {
+    return after.awayTackleAttempts - before.awayTackleAttempts - freeBall();
+  }
+  int rolledWon() const
+  {
+    return after.awayTackles - before.awayTackles - freeBallWon();
+  }
+
+  float gapSetting = 12.0f;
+  float paceChoice = 2.0f;
+  float dribbling = 70.0f;
+  float attackerPace = 70.0f;
+  float defending = 70.0f;
+  float defenderPace = 70.0f;
+  float moveChoice = 0.0f;
+
+  float gap = 12.0f;
+  bool atBall = false;
+  PlayerID attackerId = 0;
+  PlayerID defenderId = 0;
+  Vector2F defenderStart{};
+  Vector2F endPoint{};
+  float largestGap = 0.0f;
+  float lastGap = 0.0f;
+  int freeBehind = 0;
+  MatchStats before;
+  MatchStats after;
+  Outcome outcome = Outcome::NONE;
+  std::optional<double> endAt;
+  std::vector<Vector2F> trail;
+};
+
 // --- Shot from a spot --------------------------------------------------------
 
 /**
@@ -7649,6 +7873,7 @@ std::vector<std::unique_ptr<Drill>> makeDrills()
   drills.push_back(std::make_unique<FlagChaseDrill>());
   drills.push_back(std::make_unique<OvertakeDrill>());
   drills.push_back(std::make_unique<LooseBallDrill>());
+  drills.push_back(std::make_unique<TackleDrill>());
   drills.push_back(std::make_unique<ShotDrill>());
   drills.push_back(std::make_unique<ShotTargetDrill>());
   drills.push_back(std::make_unique<FirstTouchDrill>());

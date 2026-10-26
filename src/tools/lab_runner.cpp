@@ -177,10 +177,15 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
   sample.injuries = stats.homeInjuries + stats.awayInjuries;
   sample.take_ons = {stats.homeTakeOns, stats.awayTakeOns};
   sample.take_ons_won = {stats.homeTakeOnsWon, stats.awayTakeOnsWon};
-  sample.tackle_duels = {stats.homeTackleAttempts, stats.awayTackleAttempts};
+  // The duel roll's attempts: free-ball tackles have no roll.
+  sample.tackle_duels = {stats.homeTackleAttempts - stats.homeFreeBallTackles,
+                         stats.awayTackleAttempts - stats.awayFreeBallTackles};
   sample.tackle_duels_won = {stats.homeTackleDuelsWon,
                              stats.awayTackleDuelsWon};
-  sample.keeper_claim_attempts = {stats.homeKeeperClaimAttempts,
+  sample.free_ball_tackles = {stats.homeFreeBallTackles,
+                              stats.awayFreeBallTackles};
+  sample.free_ball_tackles_won = {stats.homeFreeBallTacklesWon,
+                                  stats.awayFreeBallTacklesWon};  sample.keeper_claim_attempts = {stats.homeKeeperClaimAttempts,
                                   stats.awayKeeperClaimAttempts};
   sample.keeper_claims = {stats.homeKeeperClaims, stats.awayKeeperClaims};
   sample.aerial_contested = stats.aerialDuelsContested;
@@ -730,6 +735,14 @@ std::map<std::string, Estimate> matchMetrics(
       "tackle_duel_success",
       [](const MatchSample& s) { return s.tackle_duels_won; },
       [](const MatchSample& s) { return s.tackle_duels; });
+  metrics["free_ball_tackles_per_team"] = perTeam(
+      [](const MatchSample& s)
+      { return s.free_ball_tackles[0] + s.free_ball_tackles[1]; });
+  metrics["free_ball_tackle_success"] = ratioEstimate(
+      column([](const MatchSample& s)
+             { return s.free_ball_tackles_won[0] + s.free_ball_tackles_won[1]; }),
+      column([](const MatchSample& s)
+             { return s.free_ball_tackles[0] + s.free_ball_tackles[1]; }));
   metrics["aerial_home_share"] = ratioEstimate(
       column([](const MatchSample& s) { return s.aerial_home_won; }),
       column([](const MatchSample& s) { return s.aerial_contested; }));

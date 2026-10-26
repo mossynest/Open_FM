@@ -2312,7 +2312,11 @@ void MatchEngine::resolvePossessionAndActions(float dt)
           sliding ? D::SLIDE_TACKLE_DISTANCE_METRES
                   : D::TACKLE_DISTANCE_METRES +
                         controlled.defending * D::TACKLE_DEFENDING_REACH_METRES;
-      if (distance(controlled.position, ball.position) <= reach)
+      // A loose dribbled ball the carrier's foot couldn't be on is a free
+      // ball, played by touching it, not by a standing tackle (tackling plan
+      // step 1).
+      const bool freeBall = !sliding && ball.inTouch && !ballInReach(*carrier);
+      if (!freeBall && distance(controlled.position, ball.position) <= reach)
       {
         controlInput.action = MatchInputAction::NONE;
         ++controlledActions[controlled.isHomeTeam ? 0 : 1];
@@ -3407,11 +3411,12 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
   const MatchPlayer* touchOwner =
       ball.inTouch ? findMatchPlayer(ball.possessedBy) : nullptr;
   using B = MatchTuning::Ball;
-  // While it is still within his own reach it is his: an opponent has to
-  // tackle him for it (chooseChallenge), not just touch it away.
+  // While his foot could be on it (within his reach, not behind him) it is
+  // his: an opponent has to tackle him for it (chooseChallenge), not just
+  // touch it away.
   const float ownerGap =
       touchOwner ? distance(touchOwner->position, ball.position) : 0.0f;
-  const bool ownerHasIt = touchOwner && ownerGap <= feetReach(*touchOwner);
+  const bool ownerHasIt = touchOwner && ballInReach(*touchOwner);
   if (ownerHasIt && !ball.touchCollected) return;
 
   const float endHeight = ball.z * MatchTuning::Units::BALL_Z_METRES;
@@ -3740,8 +3745,16 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
       ++(receiver ? bodyContacts.receiver : bodyContacts.other)[part];
     }
     // An opponent getting to a touched ball ends the claim, whatever his own
-    // touch then does with it.
-    if (ball.inTouch) clearPossession();
+    // touch then does with it: a tackle on a free ball if the owner had it
+    // under control (tackling plan step 1); before that, the ball he was
+    // receiving.
+    if (ball.inTouch)
+    {
+      if (touchOwner && touchOwner->isHomeTeam != player.isHomeTeam &&
+          ball.touchCollected)
+        noteFreeBallTackle(player);
+      clearPossession();
+    }
 
     // A defender meeting a cross close to his own goal line often plays safe
     // and puts it behind; an Aardvark body now and then turns it into his
@@ -4477,9 +4490,23 @@ void MatchEngine::headBall(MatchPlayer& header)
 
 void MatchEngine::setPossession(MatchPlayer& player)
 {
+  // Ownership, with the ball put still at his feet: the old trap, a keeper's
+  // hands, a held restart. A contact that sends the ball on from where he met
+  // it takes ownership alone (takePossession).
+  settleTackle(player.isHomeTeam);
+  ball.position = player.position;
+  ball.z = 0.0f;
+  ball.velocity = {0.0f, 0.0f};
+  ball.velocityZ = 0.0f;
+  takePossession(player);
+}
+
+void MatchEngine::takePossession(MatchPlayer& player)
+{
   // Central ownership transition: clear the old flight bookkeeping and update
   // the team transition context as well as the ball pointer. New reception or
   // interception code should use this path so phases and statistics agree.
+  // The ball itself is not moved.
   trackTouch(player);
   // A set piece's phase ends once the defending side has the ball.
   if (player.isHomeTeam != setPieceHome) setPiecePhaseRemaining = 0.0f;
@@ -4500,10 +4527,6 @@ void MatchEngine::setPossession(MatchPlayer& player)
   }
   handBallTo(player.player);
   ball.lastPossessor = player.player;
-  ball.position = player.position;
-  ball.z = 0.0f;
-  ball.velocity = {0.0f, 0.0f};
-  ball.velocityZ = 0.0f;
   clearFlightState();
   // The first touch brings the ball under close control in front of him.
   ball.dribbleExposure = 0.0f;
@@ -4515,6 +4538,26 @@ void MatchEngine::setPossession(MatchPlayer& player)
   if (length(ball.dribbleDirection) <= EPSILON)
     ball.dribbleDirection = {player.isHomeTeam ? 1.0f : -1.0f, 0.0f};
   updateTeamPhases();
+}
+
+void MatchEngine::noteFreeBallTackle(MatchPlayer& tackler)
+{
+  ++(tackler.isHomeTeam ? stats.homeTackleAttempts : stats.awayTackleAttempts);
+  ++(tackler.isHomeTeam ? stats.homeFreeBallTackles : stats.awayFreeBallTackles);
+  ++statsOf(tackler).tacklesAttempted;
+  pendingTackle = PendingTackle{tackler.player, tackler.isHomeTeam};
+}
+
+void MatchEngine::settleTackle(bool homeTeam)
+{
+  if (!pendingTackle) return;
+  const PendingTackle tackle = *pendingTackle;
+  pendingTackle.reset();
+  if (tackle.homeTeam != homeTeam) return;
+  ++(homeTeam ? stats.homeTackles : stats.awayTackles);
+  ++(homeTeam ? stats.homeFreeBallTacklesWon : stats.awayFreeBallTacklesWon);
+  if (MatchPlayer* tackler = findMatchPlayer(tackle.tackler))
+    ++statsOf(*tackler).tacklesWon;
 }
 
 void MatchEngine::clearPossession()
@@ -4578,9 +4621,9 @@ void MatchEngine::playFirstTouch(MatchPlayer& player, const TouchMoment& moment)
   // Read before setPossession clears the flight (whose pass it was).
   const TouchResult touch = firstTouchBinturong(player, intent, moment);
 
-  // He owns it from the touch (phases, transitions, touches), but the ball
-  // carries on from where he met it instead of being placed at his feet.
-  setPossession(player);
+  // He owns it from the touch (phases, transitions, touches), and the ball
+  // carries on from where he met it.
+  takePossession(player);
   // It keeps the height he met it at: the touch changes only its velocity.
   sendBallOff(player,
               {std::clamp(contactPoint.x, 0.001f, 0.999f),
@@ -4835,8 +4878,9 @@ void MatchEngine::playFirstTimePass(MatchPlayer& player,
   // the strike (phases, his touch), and it is struck from where he met it,
   // moving as it was: the strike reads its pace and line.
   recordPassCompletion(player);
+  // Taking it clears the flight; its spin and delivery stay for the strike.
   const BallMotion motion = ballMotion();
-  setPossession(player);
+  takePossession(player);
   setBallMotion(motion);
   if (player.player && forcedPass.passer == player.player->getId())
     forcedPass = {};
@@ -5282,6 +5326,7 @@ void MatchEngine::updateTouch(MatchPlayer& carrier, float dt)
     using F = MatchTuning::FirstTouch;
     ball.touchCollected = true;
     ball.touchDropping = false;
+    settleTackle(carrier.isHomeTeam);
     if (ball.touchPasser) creditPassCompletion(carrier, ball.touchPasser);
     ball.touchPasser = nullptr;
     carrier.actionCooldown =
@@ -5415,6 +5460,8 @@ void MatchEngine::beginStoppage()
   // share one substitution window.
   pendingAdvantage.active = false;
   setPiecePhaseRemaining = 0.0f;
+  // A free-ball tackle not yet followed by control is not won.
+  pendingTackle.reset();
   if (stoppageSequence != 0 && lastStoppageStep == stepCounter) return;
   lastStoppageStep = stepCounter;
   ++stoppageSequence;

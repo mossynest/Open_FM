@@ -13,6 +13,7 @@
 // (match_body_<name>.cpp), and a case in each function here.
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <utility>
 
@@ -614,6 +615,16 @@ bool MatchEngine::ballBehindReach(const MatchPlayer& player, float gapX,
       return ballBehindReachBinturong(player, gapX, gapY, gap, turnSeconds);
   }
   return ballBehindReachAardvark(player, gapX, gapY, gap, turnSeconds);
+}
+
+bool MatchEngine::ballInReach(const MatchPlayer& player) const
+{
+  const float gapX =
+      (player.position.x - ball.position.x) * MatchTuning::Pitch::LENGTH_METRES;
+  const float gapY =
+      (player.position.y - ball.position.y) * MatchTuning::Pitch::WIDTH_METRES;
+  const float gap = std::hypot(gapX, gapY);
+  return gap <= feetReach(player) && !ballBehindReach(player, gapX, gapY, gap);
 }
 
 Vector2F MatchEngine::strikePoint(const MatchPlayer& striker) const
