@@ -3107,8 +3107,9 @@ class MatchEngine
    * has stopped (read at the start of each step). */
   void trackHeaderRun();
   void headBall(MatchPlayer& header);
-  /** A defender's touch in front of his own goal that now and then goes
-   * toward it instead (true when it did). */
+  /** An Aardvark body: a defender's touch in front of his own goal that now
+   * and then goes toward it instead (true when it did). A Binturong body
+   * has no such roll: its own goals come from the contact. */
   bool tryOwnGoalTouch(MatchPlayer& defender);
   /** Puts the ball over his own goal line, wide of the posts (`headed`:
    * with his head). */

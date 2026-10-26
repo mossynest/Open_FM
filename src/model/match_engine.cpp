@@ -8,6 +8,7 @@
 
 #include "model/match_engine.h"
 
+
 // Implementation map (search these function names to find each subsystem):
 // - Construction/loadAttributes: borrow career players, cache match attributes.
 // - simulateStepBody: order commands, movement, actions, physics and rules.
@@ -3705,7 +3706,8 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     if (ball.inTouch) clearPossession();
 
     // A defender meeting a cross close to his own goal line often plays safe
-    // and puts it behind, and now and then turns it into his own net.
+    // and puts it behind; an Aardvark body now and then turns it into his
+    // own net (tryOwnGoalTouch).
     const float ownDepth =
         player.isHomeTeam ? player.position.x : 1.0f - player.position.x;
     const bool delivery = ball.isPass && ball.passByHome != player.isHomeTeam &&

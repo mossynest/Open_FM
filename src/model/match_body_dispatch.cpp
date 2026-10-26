@@ -362,7 +362,9 @@ bool MatchEngine::tryOwnGoalTouch(MatchPlayer& defender)
     case BodyId::AARDVARK:
       break;
     case BodyId::BINTURONG:
-      return tryOwnGoalTouchBinturong(defender);
+      // No roll: an own goal comes only from his header or touch going
+      // wrong in the contact model (2026-10-26).
+      return false;
   }
   return tryOwnGoalTouchAardvark(defender);
 }

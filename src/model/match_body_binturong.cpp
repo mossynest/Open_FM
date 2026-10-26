@@ -4228,41 +4228,6 @@ Vector2F MatchEngine::heavyTouchVelocityBinturong(const MatchPlayer& player,
   return popped;
 }
 
-bool MatchEngine::tryOwnGoalTouchBinturong(MatchPlayer& defender)
-{
-  using S = MatchTuning::SetPiece;
-  // Only a touch in front of his own goal can go in off a defender.
-  const float goalLineMetres =
-      (defender.isHomeTeam ? defender.position.x : 1.0f - defender.position.x) *
-      MatchTuning::Pitch::LENGTH_METRES;
-  const float lateralMetres =
-      std::abs(defender.position.y - MatchTuning::Pitch::CENTRE) *
-      MatchTuning::Pitch::WIDTH_METRES;
-  if (goalLineMetres > S::OWN_GOAL_TOUCH_DEPTH_METRES ||
-      lateralMetres > S::OWN_GOAL_TOUCH_WIDTH_METRES ||
-      randomFloat(0.0f, 1.0f) >= S::OWN_GOAL_TOUCH_CHANCE)
-    return false;
-  // The ball skews off him toward the goal he defends.
-  const float goalX = defender.isHomeTeam ? -0.01f : 1.01f;
-  const float aimMetres =
-      randomFloat(-MatchTuning::Shooting::GOAL_HALF_WIDTH_METRES,
-                  MatchTuning::Shooting::GOAL_HALF_WIDTH_METRES);
-  const Vector2F target{goalX,
-                        MatchTuning::Pitch::CENTRE +
-                            aimMetres / MatchTuning::Pitch::WIDTH_METRES};
-  const float height = ball.z;
-  clearFlightState();
-  // It skews off him at the height it met him.
-  launchBall(defender,
-             BallRelease{ball.position, height,
-                         height * MatchTuning::Units::BALL_Z_METRES},
-             target,
-             randomFloat(S::OWN_GOAL_MIN_SPEED, S::OWN_GOAL_MAX_SPEED),
-             randomFloat(0.0f, S::OWN_GOAL_MAX_LIFT), BallSpin{});
-  lastShooter = nullptr;
-  return true;
-}
-
 float MatchEngine::clearanceSpeedBinturong(const MatchPlayer& /*defender*/)
 {
   return MatchTuning::Defending::CLEARANCE_SPEED * randomFloat(0.85f, 1.0f);

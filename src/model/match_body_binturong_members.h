@@ -249,9 +249,6 @@
                     float heightMetres);
   /** The ball's velocity after a heavy first touch. */
   Vector2F heavyTouchVelocityBinturong(const MatchPlayer& player, Vector2F velocity);
-  /** A defender's touch in front of his own goal that now and then goes
-   * toward it instead (true when it did). */
-  bool tryOwnGoalTouchBinturong(MatchPlayer& defender);
   void diveGoalkeeperBinturong(MatchPlayer& keeper, float dt);
   /** The keeper reads an open-play shot: where to dive and how long he
    * needs to react (defenders in the line of the shot screen it). */
