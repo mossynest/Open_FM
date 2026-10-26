@@ -342,6 +342,7 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
     total.speedReversals += side.speedReversals;
   }
   sample.strike_contacts = engine.getStrikeContacts();
+  sample.body_contacts = engine.getBodyContacts();
   sample.first_half_distance =
       sample.full_match_distance - sample.second_half_distance;
   sample.first_half_minutes = firstHalf;
@@ -1262,6 +1263,32 @@ std::vector<TextTable> matchTables(std::span<const MatchSample> samples)
                     percent(share(kind.factorMarked[index], kind.strikes)));
               });
   tables.push_back(std::move(strikeTable));
+
+  // Loose balls played with the body, by the part that met them (chest and
+  // thigh control plan step 2).
+  MatchEngine::BodyContactStats body;
+  for (const MatchSample* sample : valid)
+    for (std::size_t part = 0; part < 3; ++part)
+    {
+      body.receiver[part] += sample->body_contacts.receiver[part];
+      body.other[part] += sample->body_contacts.other[part];
+    }
+  TextTable bodyTable{"Loose balls played with the body per team (Binturong "
+                      "outfielders; heads apart)",
+                      {"Who", "Feet", "Thigh", "Chest"},
+                      {}};
+  const auto bodyRow = [&](std::string label,
+                           const std::array<std::uint32_t, 3>& counts)
+  {
+    std::vector<std::string> row{std::move(label)};
+    for (const std::uint32_t count : counts)
+      row.push_back(std::format("{:.2f}", static_cast<double>(count) /
+                                             (2.0 * static_cast<double>(n))));
+    bodyTable.rows.push_back(std::move(row));
+  };
+  bodyRow("Receiver of a team-mate's pass", body.receiver);
+  bodyRow("Anyone else", body.other);
+  tables.push_back(std::move(bodyTable));
   return tables;
 }
 

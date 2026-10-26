@@ -1572,6 +1572,48 @@ struct MatchTuning final
     static constexpr float OUTFIELD_CONTROL_RADIUS_METRES = 1.0f;
     static constexpr float CHEST_CONTROL_RADIUS_METRES = 0.7f;
     static constexpr float LOW_BALL_METRES = 0.5f;
+    // A Binturong body's lines between feet, thigh, chest and head, as
+    // shares of his height (chest and thigh control plan step 1): his knee,
+    // the top of a raised thigh, the top of his shoulders. 0.50 m, 0.99 m
+    // and 1.53 m for a 1.80 m player. The Aardvark body keeps the fixed
+    // LOW_BALL_METRES and Aerial::CONTROL_CEILING_METRES.
+    static constexpr float FEET_LINE_HEIGHT_SHARE = 0.28f;
+    static constexpr float CHEST_LINE_HEIGHT_SHARE = 0.55f;
+    static constexpr float HEAD_LINE_HEIGHT_SHARE = 0.85f;
+    // How far from his centre a Binturong body's thigh and chest reach a
+    // ball, in front of him only (chest and thigh control plan step 2): it
+    // has to be right at him. The Aardvark body keeps
+    // CHEST_CONTROL_RADIUS_METRES all round.
+    static constexpr float THIGH_REACH_METRES = 0.2f;
+    static constexpr float CHEST_REACH_METRES = 0.3f;
+    // The chest touch (chest and thigh control plan step 3; placeholders).
+    // It only takes pace off or turns it, never adds it. He sends it up to
+    // CHEST_MAX_SIDE_DEGREES either side of the way he faces, from flat to
+    // CHEST_MAX_UP_DEGREES up, never down (he can't lean over the ball);
+    // unasked, back the way it came (within that) at
+    // CHEST_CUSHION_UP_DEGREES, as softly as he can. At least a share of the pace into his chest comes back off it:
+    // CHEST_KEEP_LOW at First Touch 1 to CHEST_KEEP_HIGH at 99.
+    static constexpr float CHEST_MAX_SIDE_DEGREES = 45.0f;
+    static constexpr float CHEST_MAX_UP_DEGREES = 45.0f;
+    static constexpr float CHEST_CUSHION_UP_DEGREES = 30.0f;
+    static constexpr float CHEST_KEEP_LOW = 0.35f;
+    static constexpr float CHEST_KEEP_HIGH = 0.10f;
+    // The thigh touch (chest and thigh control plan step 4; placeholders):
+    // the same, but only upward, from THIGH_MIN_UP_DEGREES to
+    // THIGH_MAX_UP_DEGREES (it pops up and drops at his feet), up to
+    // THIGH_MAX_SIDE_DEGREES either side of the way he faces; unasked at
+    // THIGH_CUSHION_UP_DEGREES. Only when he is nearly stopped (no faster
+    // than THIGH_MAX_SPEED, m/s); then he stays planted (no acceleration)
+    // for THIGH_PLANTED_SECONDS. The share that comes back is the chest's
+    // for now (a flatter ball being harder is plan §5 question 1).
+    static constexpr float THIGH_MAX_SIDE_DEGREES = 20.0f;
+    static constexpr float THIGH_MIN_UP_DEGREES = 30.0f;
+    static constexpr float THIGH_MAX_UP_DEGREES = 80.0f;
+    static constexpr float THIGH_CUSHION_UP_DEGREES = 65.0f;
+    static constexpr float THIGH_MAX_SPEED = 1.0f;
+    static constexpr float THIGH_PLANTED_SECONDS = 0.3f;
+    static constexpr float THIGH_KEEP_LOW = CHEST_KEEP_LOW;
+    static constexpr float THIGH_KEEP_HIGH = CHEST_KEEP_HIGH;
     static constexpr float BASE_CONTROL_CHANCE = 0.74f;
     static constexpr float TOUCH_SKILL_BONUS = 0.45f;
     static constexpr float SPEED_CONTROL_PENALTY = 0.0065f;

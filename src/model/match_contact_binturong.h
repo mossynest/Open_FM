@@ -43,6 +43,9 @@ struct ContactSituation
   float gap = 0.0f;
   float reach = 1.0f;
   float height = 0.0f;
+  /** The top of his feet's band (m): the ball is fully "off the ground"
+   * there. */
+  float feetLine = MatchTuning::Ball::LOW_BALL_METRES;
   bool rightFooted = true;
   /** How little he expected it (0-1): the brain's read. */
   float surprise = 0.0f;

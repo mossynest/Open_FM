@@ -1151,6 +1151,7 @@ void MatchEngine::simulateStepBody(float dt)
     player.tackleCooldown = std::max(0.0f, player.tackleCooldown - dt);
     player.actionCooldown = std::max(0.0f, player.actionCooldown - dt);
     player.trapTimer = std::max(0.0f, player.trapTimer - dt);
+    player.plantedSeconds = std::max(0.0f, player.plantedSeconds - dt);
     player.diveTimer = std::max(0.0f, player.diveTimer - dt);
     player.isTrapping = player.trapTimer > 0.0f;
     player.isDiving = player.diveTimer > 0.0f;
@@ -3414,17 +3415,20 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
   if (ownerHasIt && !ball.touchCollected) return;
 
   const float endHeight = ball.z * MatchTuning::Units::BALL_Z_METRES;
-  if (!ball.isShot && endHeight > MatchTuning::Aerial::CONTROL_CEILING_METRES)
+  // Each player's head line is his own (a Binturong body's, from his
+  // height: chest and thigh control plan step 1).
+  const auto [lowestHead, highestHead] = headLineRange();
+  if (!ball.isShot && endHeight > highestHead)
   {
     // In the air it is claimed or contested at the line's far side, as
     // ever; a lone side's header is met where it passes his head.
     if (!beforeLine && !resolveAerialContest()) headInSweep();
     return;
   }
-  // Dropping through the chest ceiling: his head may have met it on the way.
+  // Above someone's head line on this stretch: his head may meet it.
   if (!ball.isShot && !beforeLine &&
-      substepBallZ * MatchTuning::Units::BALL_Z_METRES >
-          MatchTuning::Aerial::CONTROL_CEILING_METRES &&
+      std::max(substepBallZ * MatchTuning::Units::BALL_Z_METRES, endHeight) >
+          lowestHead &&
       headInSweep())
     return;
 
@@ -3546,8 +3550,32 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     }
     else
     {
-      reach = height <= B::LOW_BALL_METRES ? feetReach(player)
-                                           : B::CHEST_CONTROL_RADIUS_METRES;
+      const BodyLines lines = bodyLines(player);
+      const bool binturong = getBody(player.isHomeTeam) == BodyId::BINTURONG;
+      // Above a Binturong body's head line it is his head's (headInSweep).
+      if (height > lines.head && binturong) continue;
+      if (height <= lines.feet)
+      {
+        reach = feetReach(player);
+      }
+      else if (!binturong)
+      {
+        reach = B::CHEST_CONTROL_RADIUS_METRES;
+      }
+      else
+      {
+        // His thigh or chest: right at him, and only in front of him (chest
+        // and thigh control plan step 2).
+        const bool thigh = height <= lines.chest;
+        // Moving, his thigh can't play it (step 4): it goes on, perhaps to
+        // his feet.
+        if (thigh && length(player.velocity) > B::THIGH_MAX_SPEED) continue;
+        reach = thigh ? B::THIGH_REACH_METRES : B::CHEST_REACH_METRES;
+        const Vector2F facing = normalized(
+            {std::cos(player.facingAngle) * MatchTuning::Pitch::LENGTH_METRES,
+             std::sin(player.facingAngle) * MatchTuning::Pitch::WIDTH_METRES});
+        if (gapX * facing.x + gapY * facing.y > 0.0f) continue;
+      }
       // His body may not reach a ball behind him at all.
       if (ballBehindReach(player, gapX, gapY, gap)) continue;
     }
@@ -3621,7 +3649,7 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
       // decides again.
       if (pendingStrike && pendingStrike->striker == &player &&
           pendingStrike->kind == PendingStrike::Kind::SHOT &&
-          moment.height > MatchTuning::Ball::LOW_BALL_METRES)
+          moment.height > bodyLines(player).feet)
       {
         pendingStrike.reset();
         ++strikeContacts.byKind[static_cast<std::size_t>(StrikeKind::SHOT)]
@@ -3701,6 +3729,16 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     if (!intended && !hands && ballSpeed > B::MAX_HEAVY_TOUCH_SPEED &&
         !reachesBall(player, ballSpeed, stretch))
       continue;
+    if (!hands && !player.isGoalkeeper &&
+        getBody(player.isHomeTeam) == BodyId::BINTURONG)
+    {
+      const BodyLines lines = bodyLines(player);
+      const std::size_t part = contact.height <= lines.feet    ? 0
+                               : contact.height <= lines.chest ? 1
+                                                               : 2;
+      const bool receiver = intended && ball.passByHome == player.isHomeTeam;
+      ++(receiver ? bodyContacts.receiver : bodyContacts.other)[part];
+    }
     // An opponent getting to a touched ball ends the claim, whatever his own
     // touch then does with it.
     if (ball.inTouch) clearPossession();
@@ -4484,7 +4522,7 @@ void MatchEngine::clearPossession()
   ball.possessedBy = nullptr;
   ball.inTouch = false;
   ball.touchCollected = false;
-  ball.touchHeaded = false;
+  ball.touchDropping = false;
   ball.touchPasser = nullptr;
   ball.touchWaiting = 0;
 }
@@ -4494,7 +4532,7 @@ void MatchEngine::handBallTo(const Player* holder)
   ball.possessedBy = holder;
   ball.inTouch = false;
   ball.touchCollected = false;
-  ball.touchHeaded = false;
+  ball.touchDropping = false;
   ball.touchPasser = nullptr;
   ball.touchWaiting = 0;
 }
@@ -4519,6 +4557,17 @@ TouchIntent MatchEngine::defaultTouchIntent(const MatchPlayer& player) const
 
 void MatchEngine::playFirstTouch(MatchPlayer& player, const TouchMoment& moment)
 {
+  // A Binturong body's ball above his feet is his thigh's or chest's (chest
+  // and thigh control plan steps 3 and 4).
+  if (getBody(player.isHomeTeam) == BodyId::BINTURONG)
+  {
+    const BodyLines lines = bodyLines(player);
+    if (moment.height > lines.feet)
+    {
+      playBodyTouchBinturong(player, moment, moment.height <= lines.chest);
+      return;
+    }
+  }
   const Vector2F contactPoint = moment.contactPoint;
   // A team-mate's pass counts as completed only once the ball is collected;
   // an opponent's pass is intercepted at the touch.
@@ -4939,8 +4988,7 @@ bool MatchEngine::dribbleTouchDue(const MatchPlayer& player,
 {
   using R = MatchTuning::Dribble;
   // (A cooldown in whole steps counts down to a hair above zero.)
-  if (ball.ownTouchCooldown > 1e-4f ||
-      moment.height > MatchTuning::Ball::LOW_BALL_METRES)
+  if (ball.ownTouchCooldown > 1e-4f || moment.height > bodyLines(player).feet)
     return false;
   const DribbleAim aim = dribbleAim(player, moment.contactPoint);
   // Just out of a stop (a sharp reversal), he plays the stopped ball on once
@@ -5226,14 +5274,14 @@ void MatchEngine::updateTouch(MatchPlayer& carrier, float dt)
 
   if (!ball.touchCollected && gap <= R::KICK_REACH_METRES &&
       length(relative) <= touchKnobs[TouchKnob::COLLECT_RELATIVE_SPEED] &&
-      (!ball.touchHeaded ||
-       ball.z * MatchTuning::Units::BALL_Z_METRES <= MatchTuning::Ball::LOW_BALL_METRES))
+      (!ball.touchDropping ||
+       ball.z * MatchTuning::Units::BALL_Z_METRES <= bodyLines(carrier).feet))
   {
     // Collected: the pass is complete and he can think about his next
     // action. The ball stays loose: from here he dribbles it, touch by touch.
     using F = MatchTuning::FirstTouch;
     ball.touchCollected = true;
-    ball.touchHeaded = false;
+    ball.touchDropping = false;
     if (ball.touchPasser) creditPassCompletion(carrier, ball.touchPasser);
     ball.touchPasser = nullptr;
     carrier.actionCooldown =

@@ -41,6 +41,9 @@
   bool updateDribbleBinturong(MatchPlayer& carrier, float dt);
   /** The touch knobs as a contact profile (first and dribble touches). */
   ContactProfile touchProfileBinturong() const;
+  /** The chest or thigh touch's contact profile: the touch knobs, less what
+   * only a foot has (chest and thigh control plan steps 3 and 4). */
+  ContactProfile bodyTouchProfileBinturong(bool thigh) const;
   /** How hard a contact is (contact plan §2): meeting the ball at `moment`
    * to send it along `aim` (metric, unit, seen from above) at
    * `intendedSpeed` over the ground and `intendedLift` upward (m/s).
@@ -200,6 +203,20 @@
    * (metric unit) at `elevation` (rad), the ball coming in as it is. */
   float headerFloorBinturong(const MatchPlayer& header, Vector2F aim,
                              float elevation) const;
+  /** The least pace (m/s) the ball can leave a body part with along `aim`
+   * (metric unit) at `elevation` (rad), the ball coming in as it is, when
+   * at least `keep` of the pace into it comes back off it. */
+  float cushionFloorBinturong(float keep, Vector2F aim, float elevation) const;
+  /** Keeps a chest or thigh touch's request within what that part can do:
+   * so far off the way he faces, between its lowest and highest elevation
+   * (Ball::CHEST_* or THIGH_*; its pace kept). */
+  void bodyTouchLimitsBinturong(const MatchPlayer& player, ContactRequest& request,
+                                bool thigh) const;
+  /** A chest or thigh touch (chest and thigh control plan steps 3 and 4):
+   * as softly as he can, back the way it came and up, then his to collect
+   * once it is down. A thigh touch plants him. */
+  void playBodyTouchBinturong(MatchPlayer& player, const TouchMoment& moment,
+                              bool thigh);
   /** A cushioned header: as softly as he can, then his to collect. */
   void cushionHeaderBinturong(MatchPlayer& header);
   /** The fastest the ball can leave his head along `aim` (metric unit) at
@@ -275,6 +292,7 @@
   // Striking (see strikeAs and the others in match_engine.h).
   bool playsFirstTouchBinturong(const MatchPlayer& player, bool hands, float heightMetres) const;
   float feetReachBinturong(const MatchPlayer& player) const;
+  BodyLines bodyLinesBinturong(const MatchPlayer& player) const;
   bool ballBehindReachBinturong(const MatchPlayer& player, float gapX, float gapY, float gap, float turnSeconds) const;
   Vector2F strikePointBinturong(const MatchPlayer& striker) const;
   Kick strikeAsBinturong(const MatchPlayer& striker, StrikeKind kind, Vector2F target, float speed, float lift);

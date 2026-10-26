@@ -285,7 +285,7 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
   {
     float seconds = 0.0f;
     Vector2F at{};
-    bool low = true;
+    float height = 0.0f;
   };
   std::array<PathPoint, LOOSE_BALL_PATH_TICKS + 1> loosePath{};
   std::size_t loosePoints = 0;
@@ -302,8 +302,7 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
     Vector2F at = toMetres(ball.position);
     constexpr int SUBSTEPS = MatchTuning::Timing::BALL_SUBSTEPS;
     constexpr float TICK = MatchTuning::Timing::FIXED_STEP_SECONDS;
-    loosePath[loosePoints++] = {0.0f, at,
-                                flight.height <= MatchTuning::Aerial::CONTROL_CEILING_METRES};
+    loosePath[loosePoints++] = {0.0f, at, flight.height};
     for (int tick = 1; tick <= LOOSE_BALL_PATH_TICKS; ++tick)
     {
       for (int sub = 0; sub < SUBSTEPS; ++sub)
@@ -311,9 +310,8 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
         const float moved = stepFlight(flight, TICK / SUBSTEPS);
         at = {at.x + heading.x * moved, at.y + heading.y * moved};
       }
-      loosePath[loosePoints++] = {
-          static_cast<float>(tick) * TICK, at,
-          flight.height <= MatchTuning::Aerial::CONTROL_CEILING_METRES};
+      loosePath[loosePoints++] = {static_cast<float>(tick) * TICK, at,
+                                  flight.height};
       // At rest: the rest of the path is this spot.
       if (flight.horizontalSpeed <= 0.0f && flight.height <= 0.0f &&
           flight.verticalSpeed <= 0.0f)
@@ -326,6 +324,8 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
   const auto interception = [&](const MatchPlayer& candidate)
   {
     const Vector2F from = toMetres(candidate.position);
+    // Below his head line it is for his feet, thigh or chest.
+    const float headLine = bodyLines(candidate).head;
     float seconds = 0.0f;
     Vector2F meet = loosePath[0].at;
     for (std::size_t index = 0; index < loosePoints; ++index)
@@ -347,7 +347,7 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
           pursuit;
       seconds = std::max(point.seconds, reach);
       meet = point.at;
-      if (point.low && reach <= point.seconds) break;
+      if (point.height <= headLine && reach <= point.seconds) break;
     }
     return std::pair{seconds, toPitch(meet)};
   };
@@ -451,14 +451,15 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
   };
   std::array<AerialRole, 2> aerialRoles{};
   challengePath.clear();
+  const float lowestHead = lowestHeadLine();
   if (!carrier && !ball.isShot &&
-      (ball.z * MatchTuning::Units::BALL_Z_METRES >
-           MatchTuning::Aerial::CONTROL_CEILING_METRES ||
+      (ball.z * MatchTuning::Units::BALL_Z_METRES > lowestHead ||
        ball.velocityZ > 0.0f))
   {
     // Its own flight (drag, spin and curve), run ahead and put back, until
-    // it drops below the chest ceiling.
+    // it drops below everyone's head line.
     using A = MatchTuning::Aerial;
+    const float headLine = lowestHead;
     constexpr float TICK = MatchTuning::Timing::FIXED_STEP_SECONDS /
                            static_cast<float>(MatchTuning::Timing::BALL_SUBSTEPS);
     const BallMotion saved = ballMotion();
@@ -466,7 +467,7 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
     {
       integrateBall(TICK);
       const float height = ball.z * MatchTuning::Units::BALL_Z_METRES;
-      if (height < A::CONTROL_CEILING_METRES && ball.velocityZ <= 0.0f) break;
+      if (height < headLine && ball.velocityZ <= 0.0f) break;
       challengePath.push_back({seconds, toMetres(ball.position), height});
     }
     setBallMotion(saved);
@@ -511,7 +512,7 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
       const float standingTop =
           forehead + rise * A::STANDING_JUMP_SHARE - A::JUMP_FOREHEAD_ABOVE_METRES;
       const float runningTop = forehead + rise - A::JUMP_FOREHEAD_ABOVE_METRES;
-      const float lowest = std::max(A::CONTROL_CEILING_METRES,
+      const float lowest = std::max(bodyLines(candidate).head,
                                     forehead - A::DUCK_HEIGHT_SHARE * candidate.heightMetres);
       const bool moving = length(candidate.velocity) >= A::RUNNING_JUMP_MIN_SPEED;
       for (const JumpPathPoint& point : challengePath)
@@ -1476,8 +1477,7 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
           Vector2F meet{ball.position.x + lookahead.x,
                         ball.position.y + lookahead.y};
           const float heightMetres = ball.z * MatchTuning::Units::BALL_Z_METRES;
-          if (heightMetres > MatchTuning::Aerial::CONTROL_CEILING_METRES ||
-              ball.velocityZ > 0.0f)
+          if (heightMetres > bodyLines(player).head || ball.velocityZ > 0.0f)
           {
             // A lofted ball is met where it drops to a controllable height,
             // not intercepted on the way up.
@@ -2390,6 +2390,9 @@ bool MatchEngine::touchNowBinturong(const MatchPlayer& player,
   // losing it. Nobody waits to steal a ball another player is playing.
   if (moment.gap <= touchKnobs[TouchKnob::COMFORT_GAP] || ball.inTouch)
     return true;
+  // Off the ground (his chest) he plays it where it meets him, for now
+  // (chest and thigh control plan step 5 decides waiting).
+  if (moment.height > bodyLines(player).feet) return true;
   return !waitsForCloserBinturong(player, moment);
 }
 
@@ -2448,11 +2451,11 @@ bool MatchEngine::waitsForCloserBinturong(const MatchPlayer& player,
   bool nearDeadZoneAfterMove = false;
   // The first sub-step at which a bounce lifts it out of reach of his feet.
   int risesAt = LOOKAHEAD + 1;
+  const float feetLine = bodyLines(player).feet;
   for (int step = 1; step <= LOOKAHEAD; ++step)
   {
     travelled += stepFlight(flight, STEP);
-    if (risesAt > LOOKAHEAD &&
-        flight.height > MatchTuning::Ball::LOW_BALL_METRES)
+    if (risesAt > LOOKAHEAD && flight.height > feetLine)
       risesAt = step;
     path[static_cast<std::size_t>(step)] = {
         ballStart.x + heading.x * travelled,

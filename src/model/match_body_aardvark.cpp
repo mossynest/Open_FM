@@ -1184,6 +1184,12 @@ float MatchEngine::feetReachAardvark(const MatchPlayer& /*player*/) const
   return MatchTuning::Ball::OUTFIELD_CONTROL_RADIUS_METRES;
 }
 
+BodyLines MatchEngine::bodyLinesAardvark(const MatchPlayer& /*player*/) const
+{
+  // The same fixed lines for everyone, and no thigh.
+  return BodyLines{};
+}
+
 bool MatchEngine::ballBehindReachAardvark(const MatchPlayer& /*player*/,
                                           float /*gapX*/, float /*gapY*/,
                                           float /*gap*/,

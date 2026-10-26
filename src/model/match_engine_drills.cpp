@@ -68,6 +68,7 @@ std::optional<MatchPlayer*> MatchEngine::placeScenario(
     matchPlayer.movementTarget = placement.position;
     matchPlayer.isTrapping = false;
     matchPlayer.trapTimer = 0.0f;
+    matchPlayer.plantedSeconds = 0.0f;
     matchPlayer.isPressing = false;
     matchPlayer.isMakingRun = false;
     if (resetCondition) matchPlayer.stamina = 1.0f;

@@ -1153,8 +1153,7 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
   jumpPath.clear();
   if (!walking && state == MatchState::PLAYING && !ball.isShot &&
       (!ball.possessedBy || ball.inTouch) &&
-      (ball.z * MatchTuning::Units::BALL_Z_METRES >
-           MatchTuning::Aerial::CONTROL_CEILING_METRES ||
+      (ball.z * MatchTuning::Units::BALL_Z_METRES > lowestHeadLine() ||
        ball.velocityZ > 0.0f))
   {
     // Its own flight (drag, spin and curve), run ahead and put back.
@@ -1559,7 +1558,10 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     // and turning.
     const float landing =
         player.landingSeconds > 0.0f ? MatchTuning::Aerial::LANDING_MOVEMENT_SHARE : 1.0f;
-    acceleration[lane] = playerAcceleration(player, freeShare) * landing;
+    // Planted for a thigh touch, he can't set off.
+    acceleration[lane] = player.plantedSeconds > 0.0f
+                             ? 0.0f
+                             : playerAcceleration(player, freeShare) * landing;
     braking[lane] = playerBraking(player, freeShare) * landing;
     // How hard he chooses to run is his side's brain's.
     const MovementStyle& style = movementStyle(player.isHomeTeam);
@@ -2286,6 +2288,21 @@ ContactProfile MatchEngine::touchProfileBinturong() const
   return profile;
 }
 
+ContactProfile MatchEngine::bodyTouchProfileBinturong(bool thigh) const
+{
+  // The touch's, but no foot is weaker and it is never off the ground for a
+  // chest or thigh; never sent down, nor off a thigh flatter than its
+  // lowest.
+  ContactProfile profile = touchProfileBinturong();
+  profile.weakerFoot = {};
+  profile.weakerFootErrorGain = 0.0f;
+  profile.offGround = {};
+  profile.lowestElevation =
+      thigh ? MatchTuning::Ball::THIGH_MIN_UP_DEGREES * std::numbers::pi_v<float> / 180.0f
+            : 0.0f;
+  return profile;
+}
+
 ContactProfile touchContactProfile(const FirstTouchKnobs& knob)
 {
   using K = TouchKnob;
@@ -2446,7 +2463,12 @@ ContactResult MatchEngine::contactBinturong(const MatchPlayer& player,
   ContactRequest request = asked;
   const bool strike = request.kind == ContactRequest::Kind::STRIKE;
   ContactProfile profile =
-      strike ? strikeProfileBinturong(request.strike) : touchProfileBinturong();
+      strike ? strikeProfileBinturong(request.strike)
+      : request.kind == ContactRequest::Kind::CHEST_TOUCH
+          ? bodyTouchProfileBinturong(false)
+      : request.kind == ContactRequest::Kind::THIGH_TOUCH
+          ? bodyTouchProfileBinturong(true)
+          : touchProfileBinturong();
   if (strike && request.strike == StrikeKind::HEADER)
     headerLimitsBinturong(player, moment, request, profile);
   if (request.precision != 1.0f)
@@ -2512,6 +2534,15 @@ ContactResult MatchEngine::contactBinturong(const MatchPlayer& player,
           request.paceFloor * std::sin(outcome.achievedElevation);
     }
     outcome.actualSpeed = request.paceFloor;
+  }
+  // ...nor above the most it may leave with (it adds no pace).
+  if (ContactOutcome& outcome = result.outcome;
+      request.paceCeiling > 0.0f && outcome.actualSpeed > request.paceCeiling)
+  {
+    const float scale = request.paceCeiling / outcome.actualSpeed;
+    outcome.velocity = {outcome.velocity.x * scale, outcome.velocity.y * scale};
+    outcome.verticalSpeed *= scale;
+    outcome.actualSpeed = request.paceCeiling;
   }
   reportContactBinturong(player, request, result);
   return result;
@@ -2715,6 +2746,7 @@ ContactAssessment MatchEngine::assessContactBinturong(
   situation.gap = moment.gap;
   situation.reach = moment.reach;
   situation.height = moment.height;
+  situation.feetLine = bodyLinesBinturong(player).feet;
   situation.rightFooted =
       !player.player || player.player->getFoot() == Foot::Right;
   situation.surprise = surprise;
@@ -2948,7 +2980,7 @@ ContactAssessment assessContact(const ContactProfile& profile,
       {"on his weaker foot", TermSource::ATTRIBUTE, clamp01(weakSide),
        profile.weakerFoot.angle, profile.weakerFoot.weight},
       {"off the ground", TermSource::SITUATION,
-       clamp01(situation.height / MatchTuning::Ball::LOW_BALL_METRES),
+       clamp01(situation.height / std::max(situation.feetLine, EPSILON)),
        profile.offGround.angle, profile.offGround.weight},
       {"not expecting it", TermSource::SITUATION, situation.surprise,
        profile.surprise.angle, profile.surprise.weight},
@@ -4194,7 +4226,7 @@ float MatchEngine::touchSkillBinturong(const MatchPlayer& player,
                                : 0.0f});
 }
 
-bool MatchEngine::controlsBallBinturong(const MatchPlayer& /*player*/,
+bool MatchEngine::controlsBallBinturong(const MatchPlayer& player,
                                         float skill, float ballSpeed,
                                         float heightMetres)
 {
@@ -4202,7 +4234,7 @@ bool MatchEngine::controlsBallBinturong(const MatchPlayer& /*player*/,
   const float controlChance =
       std::clamp(B::BASE_CONTROL_CHANCE + skill * B::TOUCH_SKILL_BONUS -
                      ballSpeed * B::SPEED_CONTROL_PENALTY -
-                     (heightMetres > B::LOW_BALL_METRES ? 0.08f : 0.0f),
+                     (heightMetres > bodyLinesBinturong(player).feet ? 0.08f : 0.0f),
                  B::MIN_CONTROL_CHANCE, B::MAX_CONTROL_CHANCE);
   return randomFloat(0.0f, 1.0f) <= controlChance;
 }
@@ -4316,6 +4348,15 @@ float MatchEngine::headerFloorBinturong(const MatchPlayer& header, Vector2F aim,
                        (STAT_99_RATING - STAT_1_RATING);
   const float keep =
       A::CUSHION_KEEP_LOW + (A::CUSHION_KEEP_HIGH - A::CUSHION_KEEP_LOW) * rating;
+  return cushionFloorBinturong(keep, aim, elevation);
+}
+
+float MatchEngine::cushionFloorBinturong(float keep, Vector2F aim,
+                                         float elevation) const
+{
+  // The body part pushes along one line: across it the ball keeps its
+  // pace, and along it at least `keep` of the pace it hits him with comes
+  // back off it.
   const float c = std::cos(elevation);
   const std::array<float, 3> way{aim.x * c, aim.y * c, std::sin(elevation)};
   const std::array<float, 3> in{ball.velocity.x, ball.velocity.y, ball.velocityZ};
@@ -4394,7 +4435,7 @@ void MatchEngine::cushionHeaderBinturong(MatchPlayer& header)
               0.0f);
   ball.inTouch = true;
   ball.touchCollected = false;
-  ball.touchHeaded = true;
+  ball.touchDropping = true;
   ball.touchPasser = receivingPass ? passer : nullptr;
   ball.touchContactGap = moment.gap;
   ball.touchContactHeight = moment.height;
@@ -4403,6 +4444,96 @@ void MatchEngine::cushionHeaderBinturong(MatchPlayer& header)
   ball.touchGap = gap;
   ball.touchPeakGap = gap;
   ball.dribbleExposure = gap;
+  ball.dribbleTouchLength = std::max(gap, MatchTuning::Dribble::MAX_TOUCH_METRES);
+}
+
+void MatchEngine::bodyTouchLimitsBinturong(const MatchPlayer& player,
+                                           ContactRequest& request,
+                                           bool thigh) const
+{
+  // His chest sends it out the way it faces, which he can turn so far, up
+  // and never down; his thigh only so far round, and only upward.
+  using B = MatchTuning::Ball;
+  constexpr float DEGREES = std::numbers::pi_v<float> / 180.0f;
+  const Vector2F facing = normalized(
+      {std::cos(player.facingAngle) * MatchTuning::Pitch::LENGTH_METRES,
+       std::sin(player.facingAngle) * MatchTuning::Pitch::WIDTH_METRES});
+  const float off = std::atan2(facing.x * request.aim.y - facing.y * request.aim.x,
+                               facing.x * request.aim.x + facing.y * request.aim.y);
+  const float side =
+      (thigh ? B::THIGH_MAX_SIDE_DEGREES : B::CHEST_MAX_SIDE_DEGREES) * DEGREES;
+  if (std::abs(off) > side) request.aim = rotatedBy(facing, off > 0.0f ? side : -side);
+  const float pace = std::hypot(request.speed, request.lift);
+  const float elevation = std::clamp(
+      std::atan2(request.lift, request.speed),
+      thigh ? B::THIGH_MIN_UP_DEGREES * DEGREES : 0.0f,
+      (thigh ? B::THIGH_MAX_UP_DEGREES : B::CHEST_MAX_UP_DEGREES) * DEGREES);
+  request.speed = pace * std::cos(elevation);
+  request.lift = pace * std::sin(elevation);
+}
+
+void MatchEngine::playBodyTouchBinturong(MatchPlayer& player,
+                                         const TouchMoment& moment, bool thigh)
+{
+  // A chest or thigh touch (chest and thigh control plan steps 3 and 4): as
+  // softly as it can send it, back the way it came (the least pace: no
+  // turn) and up (a real chest cushion goes up and drops in front of him; a
+  // thigh pops it up to drop at his feet), within what that part can do
+  // (bodyTouchLimitsBinturong), never faster than it came. He owns it from
+  // here, as after a first touch, and collects it once it is down at his
+  // feet. A team-mate's ball counts as completed when he collects it. A
+  // thigh touch plants him for a moment.
+  using B = MatchTuning::Ball;
+  const bool receivingPass = ball.isPass && ball.passByHome == player.isHomeTeam;
+  const Player* passer = ball.lastPossessor;
+  if (!receivingPass) recordPassCompletion(player);
+  const Vector2F facing = normalized(
+      {std::cos(player.facingAngle) * MatchTuning::Pitch::LENGTH_METRES,
+       std::sin(player.facingAngle) * MatchTuning::Pitch::WIDTH_METRES});
+  const float level = length(ball.velocity);
+  ContactRequest request;
+  request.kind =
+      thigh ? ContactRequest::Kind::THIGH_TOUCH : ContactRequest::Kind::CHEST_TOUCH;
+  request.aim = level > B::STOP_SPEED
+                    ? Vector2F{-ball.velocity.x / level, -ball.velocity.y / level}
+                    : facing;
+  const float up = (thigh ? B::THIGH_CUSHION_UP_DEGREES : B::CHEST_CUSHION_UP_DEGREES) *
+                   std::numbers::pi_v<float> / 180.0f;
+  request.speed = std::cos(up);
+  request.lift = std::sin(up);
+  bodyTouchLimitsBinturong(player, request, thigh);
+  const float elevation = std::atan2(request.lift, request.speed);
+  const float rating =
+      (player.derivedStat(DerivedStat::FIRST_TOUCH) - STAT_1_RATING) /
+      (STAT_99_RATING - STAT_1_RATING);
+  const float keepLow = thigh ? B::THIGH_KEEP_LOW : B::CHEST_KEEP_LOW;
+  const float keepHigh = thigh ? B::THIGH_KEEP_HIGH : B::CHEST_KEEP_HIGH;
+  const float keep = keepLow + (keepHigh - keepLow) * rating;
+  request.paceFloor = cushionFloorBinturong(keep, request.aim, elevation);
+  request.paceCeiling = std::hypot(ball.velocity.x, ball.velocity.y, ball.velocityZ);
+  request.speed = request.paceFloor * std::cos(elevation);
+  request.lift = request.paceFloor * std::sin(elevation);
+  const ContactResult result = contactBinturong(player, request, moment);
+
+  setPossession(player);
+  sendBallOff(player,
+              {std::clamp(moment.contactPoint.x, 0.001f, 0.999f),
+               std::clamp(moment.contactPoint.y, 0.001f, 0.999f)},
+              moment.height / MatchTuning::Units::BALL_Z_METRES,
+              result.outcome.velocity, result.outcome.verticalSpeed, BallSpin{},
+              0.0f);
+  ball.inTouch = true;
+  ball.touchCollected = false;
+  ball.touchDropping = true;
+  ball.touchPasser = receivingPass ? passer : nullptr;
+  ball.touchContactGap = moment.gap;
+  ball.touchContactHeight = moment.height;
+  ball.touchLaunchSpeed = result.outcome.actualSpeed;
+  const float gap = distance(player.position, ball.position);
+  ball.touchGap = gap;
+  ball.touchPeakGap = gap;
+  ball.dribbleExposure = gap;
+  if (thigh) player.plantedSeconds = B::THIGH_PLANTED_SECONDS;
   ball.dribbleTouchLength = std::max(gap, MatchTuning::Dribble::MAX_TOUCH_METRES);
 }
 
@@ -4533,12 +4664,12 @@ std::optional<HeadPart> MatchEngine::headMeetBinturong(const MatchPlayer& player
 {
   // Heading technique plan step 4: within a lean of the neck of his centre.
   // Up and down, where his head is then (aerial challenge plan step 1):
-  // from a duck below his forehead (never below the chest ceiling) up to
-  // the top of his head.
+  // from a duck below his forehead (never below his head line, the top of
+  // his shoulders where he is then) up to the top of his head.
   using A = MatchTuning::Aerial;
   const float top = player.heightMetres + feetHeight;
   const float forehead = top - A::HEAD_OFFSET_METRES;
-  const float lowest = std::max(A::CONTROL_CEILING_METRES,
+  const float lowest = std::max(bodyLinesBinturong(player).head + feetHeight,
                                 forehead - A::DUCK_HEIGHT_SHARE * player.heightMetres);
   if (gap > A::HEAD_REACH_METRES || heightMetres < lowest || heightMetres > top)
     return std::nullopt;
@@ -4887,10 +5018,24 @@ bool MatchEngine::playsFirstTouchBinturong(const MatchPlayer& player,
                                            bool hands,
                                            float heightMetres) const
 {
-  // Feet only, outfielders only: chest control and goalkeepers keep the old
-  // trap for now (first-touch plan, §1).
-  return !player.isGoalkeeper && !hands &&
-         heightMetres <= MatchTuning::Ball::LOW_BALL_METRES;
+  // Outfielders only, below his head line: goalkeepers keep the old trap for
+  // now (first-touch plan §1). His thigh only while he is nearly stopped
+  // (the sweep gives a moving player no thigh contact; chest and thigh
+  // control plan step 4).
+  const BodyLines lines = bodyLinesBinturong(player);
+  const bool thigh = heightMetres > lines.feet && heightMetres <= lines.chest;
+  return !player.isGoalkeeper && !hands && heightMetres <= lines.head &&
+         (!thigh || length(player.velocity) <= MatchTuning::Ball::THIGH_MAX_SPEED);
+}
+
+BodyLines MatchEngine::bodyLinesBinturong(const MatchPlayer& player) const
+{
+  // From his height (chest and thigh control plan step 1): his knee, the top
+  // of a raised thigh, the top of his shoulders.
+  using B = MatchTuning::Ball;
+  return BodyLines{B::FEET_LINE_HEIGHT_SHARE * player.heightMetres,
+                   B::CHEST_LINE_HEIGHT_SHARE * player.heightMetres,
+                   B::HEAD_LINE_HEIGHT_SHARE * player.heightMetres};
 }
 
 float MatchEngine::feetReachBinturong(const MatchPlayer& player) const
@@ -5565,8 +5710,7 @@ void MatchEngine::planHeaderTurnBinturong()
   // knock-down's or a clearance's aim is chosen only as he meets it.
   headerTurn.reset();
   if (state != MatchState::PLAYING || ball.possessedBy || ball.isShot) return;
-  if (ball.z * MatchTuning::Units::BALL_Z_METRES <=
-          MatchTuning::Aerial::CONTROL_CEILING_METRES &&
+  if (ball.z * MatchTuning::Units::BALL_Z_METRES <= lowestHeadLine() &&
       ball.velocityZ <= 0.0f)
     return;
   const MatchPlayer* header = nullptr;

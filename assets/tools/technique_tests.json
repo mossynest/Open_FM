@@ -50,6 +50,14 @@
       "Physicality": 70,
       "Pace": 70,
       "Shooting": 70
+    },
+    "Chest control": {
+      "Passes him by (m)": 0,
+      "Height (cm)": 180
+    },
+    "Thigh control": {
+      "Passes him by (m)": 0,
+      "Height (cm)": 180
     }
   },
   "tests": [
@@ -292,6 +300,33 @@
      "tags": {"family": "header", "type": "cushion", "ball": "cross"}},
     {"id": "H19", "name": "Cushion a cross at 20 m/s", "section": "Headers: cushioned", "drill": "Header target", "skill": "Heading", "success": {"flag": "Kept"},
      "settings": {"Ball speed (m/s)": 20, "Comes from (deg)": 90, "Feed distance (m)": 20, "Arrival height (m)": 2.0, "Header": "Keep it"},
-     "tags": {"family": "header", "type": "cushion", "ball": "cross"}}
+     "tags": {"family": "header", "type": "cushion", "ball": "cross"}},
+    {"id": "C01", "name": "Driven ball at the chest, 22 m/s", "section": "Chest control", "drill": "Chest control", "skill": "First Touch", "success": {"flag": "Kept"},
+     "settings": {"Ball speed (m/s)": 22, "Comes from (deg)": 0, "Feed distance (m)": 25, "Arrival height (m)": 1.3},
+     "tags": {"family": "chest", "ball": "driven"}},
+    {"id": "C02", "name": "Driven ball at the chest, 30 m/s", "section": "Chest control", "drill": "Chest control", "skill": "First Touch", "success": {"flag": "Kept"},
+     "settings": {"Ball speed (m/s)": 30, "Comes from (deg)": 0, "Feed distance (m)": 30, "Arrival height (m)": 1.3},
+     "tags": {"family": "chest", "ball": "driven"}},
+    {"id": "C03", "name": "Driven ball from 60 deg right", "section": "Chest control", "drill": "Chest control", "skill": "First Touch", "success": {"flag": "Kept"},
+     "settings": {"Ball speed (m/s)": 22, "Comes from (deg)": 60, "Feed distance (m)": 25, "Arrival height (m)": 1.3},
+     "tags": {"family": "chest", "ball": "driven", "turn": "60"}},
+    {"id": "C04", "name": "Long flat ball, 18 m/s", "section": "Chest control", "drill": "Chest control", "skill": "First Touch", "success": {"flag": "Kept"},
+     "settings": {"Ball speed (m/s)": 18, "Comes from (deg)": 0, "Feed distance (m)": 25, "Arrival height (m)": 1.3},
+     "tags": {"family": "chest", "ball": "long"}},
+    {"id": "C05", "name": "Gentle ball, 12 m/s", "section": "Chest control", "drill": "Chest control", "skill": "First Touch", "success": {"flag": "Kept"},
+     "settings": {"Ball speed (m/s)": 12, "Comes from (deg)": 0, "Feed distance (m)": 20, "Arrival height (m)": 1.0},
+     "tags": {"family": "chest", "ball": "gentle"}},
+    {"id": "T01", "name": "Driven ball at the thigh, 22 m/s", "section": "Thigh control", "drill": "Thigh control", "skill": "First Touch", "success": {"flag": "Kept"},
+     "settings": {"Ball speed (m/s)": 22, "Comes from (deg)": 0, "Feed distance (m)": 25, "Arrival height (m)": 0.8},
+     "tags": {"family": "thigh", "ball": "driven"}},
+    {"id": "T02", "name": "Driven ball at the thigh, 30 m/s", "section": "Thigh control", "drill": "Thigh control", "skill": "First Touch", "success": {"flag": "Kept"},
+     "settings": {"Ball speed (m/s)": 30, "Comes from (deg)": 0, "Feed distance (m)": 30, "Arrival height (m)": 0.8},
+     "tags": {"family": "thigh", "ball": "driven"}},
+    {"id": "T03", "name": "Driven ball from 45 deg right", "section": "Thigh control", "drill": "Thigh control", "skill": "First Touch", "success": {"flag": "Kept"},
+     "settings": {"Ball speed (m/s)": 22, "Comes from (deg)": 45, "Feed distance (m)": 25, "Arrival height (m)": 0.8},
+     "tags": {"family": "thigh", "ball": "driven", "turn": "45"}},
+    {"id": "T04", "name": "Firm ball at the thigh, 15 m/s", "section": "Thigh control", "drill": "Thigh control", "skill": "First Touch", "success": {"flag": "Kept"},
+     "settings": {"Ball speed (m/s)": 15, "Comes from (deg)": 0, "Feed distance (m)": 20, "Arrival height (m)": 0.7},
+     "tags": {"family": "thigh", "ball": "firm"}}
   ]
 }

@@ -13,8 +13,11 @@
 // (match_body_<name>.cpp), and a case in each function here.
 
 #include <algorithm>
+#include <limits>
+#include <utility>
 
 #include "model/match_engine.h"
+#include "model/match_engine_internal.h"
 
 void MatchEngine::integrateMovements(const std::uint8_t* slots,
                                      std::size_t count, float dt, bool walking)
@@ -563,6 +566,40 @@ float MatchEngine::feetReach(const MatchPlayer& player) const
       return feetReachBinturong(player);
   }
   return feetReachAardvark(player);
+}
+
+BodyLines MatchEngine::bodyLines(const MatchPlayer& player) const
+{
+  switch (bodyOf(player.isHomeTeam))
+  {
+    case BodyId::AARDVARK:
+      break;
+    case BodyId::BINTURONG:
+      return bodyLinesBinturong(player);
+  }
+  return bodyLinesAardvark(player);
+}
+
+std::pair<float, float> MatchEngine::headLineRange() const
+{
+  float lowest = std::numeric_limits<float>::max();
+  float highest = 0.0f;
+  for (const MatchPlayer& player : players)
+  {
+    if (!MatchEngineInternal::active(player) || player.isGoalkeeper) continue;
+    const float head = bodyLines(player).head;
+    lowest = std::min(lowest, head);
+    highest = std::max(highest, head);
+  }
+  if (highest <= 0.0f)
+    return {MatchTuning::Aerial::CONTROL_CEILING_METRES,
+            MatchTuning::Aerial::CONTROL_CEILING_METRES};
+  return {lowest, highest};
+}
+
+float MatchEngine::lowestHeadLine() const
+{
+  return headLineRange().first;
 }
 
 bool MatchEngine::ballBehindReach(const MatchPlayer& player, float gapX,

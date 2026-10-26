@@ -271,6 +271,9 @@ struct MatchPlayer
   bool runningJump = false;
   float jumpLandingSeconds = 0.0f;
   float landingSeconds = 0.0f;
+  /** Planted for a thigh touch: how long until he can accelerate again (s;
+   * he can still brake). */
+  float plantedSeconds = 0.0f;
   [[nodiscard]] bool airborne() const { return feetHeight > 0.0f || jumpSpeed > 0.0f; }
   bool isPressing = false;
   bool isMakingRun = false;
@@ -718,6 +721,16 @@ struct ContactOutcome
   BallSpin achievedSpin{};
 };
 
+/** A standing player's lines between the parts of his body that play the
+ * ball (metres above the ground): up to `feet`, his feet; up to `chest`,
+ * his thigh; up to `head`, his chest; above it, his head. */
+struct BodyLines
+{
+  float feet = MatchTuning::Ball::LOW_BALL_METRES;
+  float chest = MatchTuning::Ball::LOW_BALL_METRES;
+  float head = MatchTuning::Aerial::CONTROL_CEILING_METRES;
+};
+
 /** One contact the body is asked for (unified kick plan): a touch, with
  * the touch profile and his First Touch, or a strike of kind `strike`,
  * with its profile and his skill for it. What he means: the direction
@@ -729,6 +742,10 @@ struct ContactRequest
   {
     FIRST_TOUCH,
     DRIBBLE_TOUCH,
+    /** A first touch with his chest or thigh (chest and thigh control plan
+     * steps 3 and 4). */
+    CHEST_TOUCH,
+    THIGH_TOUCH,
     STRIKE,
   };
   Kind kind = Kind::FIRST_TOUCH;
@@ -754,6 +771,9 @@ struct ContactRequest
    * way (a cushioned header); 0, none. Asking near it is the weight job at
    * its hardest, and the error can't take it below. */
   float paceFloor = 0.0f;
+  /** The most pace (m/s, in three dimensions) it can leave him with (a
+   * chest touch: the pace it came with, as it adds none); 0, no limit. */
+  float paceCeiling = 0.0f;
 };
 
 /** A contact assessed and carried out, and the skill it was carried out
@@ -827,9 +847,9 @@ struct MatchBall
   Vector2F sentFrom{};
   /** How high it was there (m; the same: for drills and reports). */
   float sentHeightMetres = 0.0f;
-  /** The current touch was a cushioned header: he collects it only once it
-   * is down at his feet. */
-  bool touchHeaded = false;
+  /** The current touch was off his head, chest or thigh: he collects it
+   * only once it is down at his feet. */
+  bool touchDropping = false;
   /** The current touch: what was tried, and how far from his centre (m)
    * he met the ball. */
   TouchIntent::Kind touchKind = TouchIntent::Kind::SET;
@@ -1752,6 +1772,19 @@ class MatchEngine
   /** Open-play strikes by Binturong bodies as the contact model reads them
    * (contact plan step 2; no effect on the strikes). */
   const StrikeContactStats& getStrikeContacts() const { return strikeContacts; }
+  /** Loose balls a Binturong body's outfielder played with his body (not
+   * his head), by the part that met it: feet, thigh, chest (chest and thigh
+   * control plan step 2). The intended receivers of a team-mate's pass
+   * apart from everyone else. */
+  struct BodyContactStats
+  {
+    std::array<std::uint32_t, 3> receiver{};
+    std::array<std::uint32_t, 3> other{};
+  };
+  const BodyContactStats& getBodyContacts() const { return bodyContacts; }
+  /** His lines between feet, thigh, chest and head, standing (his body's:
+   * chest and thigh control plan step 1). */
+  BodyLines bodyLines(const MatchPlayer& player) const;
   /** Drills: whether a pass of this player's is held for its strike (for
    * the sweep, his meet, or his turn to it). */
   bool passHeldFor(PlayerID playerId) const;
@@ -2376,6 +2409,7 @@ class MatchEngine
   std::uint32_t dribbleFailedTouches = 0;
   /** Open-play strikes read by the contact model (observed only). */
   StrikeContactStats strikeContacts;
+  BodyContactStats bodyContacts;
   FirstTouchKnobs touchKnobs;
   StrikeKnobs strikeKnobs;
   StretchMap contactStretchMap;
@@ -3482,6 +3516,11 @@ class MatchEngine
                        float heightMetres) const;
   /** How far from his centre he can play a ball at his feet. */
   float feetReach(const MatchPlayer& player) const;
+  /** The lowest and highest head lines of the outfielders on the pitch:
+   * above the lowest the ball is a header for someone, above the highest
+   * for everyone. */
+  std::pair<float, float> headLineRange() const;
+  float lowestHeadLine() const;
   /** Whether a ball `gap` metres away (`gapX`, `gapY` from the ball to him)
    * is behind him beyond his reach (a dead zone), or will be once his body
    * has turned for `turnSeconds` the way it turns now. */

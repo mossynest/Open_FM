@@ -7011,6 +7011,386 @@ class HeaderTargetDrill final : public Drill
   std::array<std::string, STRIKE_KNOB_COUNT> knobSections;
 };
 
+// --- Chest control, Thigh control ----------------------------------------------
+
+/**
+ * One ball served at chest (or thigh) height to a lone player standing on
+ * his spot, who takes it on his chest (thigh) (a Binturong body) and keeps
+ * it. Nobody else on the pitch
+ * (Notes and plans/match_engine_chest_thigh_control_plan.md, steps 3-4).
+ */
+class BodyControlDrill final : public Drill
+{
+ public:
+  static constexpr Vector2F MIDDLE{0.5f, 0.5f};
+  /** No touch this long after the feed: the run ends. */
+  static constexpr double TIME_LIMIT = 8.0;
+  /** After the touch: the run ends this long after it at most. */
+  static constexpr double KEEP_LIMIT = 5.0;
+  static constexpr double LINGER_SECONDS = 0.4;
+  static constexpr float Z_METRES = MatchTuning::Units::BALL_Z_METRES;
+
+  explicit BodyControlDrill(bool thighDrill)
+      : thigh(thighDrill), arrivalHeight(thighDrill ? 0.8f : 1.3f)
+  {
+  }
+
+  const char* name() const override
+  {
+    return thigh ? "Thigh control" : "Chest control";
+  }
+  const char* summary() const override
+  {
+    return thigh
+               ? "A ball served at thigh height to a lone player standing on "
+                 "his spot, who takes it on his thigh and keeps it. Where it "
+                 "comes from, its pace and the height it arrives at; his "
+                 "First Touch and height. Measures which part met it, where "
+                 "(height, gap from his centre), the pace in and off his "
+                 "thigh, the angle it went off at, where it lands and "
+                 "whether he kept it."
+               : "A ball served at chest height to a lone player on his spot, "
+                 "who takes it on his chest and keeps it. Where it comes "
+                 "from, its pace and the height it arrives at; his First "
+                 "Touch and height. Measures which part met it, where "
+                 "(height, gap from his centre), the pace in and off his "
+                 "chest, the angle it went off at, where it lands and "
+                 "whether he kept it.";
+  }
+
+  std::vector<DrillParameter> parameters() override
+  {
+    std::vector<DrillParameter> list;
+    const auto add = [&list](DrillParameter parameter, const char* section)
+    {
+      parameter.section = section;
+      list.push_back(std::move(parameter));
+    };
+    add(setting("Ball speed (m/s)", &ballSpeed, 2.0f, 35.0f, false,
+                "Its pace over the ground when it is played in. Slow over a "
+                "long way drops steeply onto him; fast is a driven ball."),
+        "Ball");
+    add(setting("Comes from (deg)", &fromAngle, -90.0f, 90.0f, true,
+                "Where it is played from, against the way he faces (up the "
+                "pitch): 0 in front of him, 90 from his right, -90 from his "
+                "left. His chest and thigh play only a ball in front of "
+                "him."),
+        "Ball");
+    add(setting("Feed distance (m)", &feedDistance, 3.0f, 60.0f, false), "Ball");
+    add(setting("Arrival height (m)", &arrivalHeight, 0.3f, 2.0f, false,
+                "How high it is as it passes over the spot where he stands. "
+                "His thigh takes it from 0.28 to 0.55 of his height, his "
+                "chest from 0.55 to 0.85."),
+        "Ball");
+    add(setting("Passes him by (m)", &passesBy, -1.0f, 1.0f, false,
+                "Sideways offset of its line from where he stands: 0 "
+                "straight at him."),
+        "Ball");
+    add(setting("First Touch", &firstTouch, 1.0f, 100.0f, true,
+                "His First Touch (overrides the derived stat): how softly "
+                "his chest or thigh can take it, and how well he carries the "
+                "touch out."),
+        "Player");
+    add(setting("Height (cm)", &heightCm, 150.0f, 210.0f, true,
+                "Where his thigh and chest are (shares of his height)."),
+        "Player");
+    return list;
+  }
+
+  std::vector<DrillPreset> presets() const override
+  {
+    const std::map<std::string, float> base{
+        {"Ball speed (m/s)", 8.0f},   {"Comes from (deg)", 0.0f},
+        {"Feed distance (m)", 20.0f}, {"Arrival height (m)", thigh ? 0.8f : 1.3f},
+        {"Passes him by (m)", 0.0f}};
+    const auto with = [&base](std::map<std::string, float> changes)
+    {
+      std::map<std::string, float> settings = base;
+      for (const auto& [name, value] : changes) settings[name] = value;
+      return settings;
+    };
+    return {
+        {"Dropping ball", "8 m/s from 20 m in front, dropping onto him.", base},
+        {"Long ball", "16 m/s from 40 m in front.",
+         with({{"Ball speed (m/s)", 16.0f}, {"Feed distance (m)", 40.0f}})},
+        {"Driven ball", "22 m/s from 25 m in front, flat.",
+         with({{"Ball speed (m/s)", 22.0f}, {"Feed distance (m)", 25.0f}})},
+        {"From the side", "10 m/s from 20 m, 60 deg to his right.",
+         with({{"Ball speed (m/s)", 10.0f}, {"Comes from (deg)", 60.0f}})},
+    };
+  }
+
+  std::vector<DrillPlayerSpec> players() const override
+  {
+    return {{"Receiver",
+             PlayerRole::ST,
+             true,
+             {},
+             static_cast<int>(heightCm),
+             {{DerivedStat::FIRST_TOUCH, firstTouch}}}};
+  }
+
+  void begin(MatchEngine& engine, const std::vector<PlayerID>& ids) override
+  {
+    playerId = ids[0];
+    // In metres: he faces up the pitch (+x); the ball comes from fromAngle
+    // round from in front of him, along a line passesBy to his side.
+    const Vector2F up{1.0f, 0.0f};
+    stand = MIDDLE;
+    const Vector2F from = rotated(up, fromAngle * PI / 180.0f);
+    const Vector2F travel{-from.x, -from.y};
+    const Vector2F side = rotated(travel, PI * 0.5f);
+    feedFrom = along(along(stand, side, passesBy), from, feedDistance);
+    feedFrom = {std::clamp(feedFrom.x, 0.005f, 0.995f),
+                std::clamp(feedFrom.y, 0.005f, 0.995f)};
+    MatchScenario scenario;
+    scenario.players.push_back({playerId, stand, false});
+    scenario.carrierId = 0;
+    scenario.ballPosition = feedFrom;
+    engine.startDrill(scenario);
+    engine.setDrillTarget(playerId, stand, false, {}, 0.0f, 0.0f,
+                          facingAngleOf(0.0f));
+    engine.keepBall(playerId, true);
+    const float feedMetres = metresBetween(feedFrom, along(stand, side, passesBy));
+    const float lift =
+        HeaderTargetDrill::liftFor(engine, feedMetres, ballSpeed, arrivalHeight);
+    engine.feedBall(feedFrom, {travel.x * ballSpeed, travel.y * ballSpeed}, lift,
+                    playerId);
+    fedAt = secondsOf(engine);
+    if (const MatchPlayer* player = slotOf(engine, playerId))
+      lines = engine.bodyLines(*player);
+    met.reset();
+    dropped.reset();
+    collectedAt.reset();
+    outcome.clear();
+    endAt.reset();
+    last = stateOf(engine.getBall());
+    ballPath = {feedFrom};
+  }
+
+  bool afterStep(MatchEngine& engine) override
+  {
+    const double now = secondsOf(engine);
+    const MatchBall& ball = engine.getBall();
+    const MatchPlayer* player = slotOf(engine, playerId);
+    if (engine.getSimulatedSteps() % 2 == 0) ballPath.push_back(ball.position);
+    const bool his = ball.possessedBy && ball.possessedBy->getId() == playerId;
+    if (!met && outcome.empty())
+    {
+      // Off his head, chest or thigh, by the height he met it at.
+      const char* part =
+          !(his && ball.inTouch && ball.touchDropping) ? nullptr
+          : ball.touchContactHeight > lines.head       ? "head"
+          : ball.touchContactHeight > lines.chest      ? "chest"
+                                                       : "thigh";
+      if (part && std::string_view(part) != partName())
+      {
+        outcome = std::format("not his {} (his {})", partName(), part);
+      }
+      else if (part)
+      {
+        Touch touch;
+        touch.at = now;
+        touch.height = ball.touchContactHeight;
+        touch.gap = ball.touchContactGap;
+        touch.paceIn = std::hypot(std::hypot(last.velocity.x, last.velocity.y),
+                                  last.lift);
+        touch.speed = std::hypot(ball.velocity.x, ball.velocity.y);
+        touch.lift = ball.velocityZ;
+        const float incoming = std::hypot(last.velocity.x, last.velocity.y);
+        if (incoming > 0.1f && touch.speed > 0.1f)
+          touch.offBack = turnDegrees(
+              {-last.velocity.x / incoming, -last.velocity.y / incoming},
+              {ball.velocity.x / touch.speed, ball.velocity.y / touch.speed});
+        touch.where = player ? player->position : stand;
+        // Where its flight off him first comes down, from where he met
+        // it (the match's own flight).
+        constexpr float DT =
+            STEP / static_cast<float>(MatchTuning::Timing::BALL_SUBSTEPS);
+        FlightState flight{touch.speed, touch.lift, touch.height, false, ball.spin};
+        float gone = 0.0f;
+        for (float time = 0.0f; time < 5.0f && flight.height > 0.0f && !flight.bounced;
+             time += DT)
+        {
+          gone += engine.stepFlight(flight, DT);
+          touch.landsAfter = time + DT;
+        }
+        touch.landsFrom = gone;
+        met = touch;
+      }
+      else if (his)
+      {
+        outcome = std::format(
+            "not his {} ({})", partName(),
+            ball.inTouch ? "his feet" : "trapped dead: the old trap");
+      }
+      else if (engine.getLastHeadPart())
+      {
+        outcome = std::format("not his {} (his head)", partName());
+      }
+      else if (now >= fedAt + TIME_LIMIT ||
+               (last.height > 0.01f && ball.z <= 0.0f &&
+                metresBetween(ball.position, stand) > 1.5f))
+      {
+        outcome = "not touched (out of reach)";
+      }
+    }
+    else if (met && outcome.empty())
+    {
+      if (!dropped && ball.z <= 0.0f)
+      {
+        dropped = ball.position;
+        droppedAt = now;
+      }
+      if (his && ball.inTouch && ball.touchCollected)
+      {
+        outcome = "kept";
+        collectedAt = now;
+      }
+      else if (!his)
+        outcome = "not kept";
+      else if (engine.getState() != MatchState::PLAYING)
+        outcome = "out of play";
+      else if (now >= met->at + KEEP_LIMIT)
+        outcome = "time up";
+    }
+    last = stateOf(ball);
+    if (!outcome.empty() && !endAt) endAt = now;
+    return !(endAt && now >= *endAt + LINGER_SECONDS);
+  }
+
+  void drawOverlay(const IMatchRenderer& renderer, ImDrawList& draw) const override
+  {
+    const float scale = Theme::scale();
+    DrillDraw::line(renderer, draw, feedFrom, stand, IM_COL32(255, 255, 255, 70),
+                    1.0f * scale);
+    DrillDraw::marker(renderer, draw, feedFrom, 3.0f * scale,
+                      IM_COL32(255, 255, 255, 200), "feed");
+    DrillDraw::marker(renderer, draw, stand, 2.5f * scale,
+                      IM_COL32(90, 220, 120, 220), partName());
+    if (dropped)
+      DrillDraw::marker(renderer, draw, *dropped, 3.0f * scale,
+                        IM_COL32(255, 230, 120, 255), "drops");
+    DrillDraw::path(renderer, draw, ballPath, IM_COL32(255, 230, 120, 160),
+                    1.5f * scale);
+  }
+
+  std::vector<std::string> report() const override
+  {
+    std::vector<std::string> out;
+    out.push_back(std::format(
+        "{:.0f} m/s from {:+.0f} deg, {:.0f} m out, over him at {:.2f} m{}",
+        ballSpeed, fromAngle, feedDistance, arrivalHeight,
+        passesBy != 0.0f ? std::format(", {:+.1f} m by", passesBy) : std::string()));
+    out.push_back(std::format(
+        "Player: First Touch {:.0f}, {:.0f} cm · thigh from {:.2f} m, chest "
+        "from {:.2f} m, head from {:.2f} m",
+        firstTouch, heightCm, lines.feet, lines.chest, lines.head));
+    if (met)
+    {
+      constexpr float DEGREES = 180.0f / PI;
+      out.push_back(std::format(
+          "On his {} at {:.2f} s, {:.2f} m up, {:.2f} m from his centre: in at "
+          "{:.1f} m/s, off at {:.1f} m/s ({:.1f} along, {:+.1f} up, {:+.0f} "
+          "deg), {:.0f} deg off straight back",
+          partName(), met->at - fedAt, met->height, met->gap, met->paceIn,
+          std::hypot(met->speed, met->lift), met->speed, met->lift,
+          std::atan2(met->lift, met->speed) * DEGREES, met->offBack));
+      out.push_back(std::format("Its flight lands {:.2f} m from where he met it, "
+                                "{:.2f} s after",
+                                met->landsFrom, met->landsAfter));
+    }
+    if (!outcome.empty()) out.push_back("OUTCOME  " + outcome);
+    return out;
+  }
+
+  std::vector<DrillMetric> metrics() const override
+  {
+    if (outcome.empty()) return {};
+    const auto flag = [](bool value) { return value ? 1.0 : 0.0; };
+    std::vector<DrillMetric> out{
+        {"Met", flag(met.has_value())},
+        {"Kept", flag(outcome == "kept")},
+        {"Head", flag(outcome.ends_with("(his head)"))},
+        {"Chest", flag(outcome.ends_with("(his chest)"))},
+        {"Thigh", flag(outcome.ends_with("(his thigh)"))},
+        {"Feet", flag(outcome.ends_with("(his feet)"))},
+        {"Old trap", flag(outcome.ends_with("the old trap)"))},
+        {"Missed", flag(outcome == "not touched (out of reach)")}};
+    if (!met) return out;
+    constexpr float DEGREES = 180.0f / PI;
+    const float paceOff = std::hypot(met->speed, met->lift);
+    out.push_back({"Meet height (m)", met->height});
+    out.push_back({"Meet gap (m)", met->gap});
+    out.push_back({"Pace in (m/s)", met->paceIn});
+    out.push_back({"Pace off (m/s)", paceOff});
+    out.push_back({"Pace kept", met->paceIn > 0.1f ? paceOff / met->paceIn : 0.0f});
+    out.push_back(
+        {"Elevation off (deg)", std::atan2(met->lift, met->speed) * DEGREES});
+    out.push_back({"Off straight back (deg)", met->offBack});
+    out.push_back({"Lands from contact (m)", met->landsFrom});
+    out.push_back({"Lands after (s)", met->landsAfter});
+    if (collectedAt) out.push_back({"Collected after (s)", *collectedAt - met->at});
+    return out;
+  }
+
+ private:
+  /** The ball at the end of a step (pitch position, m/s, metres up). */
+  struct State
+  {
+    Vector2F position{};
+    Vector2F velocity{};
+    float height = 0.0f;
+    float lift = 0.0f;
+  };
+  static State stateOf(const MatchBall& ball)
+  {
+    return {ball.position, ball.velocity, ball.z * Z_METRES, ball.velocityZ};
+  }
+  struct Touch
+  {
+    double at = 0.0;
+    float height = 0.0f;
+    float gap = 0.0f;
+    float paceIn = 0.0f;
+    /** Off him: along the ground and upward (m/s). */
+    float speed = 0.0f;
+    float lift = 0.0f;
+    /** Seen from above, off the line straight back the way it came (deg). */
+    float offBack = 0.0f;
+    Vector2F where{};
+    /** Where its flight off him first comes down: how far from where
+     * he met it (m) and how long after (s). */
+    float landsFrom = 0.0f;
+    float landsAfter = 0.0f;
+  };
+
+  [[nodiscard]] const char* partName() const { return thigh ? "thigh" : "chest"; }
+
+  bool thigh = false;
+  float ballSpeed = 8.0f;
+  float fromAngle = 0.0f;
+  float feedDistance = 20.0f;
+  float arrivalHeight = 1.3f;
+  float passesBy = 0.0f;
+  float firstTouch = 60.0f;
+  float heightCm = 180.0f;
+
+  PlayerID playerId = 0;
+  Vector2F stand{};
+  Vector2F feedFrom{};
+  BodyLines lines;
+  double fedAt = 0.0;
+  State last;
+  std::optional<Touch> met;
+  std::optional<Vector2F> dropped;
+  double droppedAt = 0.0;
+  std::optional<double> collectedAt;
+  std::string outcome;
+  std::optional<double> endAt;
+  std::vector<Vector2F> ballPath;
+};
+
 // --- Loose high ball ---------------------------------------------------------
 
 /**
@@ -7279,6 +7659,8 @@ std::vector<std::unique_ptr<Drill>> makeDrills()
   drills.push_back(std::make_unique<DrivenCorridorDrill>());
   drills.push_back(std::make_unique<ChipTargetDrill>());
   drills.push_back(std::make_unique<HeaderTargetDrill>());
+  drills.push_back(std::make_unique<BodyControlDrill>(false));
+  drills.push_back(std::make_unique<BodyControlDrill>(true));
   drills.push_back(std::make_unique<LooseHighBallDrill>());
   return drills;
 }

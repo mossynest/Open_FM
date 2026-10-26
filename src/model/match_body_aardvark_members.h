@@ -104,6 +104,7 @@
   // Striking (see strikeAs and the others in match_engine.h).
   bool playsFirstTouchAardvark(const MatchPlayer& player, bool hands, float heightMetres) const;
   float feetReachAardvark(const MatchPlayer& player) const;
+  BodyLines bodyLinesAardvark(const MatchPlayer& player) const;
   bool ballBehindReachAardvark(const MatchPlayer& player, float gapX, float gapY, float gap, float turnSeconds) const;
   Vector2F strikePointAardvark(const MatchPlayer& striker) const;
   Kick strikeAsAardvark(const MatchPlayer& striker, StrikeKind kind, Vector2F target, float speed, float lift);

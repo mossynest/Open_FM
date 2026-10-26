@@ -168,6 +168,9 @@ struct MatchSample
   /** Open-play strikes as the contact model reads them (Binturong bodies;
    * MatchEngine::getStrikeContacts). */
   StrikeContactStats strike_contacts;
+  /** Loose balls played with the body by part (Binturong bodies;
+   * MatchEngine::getBodyContacts). */
+  MatchEngine::BodyContactStats body_contacts;
   /** Derived stats summed over every player who took part, and how many. */
   std::array<double, DERIVED_STAT_COUNT> derived_sum{};
   int derived_players = 0;
