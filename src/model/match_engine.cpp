@@ -4628,6 +4628,7 @@ void MatchEngine::takePossession(MatchPlayer& player)
   // interception code should use this path so phases and statistics agree.
   // The ball itself is not moved.
   trackTouch(player);
+  ball.nudgedBy = nullptr;
   // A set piece's phase ends once the defending side has the ball.
   if (player.isHomeTeam != setPieceHome) setPiecePhaseRemaining = 0.0f;
   if (state == MatchState::PLAYING && lastControlledTeamHome &&
@@ -4856,6 +4857,16 @@ void MatchEngine::playBlock(MatchPlayer& tackler, MatchPlayer& owner,
   // Loose: nobody's. Both feet are committed.
   clearPossession();
   owner.footCooldown = std::max(owner.footCooldown, dribbleTouchIntervalBinturong(owner));
+  // At full stretch or flat out, a little longer to get his balance back
+  // (tackling plan step 6): no stumble state, just more recovery.
+  const auto offBalance = [&](const MatchPlayer& player)
+  {
+    const float speedShare = std::clamp(
+        length(player.velocity) / std::max(currentTopSpeed(player), EPSILON), 0.0f, 1.0f);
+    return D::BLOCK_RECOVERY_SECONDS * std::max(ballStretch(player, contact), speedShare);
+  };
+  tackler.footCooldown += offBalance(tackler);
+  owner.footCooldown += offBalance(owner);
   ++(tackler.isHomeTeam ? stats.homeBlocks : stats.awayBlocks);
   if (committed) ++stats.blocksCommitted;
 }
@@ -4878,6 +4889,7 @@ void MatchEngine::settleTackle(bool homeTeam)
 void MatchEngine::clearPossession()
 {
   ball.possessedBy = nullptr;
+  ball.nudgedBy = nullptr;
   ball.inTouch = false;
   ball.touchCollected = false;
   ball.touchDropping = false;
@@ -4950,6 +4962,8 @@ bool MatchEngine::playTackleIntent(MatchPlayer& tackler,
       lastNudgeSpot = nudge.targetSpot;
       ++nudges;
       playFirstTouch(tackler, moment, &nudge);
+      ball.nudgedBy = tackler.player;
+      ball.nudgedFrom = attacker.player;
       return true;
     }
     case TackleIntent::CLEAR:
@@ -5716,6 +5730,7 @@ void MatchEngine::updateTouch(MatchPlayer& carrier, float dt)
     using F = MatchTuning::FirstTouch;
     ball.touchCollected = true;
     ball.touchDropping = false;
+    ball.nudgedBy = nullptr;
     settleTackle(carrier.isHomeTeam);
     if (ball.touchPasser) creditPassCompletion(carrier, ball.touchPasser);
     ball.touchPasser = nullptr;
@@ -5778,6 +5793,19 @@ void MatchEngine::chaseTouchedBall()
             MatchTuning::Dribble::KICK_REACH_METRES <=
         topSpeed * elapsed)
       break;
+  }
+  // After a win-it nudge he steps across: he meets it from the attacker's
+  // side, his body between them (tackling plan step 6).
+  if (ball.nudgedBy == owner->player)
+  {
+    if (const MatchPlayer* attacker = findMatchPlayer(ball.nudgedFrom))
+    {
+      const Vector2F across = metricDirection(meet, attacker->position);
+      const Vector2F shift = toPitch({across.x * MatchTuning::Defending::STEP_ACROSS_METRES,
+                                      across.y * MatchTuning::Defending::STEP_ACROSS_METRES});
+      meet = {std::clamp(meet.x + shift.x, 0.001f, 0.999f),
+              std::clamp(meet.y + shift.y, 0.001f, 0.999f)};
+    }
   }
   // His body chases the ball; a route he has stays, for his touches (and
   // is moved on as he passes its waypoints).

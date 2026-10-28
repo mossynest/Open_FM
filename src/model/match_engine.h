@@ -846,6 +846,10 @@ struct MatchBall
   Vector2F meetOut{1.0f, 0.0f};
   float meetPush = 0.0f;
   Vector2F meetLegStart{};
+  /** Tackling plan step 6: his touch was a win-it nudge off this
+   * attacker; until he collects it he runs to put himself between them. */
+  const Player* nudgedBy = nullptr;
+  const Player* nudgedFrom = nullptr;
   /** While in a touch: the team-mate whose pass he is receiving, credited
    * with the completion only once the ball is collected. */
   const Player* touchPasser = nullptr;

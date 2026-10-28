@@ -1534,6 +1534,13 @@ struct MatchTuning final
     static constexpr float BLOCK_POP_MIN = 3.0f;
     static constexpr float BLOCK_POP_EQUAL = 0.25f;
     static constexpr float BLOCK_POP_SHARE = 0.4f;
+    /** After a block (tackling plan step 6; my placeholders 2026-10-28):
+     * extra foot recovery (s) at full stretch or flat out, in proportion
+     * to the larger. */
+    static constexpr float BLOCK_RECOVERY_SECONDS = 0.2f;
+    /** After a win-it nudge he meets the ball this far (m) to the
+     * attacker's side of it: his body between them. */
+    static constexpr float STEP_ACROSS_METRES = 0.5f;
     /** Going in (tackling plan step 5; my placeholders 2026-10-28). The
      * cue as he reads the carrier's foot: still recovering from a touch
      * (row 1), his touch due 0.1-0.2 s away (row 2, he swings at nothing),

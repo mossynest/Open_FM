@@ -232,7 +232,10 @@ cover, the last man and his own box. Every swing commits his foot
 (`playBlock`): two pushes set by Tackling, squeezed along the line between
 them and added across it. What the tackle is for (`TackleIntent`: control,
 win it with a nudge out of the attacker's line, or knock it away) is the
-brain's (`chooseTackleIntentBinturong`); drills can force it.
+brain's (`chooseTackleIntentBinturong`); drills can force it. After a
+win-it nudge he runs to meet the ball from the attacker's side
+(`chaseTouchedBall`); a block at a stretch or at speed adds a little to
+both feet's recovery.
 
 Opposition instructions change mechanisms: tight marking follows a target,
 Press reduces stand-off and raises engagement, ShowWeakFoot shades the defender
