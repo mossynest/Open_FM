@@ -472,7 +472,7 @@ bool MatchEngine::executeCommand(const MatchCommandRecord& command)
       if (!drillPlayer(command.player)) return false;
       std::erase_if(forcedTackleIntents, [&](const auto& forced)
                     { return forced.first == command.player; });
-      if (command.tackleIntent != TackleIntent::CONTROL)
+      if (command.tackleIntent != TackleIntent::BRAIN)
         forcedTackleIntents.emplace_back(command.player, command.tackleIntent);
       ++inputRevision;
       return true;
@@ -3681,6 +3681,10 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
                              ballStepSeconds /
                                  static_cast<float>(substepsPerStep),
                              ballStepSeconds};
+    // Tackling plan step 5: in a contest he goes in only when his brain
+    // says so; holding, he leaves it (no swing, no cooldown).
+    if (contest && !goesIntoContest(player, *touchOwner, moment.contactPoint))
+      continue;
     // His own ball: he plays it on when it is due a touch (letting it come
     // closer first if his brain reads that it will), or lets it run.
     if (&player == touchOwner)
@@ -3696,7 +3700,8 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
           MatchPlayer& rival = players[contacts[other].slot];
           if (&rival != &player && contestsBall(rival, player) &&
               rival.footCooldown <= 1e-4f &&
-              contacts[other].height <= bodyLines(rival).feet)
+              contacts[other].height <= bodyLines(rival).feet &&
+              goesIntoContest(rival, player, ball.position))
             swingAtNothing(rival, dribbleTouchIntervalBinturong(rival), false);
         }
       };
@@ -3832,6 +3837,9 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     // A free-ball tackle (not a contest) by a Binturong outfielder at feet
     // height is played with its intent (tackling plan step 3).
     const MatchPlayer* freeBallFrom = nullptr;
+    // A contest that meets the carrier's foot too is a block (step 4).
+    MatchPlayer* blockOwner = nullptr;
+    bool blockCommitted = false;
     if (ball.inTouch)
     {
       if (touchOwner && touchOwner->isHomeTeam != player.isHomeTeam &&
@@ -3841,7 +3849,14 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
         if (contest)
         {
           if (MatchPlayer* owner = findMatchPlayer(touchOwner->player))
-            commitContestTouch(player, *owner);
+          {
+            const ContestMeet meet = commitContestTouch(player, *owner);
+            if (meet != ContestMeet::UNOPPOSED)
+            {
+              blockOwner = owner;
+              blockCommitted = meet == ContestMeet::BLOCK_COMMITTED;
+            }
+          }
         }
         else if (!hands && !player.isGoalkeeper &&
                  getBody(player.isHomeTeam) == BodyId::BINTURONG &&
@@ -3851,6 +3866,11 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
         }
       }
       clearPossession();
+    }
+    if (blockOwner)
+    {
+      playBlock(player, *blockOwner, moment, blockCommitted);
+      return;
     }
     if (freeBallFrom && playTackleIntent(player, *freeBallFrom, moment)) return;
 
@@ -4669,23 +4689,175 @@ void MatchEngine::swingAtNothing(MatchPlayer& player, float seconds, bool carrie
     ++(player.isHomeTeam ? stats.homeTacklerAirSwings : stats.awayTacklerAirSwings);
 }
 
-void MatchEngine::commitContestTouch(MatchPlayer& tackler, MatchPlayer& owner)
+MatchEngine::ContestMeet MatchEngine::commitContestTouch(MatchPlayer& tackler,
+                                                         MatchPlayer& owner)
 {
-  // The step 2 table: the tackler swung (his touch): his cooldown. The
-  // carrier swung only if his planned touch was within his commit moment
-  // and his foot free (row 2): at nothing. Otherwise (rows 1 and 5) his
-  // current recovery just carries on, now on his foot.
+  // The step 2 table as step 4 leaves it. The tackler swung: his cooldown.
+  // The carrier's foot still recovering (row 1): his recovery carries on.
+  // Free, with his planned touch within his commit moment: 0.1-0.2 s away
+  // he swings at nothing (row 2), within 0.1 s both feet meet it (row 3, a
+  // block). Free and not yet due (row 5): his foot reacts, a block.
   tackler.footCooldown = dribbleTouchIntervalBinturong(tackler);
-  const bool swinging = ball.meetFor == owner.player &&
-                        ball.ownTouchCooldown <= 1e-4f &&
-                        owner.footCooldown <= 1e-4f &&
-                        ball.meetSeconds <= MatchTuning::Dribble::COMMIT_SECONDS;
-  if (swinging)
+  const bool recovering =
+      ball.ownTouchCooldown > 1e-4f || owner.footCooldown > 1e-4f;
+  if (recovering)
+  {
+    owner.footCooldown = std::max(owner.footCooldown, ball.ownTouchCooldown);
+    return ContestMeet::UNOPPOSED;
+  }
+  using R = MatchTuning::Dribble;
+  const bool planned = ball.meetFor == owner.player;
+  if (planned && ball.meetSeconds <= R::BLOCK_SECONDS)
+    return ContestMeet::BLOCK_COMMITTED;
+  if (planned && ball.meetSeconds <= R::COMMIT_SECONDS)
+  {
     swingAtNothing(owner,
                    std::max(0.0f, ball.meetSeconds) + dribbleTouchIntervalBinturong(owner),
                    true);
-  else
-    owner.footCooldown = std::max(owner.footCooldown, ball.ownTouchCooldown);
+    return ContestMeet::UNOPPOSED;
+  }
+  return ContestMeet::BLOCK_REACTING;
+}
+
+float MatchEngine::ballStretch(const MatchPlayer& player, Vector2F point) const
+{
+  // The stretch map: where the ball is off his facing and how far out in
+  // his reach.
+  const Vector2F toBall = toMetres({point.x - player.position.x,
+                                    point.y - player.position.y});
+  const float gap = length(toBall);
+  const Vector2F facing = normalized(
+      {std::cos(player.facingAngle) * MatchTuning::Pitch::LENGTH_METRES,
+       std::sin(player.facingAngle) * MatchTuning::Pitch::WIDTH_METRES});
+  const float off =
+      gap > EPSILON
+          ? std::acos(std::clamp((toBall.x * facing.x + toBall.y * facing.y) / gap,
+                                 -1.0f, 1.0f)) *
+                180.0f / std::numbers::pi_v<float>
+          : 0.0f;
+  return std::clamp(
+      contactStretchMap.at(off, gap / std::max(feetReach(player), EPSILON)),
+      0.0f, 1.0f);
+}
+
+float MatchEngine::blockPushBinturong(const MatchPlayer& player, Vector2F contact,
+                                      bool reacting) const
+{
+  // By his Tackling; less at a stretch (the stretch map, where the ball is
+  // off his facing and how far out in his reach), less the faster he is
+  // running through it, less a foot stuck out in reaction.
+  using D = MatchTuning::Defending;
+  const float tackling =
+      std::clamp((player.derivedStat(DerivedStat::TACKLING) - STAT_1_RATING) /
+                     (STAT_99_RATING - STAT_1_RATING),
+                 0.0f, 1.0f);
+  float push = D::BLOCK_PUSH_POOR + (D::BLOCK_PUSH_BEST - D::BLOCK_PUSH_POOR) * tackling;
+  push *= 1.0f - D::BLOCK_STRETCH_LOSS * ballStretch(player, contact);
+  push *= 1.0f - D::BLOCK_SPEED_LOSS *
+                     std::clamp(length(player.velocity) /
+                                    std::max(currentTopSpeed(player), EPSILON),
+                                0.0f, 1.0f);
+  if (reacting) push *= D::BLOCK_REACTING_SHARE;
+  return push;
+}
+
+void MatchEngine::playBlock(MatchPlayer& tackler, MatchPlayer& owner,
+                            const TouchMoment& moment, bool committed)
+{
+  using D = MatchTuning::Defending;
+  const Vector2F contact = moment.contactPoint;
+  // The tackler's push: the way his intent (the brain's choice) sends it,
+  // at the strength his technique gives, through the contact model with his
+  // Tackling (its errors on line and pace). Win: towards the nudge's spot;
+  // clear: towards his clearance; pass: towards his pass (none on: clear);
+  // control: his first touch's way.
+  Vector2F target = contact;
+  switch (tackleIntentOf(tackler, owner, contact, false))
+  {
+    case TackleIntent::BRAIN:
+    case TackleIntent::CONTROL:
+      target = chooseFirstTouch(tackler, moment).targetSpot;
+      break;
+    case TackleIntent::WIN:
+      target = tackleNudgeSpotBinturong(tackler, owner, contact);
+      break;
+    case TackleIntent::PASS:
+      if (const auto pass = choosePassTargetBinturong(tackler))
+      {
+        target = pass->targetPoint;
+        break;
+      }
+      [[fallthrough]];
+    case TackleIntent::CLEAR:
+      target = chooseClearanceAim(tackler).target;
+      break;
+  }
+  Vector2F aim = metricDirection(contact, target);
+  if (length(aim) <= EPSILON) aim = metricDirection(tackler.position, owner.position);
+  ContactRequest request;
+  request.kind = ContactRequest::Kind::BLOCK;
+  request.aim = aim;
+  request.speed = blockPushBinturong(tackler, contact, false);
+  const Vector2F tacklerPush = contactBinturong(tackler, request, moment).outcome.velocity;
+  // The line between them (from the carrier to the tackler): the squeeze is
+  // along it, the escape across it.
+  Vector2F line = metricDirection(owner.position, tackler.position);
+  if (length(line) <= EPSILON) line = {1.0f, 0.0f};
+  const auto alongOf = [&](Vector2F v) { return v.x * line.x + v.y * line.y; };
+  // A foot through the ball pushes it away from his own body, never back
+  // towards him (no drag-backs in a block): along the line the tackler's
+  // push only goes towards the carrier, the carrier's towards the tackler.
+  const float tacklerAlongRaw = alongOf(tacklerPush);
+  const float tacklerAlong = std::min(tacklerAlongRaw, 0.0f);
+  Vector2F across{tacklerPush.x - line.x * tacklerAlongRaw,
+                  tacklerPush.y - line.y * tacklerAlongRaw};
+  float ownerAlong = 0.0f;
+  if (committed)
+  {
+    // His planned touch, the way it was to send it, through his contact.
+    TouchMoment his = moment;
+    his.gap = distance(owner.position, contact);
+    his.reach = feetReach(owner);
+    ContactRequest planned;
+    planned.kind = ContactRequest::Kind::BLOCK;
+    planned.aim = ball.meetOut;
+    planned.speed = blockPushBinturong(owner, contact, false);
+    const Vector2F ownerPush = contactBinturong(owner, planned, his).outcome.velocity;
+    const float ownerAlongRaw = alongOf(ownerPush);
+    ownerAlong = std::max(ownerAlongRaw, 0.0f);
+    across.x += ownerPush.x - line.x * ownerAlongRaw;
+    across.y += ownerPush.y - line.y * ownerAlongRaw;
+  }
+  else if (tacklerAlong < 0.0f)
+  {
+    // A wall: it holds the ball against a push towards him, no more.
+    ownerAlong = std::min(blockPushBinturong(owner, contact, true), -tacklerAlong);
+  }
+  // Opposed along the line: the stronger wins by the difference, and pace
+  // is lost; a strong, near-equal squeeze pops it up.
+  float along = tacklerAlong + ownerAlong;
+  float lift = 0.0f;
+  if (tacklerAlong * ownerAlong < 0.0f)
+  {
+    const float squeezed = std::min(std::abs(tacklerAlong), std::abs(ownerAlong));
+    const float stronger = std::max(std::abs(tacklerAlong), std::abs(ownerAlong));
+    if (squeezed >= D::BLOCK_POP_MIN && std::abs(along) <= D::BLOCK_POP_EQUAL * stronger)
+    {
+      lift = D::BLOCK_POP_SHARE * squeezed;
+      ++stats.blocksPoppedUp;
+    }
+    along *= 1.0f - D::BLOCK_SQUEEZE_LOSS;
+  }
+  const Vector2F velocity{line.x * along + across.x, line.y * along + across.y};
+  sendBallOff(tackler,
+              {std::clamp(contact.x, 0.001f, 0.999f), std::clamp(contact.y, 0.001f, 0.999f)},
+              moment.height / MatchTuning::Units::BALL_Z_METRES, velocity, lift,
+              BallSpin{}, 0.0f);
+  // Loose: nobody's. Both feet are committed.
+  clearPossession();
+  owner.footCooldown = std::max(owner.footCooldown, dribbleTouchIntervalBinturong(owner));
+  ++(tackler.isHomeTeam ? stats.homeBlocks : stats.awayBlocks);
+  if (committed) ++stats.blocksCommitted;
 }
 
 void MatchEngine::settleTackle(bool homeTeam)
@@ -4741,15 +4913,28 @@ TouchIntent MatchEngine::defaultTouchIntent(const MatchPlayer& player) const
   return intent;
 }
 
+TackleIntent MatchEngine::tackleIntentOf(const MatchPlayer& tackler,
+                                         const MatchPlayer& attacker,
+                                         Vector2F contact, bool freeBall)
+{
+  for (const auto& [id, forced] : forcedTackleIntents)
+    if (tackler.player && tackler.player->getId() == id) return forced;
+  const TackleIntent intent = chooseTackleIntent(tackler, attacker, contact, freeBall);
+  ++(intent == TackleIntent::WIN     ? stats.intentsWin
+     : intent == TackleIntent::CLEAR ? stats.intentsClear
+                                     : stats.intentsControl);
+  return intent;
+}
+
 bool MatchEngine::playTackleIntent(MatchPlayer& tackler,
                                    const MatchPlayer& attacker,
                                    const TouchMoment& moment)
 {
-  TackleIntent intent = TackleIntent::CONTROL;
-  for (const auto& [id, forced] : forcedTackleIntents)
-    if (tackler.player && tackler.player->getId() == id) intent = forced;
+  const TackleIntent intent =
+      tackleIntentOf(tackler, attacker, moment.contactPoint, true);
   switch (intent)
   {
+    case TackleIntent::BRAIN:
     case TackleIntent::CONTROL:
       return false;
     case TackleIntent::WIN:

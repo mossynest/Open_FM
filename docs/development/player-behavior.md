@@ -218,6 +218,22 @@ context. Engagement uses a rate converted to a step probability
 the number of tackle attempts. `attemptTackle()` resolves the challenge,
 and foul/advantage/sanction paths may stop play or defer the restart.
 
+On the Binturong body the standing tackle is a touch on the contact model
+instead (tackling plan, `Notes and plans/match_engine_tackling_plan.md`);
+the engage rate starts only slides there. A dribbled ball that has drifted
+out of the carrier's reach is a free ball: any defender it reaches plays
+it. Inside both players' reaches it is a contest: the Binturong brain
+(`goesIntoContestBinturong`) decides once a tick whether he goes in or
+holds, from the carrier's foot (recovering from a touch, or about to
+swing) and how much of the ball he has shown, read as truly as his
+Defending allows, against a bar set by pressing, opposition orders,
+cover, the last man and his own box. Every swing commits his foot
+(`footCooldown`). When both feet meet the ball it is a block
+(`playBlock`): two pushes set by Tackling, squeezed along the line between
+them and added across it. What the tackle is for (`TackleIntent`: control,
+win it with a nudge out of the attacker's line, or knock it away) is the
+brain's (`chooseTackleIntentBinturong`); drills can force it.
+
 Opposition instructions change mechanisms: tight marking follows a target,
 Press reduces stand-off and raises engagement, ShowWeakFoot shades the defender
 and increases execution difficulty under pressure, and DoubleUp commits a helper.

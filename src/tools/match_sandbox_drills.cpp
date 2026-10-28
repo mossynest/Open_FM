@@ -2651,12 +2651,13 @@ class TackleDrill final : public Drill
     moves.choices = {"His brain", "Straight at the ball"};
     list.push_back(moves);
     DrillParameter intent = setting(
-        "Defender's intent", &intentChoice, 0.0f, 3.0f, true,
-        "What his tackle on a free ball means (a ball outside the "
-        "attacker's reach): control it; win it (a nudge away from the "
-        "attacker, closer the better his Defending); clear it; or a "
-        "first-time pass to his team-mate.");
-    intent.choices = {"Control", "Win it", "Clear", "First-time pass"};
+        "Defender's intent", &intentChoice, 0.0f, 4.0f, true,
+        "What his tackle means, on a free ball (outside the attacker's "
+        "reach) or in a block (its push's way): control it; win it (a "
+        "nudge away from the attacker, closer the better his Defending); "
+        "clear it; a first-time pass to his team-mate; or his brain's "
+        "choice.");
+    intent.choices = {"Control", "Win it", "Clear", "First-time pass", "His brain"};
     list.push_back(intent);
     list.push_back(setting("Team-mate behind (m)", &mateBehindSetting, -20.0f,
                            30.0f, false,
@@ -2849,6 +2850,19 @@ class TackleDrill final : public Drill
             {"Free ball behind him", static_cast<double>(freeBehind)},
             {"Contest tackles", static_cast<double>(contest())},
             {"Contest tackles won", static_cast<double>(contestWon())},
+            {"Blocks", static_cast<double>(after.homeBlocks + after.awayBlocks -
+                                           before.homeBlocks - before.awayBlocks)},
+            {"Blocks popped up",
+             static_cast<double>(after.blocksPoppedUp - before.blocksPoppedUp)},
+            {"Defender went in",
+             static_cast<double>(after.awayGoIns - before.awayGoIns)},
+            {"Defender held (steps)",
+             static_cast<double>(after.awayHolds - before.awayHolds)},
+            {"Went in on his free foot",
+             static_cast<double>(after.goInsOnFreeFoot - before.goInsOnFreeFoot)},
+            {"Attacker's tackles back",
+             static_cast<double>(after.homeContestTackles - before.homeContestTackles +
+                                 after.homeFreeBallTackles - before.homeFreeBallTackles)},
             {"Attacker swung at nothing",
              static_cast<double>(after.homeCarrierAirSwings -
                                  before.homeCarrierAirSwings)},
@@ -2909,7 +2923,7 @@ class TackleDrill final : public Drill
   float defending = 70.0f;
   float defenderPace = 70.0f;
   float moveChoice = 0.0f;
-  float intentChoice = 0.0f;
+  float intentChoice = 4.0f;
   float mateBehindSetting = 10.0f;
   float mateAcrossSetting = 15.0f;
 

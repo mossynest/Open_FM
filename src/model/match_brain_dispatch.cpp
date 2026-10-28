@@ -263,6 +263,44 @@ MatchEngine::Challenge MatchEngine::chooseChallenge(const MatchPlayer& carrier,
   return chooseChallengeAardvark(carrier, dt);
 }
 
+bool MatchEngine::goesIntoContest(MatchPlayer& defender, const MatchPlayer& owner,
+                                  Vector2F contact)
+{
+  // Decided once a step: held, he holds the whole step.
+  if (defender.goInStep != stepCounter)
+  {
+    defender.goInStep = stepCounter;
+    switch (brainOf(defender.isHomeTeam))
+    {
+      case BrainId::AARDVARK:
+        defender.goingIn = true;
+        break;
+      case BrainId::BINTURONG:
+        defender.goingIn = goesIntoContestBinturong(defender, owner, contact);
+        break;
+    }
+    if (defender.goingIn)
+      ++(defender.isHomeTeam ? stats.homeGoIns : stats.awayGoIns);
+    else
+      ++(defender.isHomeTeam ? stats.homeHolds : stats.awayHolds);
+  }
+  return defender.goingIn;
+}
+
+TackleIntent MatchEngine::chooseTackleIntent(const MatchPlayer& tackler,
+                                             const MatchPlayer& attacker,
+                                             Vector2F contact, bool freeBall)
+{
+  switch (brainOf(tackler.isHomeTeam))
+  {
+    case BrainId::AARDVARK:
+      break;
+    case BrainId::BINTURONG:
+      return chooseTackleIntentBinturong(tackler, attacker, contact, freeBall);
+  }
+  return TackleIntent::CONTROL;
+}
+
 bool MatchEngine::choosesToBlock(const MatchPlayer& player)
 {
   switch (brainOf(player.isHomeTeam))

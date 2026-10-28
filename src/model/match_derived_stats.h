@@ -59,6 +59,7 @@ enum class DerivedStat : std::uint8_t
   TECHNIQUE,
   HEADING,
   JUMPING_REACH,
+  TACKLING,
   // Match-engine-only stats.
   ENDURANCE,
   BURST_CAPACITY,
@@ -66,7 +67,7 @@ enum class DerivedStat : std::uint8_t
   RECOVERY_RATE,
   FAST_RECOVERY,
 };
-inline constexpr std::size_t DERIVED_STAT_COUNT = 11;
+inline constexpr std::size_t DERIVED_STAT_COUNT = 12;
 
 enum class DerivedLayer : std::uint8_t
 {
@@ -180,6 +181,13 @@ inline constexpr std::array<DerivedStatInfo, DERIVED_STAT_COUNT> DERIVED_STATS{{
      "How high he can get the top of his head at the peak of his jump: his "
      "height plus his jump.",
      "m", 1.85f, 2.70f, 1.80f, 2.75f, STAT_1_RATING, STAT_99_RATING},
+    // The tackling plan (step 4): the strength of his foot through the ball
+    // in a block (Defending stands in until the game carries it).
+    {DerivedLayer::FUTURE_GAME_STAT, "Tackling", "Tkl",
+     "Putting his foot through the ball in a tackle: how firmly he meets it "
+     "in a block (and, later, how cleanly he avoids the man). Reading when to "
+     "go in is Defending.",
+     "", 0.0f, 0.0f, 0.0f, 0.0f},
     // ---- Match-engine-only stats ------------------------------------------
     // The fatigue plan (4.1): from the research ranges, a little wider.
     {DerivedLayer::MATCH_ENGINE_ONLY, "Endurance", "End",
@@ -304,6 +312,7 @@ inline constexpr DerivedRecipes DEFAULT_DERIVED_RECIPES{{
     DerivedStats::techniqueRecipe(),
     DerivedStats::headingRecipe(),
     DerivedStats::jumpingReachRecipe(),
+    DerivedStats::only(BaseAttribute::DEFENDING),
     DerivedStats::only(BaseAttribute::STAMINA),
     DerivedStats::burstRecipe(),
     DerivedStats::only(BaseAttribute::STAMINA),

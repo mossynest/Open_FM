@@ -190,6 +190,15 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
   sample.tackler_air_swings =
       stats.homeTacklerAirSwings + stats.awayTacklerAirSwings;
   sample.commit_misses = stats.homeCommitMisses + stats.awayCommitMisses;
+  sample.blocks = stats.homeBlocks + stats.awayBlocks;
+  sample.blocks_committed = stats.blocksCommitted;
+  sample.blocks_popped = stats.blocksPoppedUp;
+  sample.go_ins = stats.homeGoIns + stats.awayGoIns;
+  sample.go_ins_free_foot = stats.goInsOnFreeFoot;
+  sample.holds = stats.homeHolds + stats.awayHolds;
+  sample.intents_win = stats.intentsWin;
+  sample.intents_clear = stats.intentsClear;
+  sample.intents_control = stats.intentsControl;
   sample.tackle_duels_won = {stats.homeTackleDuelsWon,
                              stats.awayTackleDuelsWon};
   sample.free_ball_tackles = {stats.homeFreeBallTackles,
@@ -759,6 +768,21 @@ std::map<std::string, Estimate> matchMetrics(
       perTeam([](const MatchSample& s) { return s.tackler_air_swings; });
   metrics["commit_misses_per_team"] =
       perTeam([](const MatchSample& s) { return s.commit_misses; });
+  const std::vector<double> blocks =
+      column([](const MatchSample& s) { return s.blocks; });
+  metrics["blocks_per_team"] = perTeam([](const MatchSample& s) { return s.blocks; });
+  metrics["blocks_committed_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.blocks_committed; }), blocks);
+  metrics["go_ins_per_team"] = perTeam([](const MatchSample& s) { return s.go_ins; });
+  metrics["go_ins_free_foot_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.go_ins_free_foot; }),
+      column([](const MatchSample& s) { return s.go_ins; }));
+  metrics["holds_per_team"] = perTeam([](const MatchSample& s) { return s.holds; });
+  metrics["intents_win_per_team"] = perTeam([](const MatchSample& s) { return s.intents_win; });
+  metrics["intents_clear_per_team"] = perTeam([](const MatchSample& s) { return s.intents_clear; });
+  metrics["intents_control_per_team"] = perTeam([](const MatchSample& s) { return s.intents_control; });
+  metrics["blocks_popped_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.blocks_popped; }), blocks);
   metrics["free_ball_tackle_success"] = ratioEstimate(
       column([](const MatchSample& s)
              { return s.free_ball_tackles_won[0] + s.free_ball_tackles_won[1]; }),

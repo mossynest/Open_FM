@@ -2512,6 +2512,8 @@ ContactResult MatchEngine::contactBinturong(const MatchPlayer& player,
   result.skill = strike ? strikeSkillBinturong(player, request.strike)
                  : request.kind == ContactRequest::Kind::DRIBBLE_TOUCH
                      ? player.dribbling
+                 : request.kind == ContactRequest::Kind::BLOCK
+                     ? player.derivedStat(DerivedStat::TACKLING)
                      : player.derivedStat(DerivedStat::FIRST_TOUCH);
   result.outcome =
       carryOutContactBinturong(player, profile, result.contact, result.skill);
@@ -5857,7 +5859,7 @@ Vector2F MatchEngine::tackleNudgeSpotBinturong(const MatchPlayer& tackler,
   // goal) and to the side, past the attacker: the side he is on of the
   // attacker's line, or dead centre his weaker foot's (his stronger foot
   // makes the tackle). It stops closer to him the better his Tackling
-  // (Defending stands in until the stat exists).
+  // (its recipe is Defending until the game carries it).
   using D = MatchTuning::Defending;
   const Vector2F goal{tackler.isHomeTeam ? 0.0f : 1.0f, MatchTuning::Pitch::CENTRE};
   const bool goalSide = distance(tackler.position, goal) < distance(attacker.position, goal);
@@ -5897,9 +5899,12 @@ Vector2F MatchEngine::tackleNudgeSpotBinturong(const MatchPlayer& tackler,
     aim = normalized({away.x * std::cos(round) + side.x * std::sin(round),
                       away.y * std::cos(round) + side.y * std::sin(round)});
   }
+  const float tackling =
+      std::clamp((tackler.derivedStat(DerivedStat::TACKLING) - STAT_1_RATING) /
+                     (STAT_99_RATING - STAT_1_RATING),
+                 0.0f, 1.0f);
   const float metres =
-      D::NUDGE_METRES_POOR +
-      (D::NUDGE_METRES_BEST - D::NUDGE_METRES_POOR) * std::clamp(tackler.defending, 0.0f, 1.0f);
+      D::NUDGE_METRES_POOR + (D::NUDGE_METRES_BEST - D::NUDGE_METRES_POOR) * tackling;
   const Vector2F reach = toPitch({aim.x * metres, aim.y * metres});
   return {std::clamp(contact.x + reach.x, 0.001f, 0.999f),
           std::clamp(contact.y + reach.y, 0.001f, 0.999f)};

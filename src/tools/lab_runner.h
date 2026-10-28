@@ -142,6 +142,19 @@ struct MatchSample
   int tackler_air_swings = 0;
   /** Feet first touches missed under the commit rule. */
   int commit_misses = 0;
+  /** Blocks (tackling plan step 4), those with the carrier's planned
+   * touch, and those that popped it up. */
+  int blocks = 0;
+  int blocks_committed = 0;
+  int blocks_popped = 0;
+  /** Tackling plan step 5: steps defenders went into a contest, those on
+   * the carrier's free foot, steps held, and the intents chosen. */
+  int go_ins = 0;
+  int go_ins_free_foot = 0;
+  int holds = 0;
+  int intents_win = 0;
+  int intents_clear = 0;
+  int intents_control = 0;
   std::array<int, 2> keeper_claim_attempts{};
   std::array<int, 2> keeper_claims{};
   /** Aerial duels with both sides involved, and those the home side won. */

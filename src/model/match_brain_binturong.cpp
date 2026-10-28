@@ -2716,6 +2716,97 @@ MatchEngine::Challenge MatchEngine::chooseChallengeBinturong(
   return challenge;
 }
 
+MatchEngine::DefensiveCover MatchEngine::defensiveCoverBinturong(
+    const MatchPlayer& defender) const
+{
+  // Goal-side: nearer his own goal line than he is.
+  const auto depth = [&](const MatchPlayer& player)
+  { return defender.isHomeTeam ? player.position.x : 1.0f - player.position.x; };
+  DefensiveCover cover;
+  for (const MatchPlayer& mate : players)
+  {
+    if (&mate == &defender || mate.isHomeTeam != defender.isHomeTeam ||
+        mate.isGoalkeeper || !active(mate) || depth(mate) >= depth(defender))
+      continue;
+    cover.lastMan = false;
+    if (distance(mate.position, defender.position) <=
+        MatchTuning::Defending::COVER_METRES)
+      cover.covered = true;
+  }
+  return cover;
+}
+
+bool MatchEngine::goesIntoContestBinturong(const MatchPlayer& defender,
+                                           const MatchPlayer& owner,
+                                           Vector2F contact)
+{
+  // Tackling plan step 5. He reads the carrier's foot: recovering from a
+  // touch, or his touch about to come (he would swing at nothing or meet
+  // it in a block), and how much of the ball he has shown; how true his
+  // read of the timing is, is his Defending (judgement). He goes in when
+  // the cue as he reads it clears his bar: lower pressing, against a
+  // "press him" order or with cover; higher as the last man or in his own
+  // box. Free with no touch due is no cue at all: a defender who reads it
+  // right holds, however hard his side presses.
+  using D = MatchTuning::Defending;
+  using R = MatchTuning::Dribble;
+  const float judgement =
+      std::clamp((defender.defending - STAT_1_RATING) / (STAT_99_RATING - STAT_1_RATING),
+                 0.0f, 1.0f);
+  const float error =
+      D::READ_ERROR_POOR + (D::READ_ERROR_BEST - D::READ_ERROR_POOR) * judgement;
+  // The carrier's foot as it is, and as he reads it.
+  const float recovery = std::max(ball.ownTouchCooldown, owner.footCooldown);
+  const bool planned = ball.meetFor == owner.player;
+  const float touchIn = planned ? ball.meetSeconds : dribbleTouchIntervalBinturong(owner);
+  const auto footCue = [&](float recoveryRead, float touchInRead)
+  {
+    if (recoveryRead > 1e-4f) return D::CUE_RECOVERING;
+    if (touchInRead <= R::BLOCK_SECONDS) return D::CUE_BLOCK;
+    if (touchInRead <= R::COMMIT_SECONDS) return D::CUE_SWING;
+    return 0.0f;
+  };
+  const float readCue =
+      footCue(recovery > 1e-4f ? recovery + randomFloat(-error, error) : 0.0f,
+              touchIn + randomFloat(-error, error));
+  const float shown =
+      D::CUE_SHOWN_SHARE *
+      std::max(0.0f, ballStretch(owner, contact) - ballStretch(defender, contact));
+  const float cue = std::max(readCue, shown);
+  float bar = D::GO_IN_BAR -
+              D::GO_IN_PRESSING * getEffectiveSliders(defender.isHomeTeam).pressing;
+  if (instructionAgainst(owner) == OppositionInstruction::Press)
+    bar -= D::GO_IN_PRESS_ORDER;
+  const DefensiveCover cover = defensiveCoverBinturong(defender);
+  if (cover.covered) bar -= D::GO_IN_COVER;
+  if (cover.lastMan) bar += D::GO_IN_LAST_MAN;
+  if (inPenaltyArea(defender.position, defender.isHomeTeam)) bar += D::GO_IN_OWN_BOX;
+  bar = std::max(bar, D::GO_IN_BAR_MIN);
+  const bool goes = cue >= bar;
+  // A misread: in on the carrier's free foot (row 5), nothing shown.
+  if (goes && footCue(recovery, touchIn) <= 0.0f && shown < bar)
+    ++stats.goInsOnFreeFoot;
+  return goes;
+}
+
+TackleIntent MatchEngine::chooseTackleIntentBinturong(const MatchPlayer& tackler,
+                                                      const MatchPlayer& attacker,
+                                                      Vector2F contact,
+                                                      bool freeBall)
+{
+  // Tackling plan step 5. A free ball well away from the carrier he simply
+  // controls. Otherwise he knocks it away in his own third, at a stretch or
+  // as the last man, and wins it everywhere else.
+  using D = MatchTuning::Defending;
+  if (freeBall && distance(attacker.position, contact) >= D::CONTROL_FREE_BALL_METRES)
+    return TackleIntent::CONTROL;
+  const float depth = tackler.isHomeTeam ? tackler.position.x : 1.0f - tackler.position.x;
+  if (depth < D::KNOCK_AWAY_DEPTH || ballStretch(tackler, contact) >= D::KNOCK_AWAY_STRETCH ||
+      defensiveCoverBinturong(tackler).lastMan)
+    return TackleIntent::CLEAR;
+  return TackleIntent::WIN;
+}
+
 MatchEngine::BallAction MatchEngine::chooseBallActionBinturong(
     MatchPlayer& carrier)
 {

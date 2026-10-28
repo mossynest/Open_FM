@@ -37,6 +37,19 @@
                                     bool fromTeammate);
   HeaderPlay chooseHeaderPlayBinturong(const MatchPlayer& header, bool fromTeammate);
   Challenge chooseChallengeBinturong(const MatchPlayer& carrier, float dt);
+  bool goesIntoContestBinturong(const MatchPlayer& defender,
+                                const MatchPlayer& owner, Vector2F contact);
+  TackleIntent chooseTackleIntentBinturong(const MatchPlayer& tackler,
+                                           const MatchPlayer& attacker,
+                                           Vector2F contact, bool freeBall);
+  /** No outfield team-mate goal-side of him (the last man), and one
+   * goal-side within COVER_METRES (cover). */
+  struct DefensiveCover
+  {
+    bool lastMan = true;
+    bool covered = false;
+  };
+  DefensiveCover defensiveCoverBinturong(const MatchPlayer& defender) const;
   bool touchNowBinturong(const MatchPlayer& player, const TouchMoment& moment) const;
   bool dribbleTouchNowBinturong(const MatchPlayer& player,
                             const TouchMoment& moment) const;

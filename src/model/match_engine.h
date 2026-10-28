@@ -310,6 +310,10 @@ struct MatchPlayer
    * 2: the attacker's ball inside both reaches): no foot touch of the ball
    * until it has run down (s). Started only by the contest. */
   float footCooldown = 0.0f;
+  /** Tackling plan step 5: the step he last decided whether to go into a
+   * contest, and what he decided. */
+  std::uint64_t goInStep = ~std::uint64_t{0};
+  bool goingIn = false;
 
   float pace = MatchTuning::Player::DEFAULT_ATTRIBUTE;
   float shooting = MatchTuning::Player::DEFAULT_ATTRIBUTE;
@@ -751,6 +755,9 @@ struct ContactRequest
     CHEST_TOUCH,
     THIGH_TOUCH,
     STRIKE,
+    /** A foot through the ball in a block (tackling plan step 4): the
+     * touch profile, carried out with his Tackling. */
+    BLOCK,
   };
   Kind kind = Kind::FIRST_TOUCH;
   StrikeKind strike = StrikeKind::GROUND_PASS;
@@ -1011,6 +1018,24 @@ struct MatchStats
    * recently to commit to (the commit rule), by the player's side. */
   int homeCommitMisses = 0;
   int awayCommitMisses = 0;
+  /** Blocks (tackling plan step 4), by the tackler's side; those where
+   * the carrier's foot was planned (row 3) rather than reacting (row 5),
+   * and those that popped the ball up. */
+  int homeBlocks = 0;
+  int awayBlocks = 0;
+  int blocksCommitted = 0;
+  int blocksPoppedUp = 0;
+  /** Tackling plan step 5: steps a defender went into a contest (by his
+   * side), those on the carrier's free foot (row 5, a misread), steps he
+   * held, and the intents his brain chose. */
+  int homeGoIns = 0;
+  int awayGoIns = 0;
+  int goInsOnFreeFoot = 0;
+  int homeHolds = 0;
+  int awayHolds = 0;
+  int intentsWin = 0;
+  int intentsClear = 0;
+  int intentsControl = 0;
   /** A keeper coming for a high ball in his box, and catching it. */
   int homeKeeperClaimAttempts = 0;
   int awayKeeperClaimAttempts = 0;
@@ -1082,7 +1107,8 @@ enum class MatchCommandType : std::uint8_t
   FORCE_TACKLE_INTENT
 };
 
-/** What a tackle on a free ball means to do (tackling plan step 3). */
+/** What a tackle means to do, on a free ball (tackling plan step 3) or in
+ * a block (step 4). */
 enum class TackleIntent : std::uint8_t
 {
   /** Bring it under control (his first touch, as before). */
@@ -1093,6 +1119,8 @@ enum class TackleIntent : std::uint8_t
   CLEAR,
   /** Pass it first time to a team-mate. */
   PASS,
+  /** Drills: no forcing; his brain chooses (tackling plan step 5). */
+  BRAIN,
 };
 
 /** What a drill's forced header does (forceHeader). */
@@ -2858,6 +2886,15 @@ class MatchEngine
     bool sliding = false;
   };
   Challenge chooseChallenge(const MatchPlayer& carrier, float dt);
+  /** Tackling plan step 5: the attacker's ball in his reach and the
+   * attacker's (a contest), whether he goes in this step or holds
+   * (decided once a step, kept for the step). */
+  bool goesIntoContest(MatchPlayer& defender, const MatchPlayer& owner,
+                       Vector2F contact);
+  /** Tackling plan step 5: what his tackle means to do. */
+  TackleIntent chooseTackleIntent(const MatchPlayer& tackler,
+                                  const MatchPlayer& attacker, Vector2F contact,
+                                  bool freeBall);
   /** First touch: whether he plays the ball now or lets it come closer
    * (asked every ball sub-step it is in his reach). */
   bool touchNow(const MatchPlayer& player, const TouchMoment& moment);
@@ -3416,7 +3453,30 @@ class MatchEngine
   bool contestsBall(const MatchPlayer& player, const MatchPlayer& owner) const;
   /** The tackler has played the owner's ball inside both reaches: both
    * feet's cooldowns (rows 1, 2 and 5 of the step 2 table). */
-  void commitContestTouch(MatchPlayer& tackler, MatchPlayer& owner);
+  /** What a contest touch meets (tackling plan, the step 2 table as step
+   * 4 left it). */
+  enum class ContestMeet : std::uint8_t
+  {
+    /** Rows 1 and 2: the tackler's touch alone (the carrier recovering,
+     * or swinging at nothing). */
+    UNOPPOSED,
+    /** Row 3: the carrier's planned touch in the same moment: a block. */
+    BLOCK_COMMITTED,
+    /** Row 5: the carrier's foot free, his touch not due: it reacts, a
+     * wall: a block. */
+    BLOCK_REACTING,
+  };
+  ContestMeet commitContestTouch(MatchPlayer& tackler, MatchPlayer& owner);
+  /** A block (tackling plan step 4): both feet on the ball, each a push
+   * (set by Tackling, less at a stretch, at speed, or reacting), each
+   * through the contact model; opposed along the line between them (the
+   * squeeze), added across it (the escape), a strong near-equal squeeze
+   * popping it up. The ball goes off loose; both feet are committed. */
+  void playBlock(MatchPlayer& tackler, MatchPlayer& owner,
+                 const TouchMoment& moment, bool committed);
+  /** A block push's strength (m/s, as if unopposed). */
+  float blockPushBinturong(const MatchPlayer& player, Vector2F contact,
+                           bool reacting) const;
   /** A contest swing at nothing: his foot committed for `seconds`. */
   void swingAtNothing(MatchPlayer& player, float seconds, bool carrier);
   struct PendingTackle
@@ -3447,6 +3507,14 @@ class MatchEngine
    * it. False for control (played as his first touch). */
   bool playTackleIntent(MatchPlayer& tackler, const MatchPlayer& attacker,
                         const TouchMoment& moment);
+  /** What his tackle is for: a drill's forced intent, or his brain's
+   * (tackling plan step 5). */
+  TackleIntent tackleIntentOf(const MatchPlayer& tackler,
+                              const MatchPlayer& attacker, Vector2F contact,
+                              bool freeBall);
+  /** How far he would stretch for the ball at `point` (0 at his feet, 1 at
+   * full stretch; the stretch map). */
+  float ballStretch(const MatchPlayer& player, Vector2F point) const;
   /** Where a dribbler wants to go: the metric direction and the pace he
    * wants (m/s): the AI toward his plan's target (ball.dribbleGoal) at the
    * pace his brain would run there, the controlled player along his stick. */

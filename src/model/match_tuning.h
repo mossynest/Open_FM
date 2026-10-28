@@ -539,6 +539,10 @@ struct MatchTuning final
     /** In a contest (tackling plan step 2, agreed placeholder): within this
      * long of his planned touch the carrier's swing can't be called off. */
     static constexpr float COMMIT_SECONDS = 0.2f;
+    /** Within this long of his planned touch a contest is a block: both
+     * feet arrive in the same moment (tackling plan step 4, row 3, agreed
+     * 2026-10-27); earlier in the commit moment he swings at nothing. */
+    static constexpr float BLOCK_SECONDS = 0.1f;
     /** The commit rule (agreed 2026-10-26, a hard-wired standard): a feet
      * first touch (receiving, a loose ball, a free-ball tackle; not an
      * interception, a contest or a dribble touch) needs the ball on its
@@ -1512,6 +1516,56 @@ struct MatchTuning final
     /** Within this of the attacker's line he is dead centre: the side is
      * his weaker foot's (placeholder). */
     static constexpr float NUDGE_CENTRE_METRES = 0.2f;
+    /** The block (tackling plan step 4; placeholders tried 2026-10-27). A
+     * push: the pace his foot would give it unopposed, by Tackling. */
+    static constexpr float BLOCK_PUSH_POOR = 4.0f;
+    static constexpr float BLOCK_PUSH_BEST = 8.0f;
+    /** A foot stuck out in reaction (a wall). */
+    static constexpr float BLOCK_REACTING_SHARE = 0.6f;
+    /** Lost at full stretch (the stretch map's 1), and flat out (his speed
+     * at his top speed). */
+    static constexpr float BLOCK_STRETCH_LOSS = 0.5f;
+    static constexpr float BLOCK_SPEED_LOSS = 0.3f;
+    /** The squeeze: the share of the opposed pushes' difference lost. */
+    static constexpr float BLOCK_SQUEEZE_LOSS = 0.5f;
+    /** Popped up: both opposed pushes at least this firm (m/s) and their
+     * difference no more than this share of the stronger; then this share
+     * of the squeezed pace goes up. */
+    static constexpr float BLOCK_POP_MIN = 3.0f;
+    static constexpr float BLOCK_POP_EQUAL = 0.25f;
+    static constexpr float BLOCK_POP_SHARE = 0.4f;
+    /** Going in (tackling plan step 5; my placeholders 2026-10-28). The
+     * cue as he reads the carrier's foot: still recovering from a touch
+     * (row 1), his touch due 0.1-0.2 s away (row 2, he swings at nothing),
+     * within 0.1 s (row 3, an even block); free with none due is no cue. */
+    static constexpr float CUE_RECOVERING = 1.0f;
+    static constexpr float CUE_SWING = 0.9f;
+    static constexpr float CUE_BLOCK = 0.5f;
+    /** Shown too much: the carrier's stretch for it less his own, times
+     * this. */
+    static constexpr float CUE_SHOWN_SHARE = 1.0f;
+    /** He goes in when the cue clears the bar: this, lower pressing (full
+     * pressing instruction), against a "press him" order, with cover
+     * behind; higher as the last man or in his own box. */
+    static constexpr float GO_IN_BAR = 0.6f;
+    static constexpr float GO_IN_PRESSING = 0.15f;
+    static constexpr float GO_IN_PRESS_ORDER = 0.1f;
+    static constexpr float GO_IN_COVER = 0.1f;
+    static constexpr float GO_IN_LAST_MAN = 0.15f;
+    static constexpr float GO_IN_OWN_BOX = 0.15f;
+    static constexpr float GO_IN_BAR_MIN = 0.3f;
+    /** A team-mate goal-side of him within this is cover. */
+    static constexpr float COVER_METRES = 15.0f;
+    /** How far out he reads the carrier's timing (s, either way), by
+     * Defending: his judgement. */
+    static constexpr float READ_ERROR_POOR = 0.25f;
+    static constexpr float READ_ERROR_BEST = 0.05f;
+    /** His intent: knock it away in his own third (this deep), at this
+     * stretch or more, or as the last man; otherwise win it. A free ball
+     * this far (m) from the carrier he simply controls. */
+    static constexpr float KNOCK_AWAY_DEPTH = 0.33f;
+    static constexpr float KNOCK_AWAY_STRETCH = 0.6f;
+    static constexpr float CONTROL_FREE_BALL_METRES = 2.0f;
     // A won challenge often only pokes the ball loose.
     static constexpr float POKE_LOOSE_CHANCE = 0.45f;
     static constexpr float MIN_POKE_SPEED = 3.5f;
