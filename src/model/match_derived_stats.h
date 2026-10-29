@@ -60,6 +60,8 @@ enum class DerivedStat : std::uint8_t
   HEADING,
   JUMPING_REACH,
   TACKLING,
+  STRENGTH,
+  BALANCE,
   // Match-engine-only stats.
   ENDURANCE,
   BURST_CAPACITY,
@@ -67,7 +69,7 @@ enum class DerivedStat : std::uint8_t
   RECOVERY_RATE,
   FAST_RECOVERY,
 };
-inline constexpr std::size_t DERIVED_STAT_COUNT = 12;
+inline constexpr std::size_t DERIVED_STAT_COUNT = 14;
 
 enum class DerivedLayer : std::uint8_t
 {
@@ -188,6 +190,17 @@ inline constexpr std::array<DerivedStatInfo, DERIVED_STAT_COUNT> DERIVED_STATS{{
      "in a block (and, later, how cleanly he avoids the man). Reading when to "
      "go in is Defending.",
      "", 0.0f, 0.0f, 0.0f, 0.0f},
+    // The collision plan (step 1): in a run-in Strength counts only through
+    // his weight (bodyMassKilograms); a deliberate push comes later.
+    {DerivedLayer::FUTURE_GAME_STAT, "Strength", "Str",
+     "Applying force to another player beyond his momentum. For now it "
+     "counts only through his weight: height squared times a body-mass index "
+     "of 17 at Strength 1 to 31 at 99.",
+     "", 0.0f, 0.0f, 0.0f, 0.0f},
+    {DerivedLayer::FUTURE_GAME_STAT, "Balance", "Bal",
+     "Resisting a knock: how far a collision can take him past what he can "
+     "run in that direction, or how suddenly, before he stumbles or falls.",
+     "", 0.0f, 0.0f, 0.0f, 0.0f},
     // ---- Match-engine-only stats ------------------------------------------
     // The fatigue plan (4.1): from the research ranges, a little wider.
     {DerivedLayer::MATCH_ENGINE_ONLY, "Endurance", "End",
@@ -287,6 +300,19 @@ constexpr DerivedRecipe jumpingReachRecipe()
   return recipe;
 }
 
+constexpr DerivedRecipe balanceRecipe()
+{
+  // A stand-in until the game carries Balance: half Physicality (how solid
+  // he is), half Agility (how quickly he fixes his footing). A future stat
+  // reads current stats only, so Agility's half is its recipe's blend.
+  const DerivedRecipe agility = agilityRecipe();
+  DerivedRecipe recipe;
+  for (std::size_t index = 0; index < BASE_ATTRIBUTE_COUNT; ++index)
+    recipe.weights[index] = 0.5f * agility.weights[index];
+  recipe.weights[static_cast<std::size_t>(BaseAttribute::PHYSICALITY)] += 0.5f;
+  return recipe;
+}
+
 constexpr DerivedRecipe burstRecipe()
 {
   // D' grows with the speed reserve above critical speed, so half Stamina,
@@ -303,8 +329,10 @@ constexpr DerivedRecipe burstRecipe()
  * Future stats: agility and acceleration blend Pace and Physicality, first
  * touch Dribbling and Passing, technique Passing, Dribbling and Shooting,
  * heading Shooting and Defending, jumping reach his height plus a jump from
- * Pace and Physicality. Match-engine-only: the endurance stats echo
- * Stamina, except burst capacity (half Stamina, half Acceleration). */
+ * Pace and Physicality, tackling Defending, strength Physicality, balance
+ * half Physicality and half Agility's blend. Match-engine-only: the
+ * endurance stats echo Stamina, except burst capacity (half Stamina, half
+ * Acceleration). */
 inline constexpr DerivedRecipes DEFAULT_DERIVED_RECIPES{{
     DerivedStats::agilityRecipe(),
     DerivedStats::firstTouchRecipe(),
@@ -313,6 +341,8 @@ inline constexpr DerivedRecipes DEFAULT_DERIVED_RECIPES{{
     DerivedStats::headingRecipe(),
     DerivedStats::jumpingReachRecipe(),
     DerivedStats::only(BaseAttribute::DEFENDING),
+    DerivedStats::only(BaseAttribute::PHYSICALITY),
+    DerivedStats::balanceRecipe(),
     DerivedStats::only(BaseAttribute::STAMINA),
     DerivedStats::burstRecipe(),
     DerivedStats::only(BaseAttribute::STAMINA),
@@ -349,6 +379,21 @@ inline float derivedRatingOf(DerivedStat stat, float value)
   const DerivedStatInfo& info = derivedStatInfo(stat);
   const float share = (value - info.lowValue) / (info.highValue - info.lowValue);
   return info.lowRating + (info.highRating - info.lowRating) * share;
+}
+
+/** His weight (kg), a proxy until the game carries one (collision plan step
+ * 1): his height squared times a body-mass index from his Strength rating,
+ * a straight line across the stat scale. */
+inline float bodyMassKilograms(float heightMetres, float strengthRating)
+{
+  using P = MatchTuning::Player;
+  const float share =
+      (strengthRating - STAT_1_RATING) / (STAT_99_RATING - STAT_1_RATING);
+  const float index =
+      P::BODY_MASS_INDEX_AT_STRENGTH_1 +
+      (P::BODY_MASS_INDEX_AT_STRENGTH_99 - P::BODY_MASS_INDEX_AT_STRENGTH_1) *
+          share;
+  return heightMetres * heightMetres * index;
 }
 
 /** A stat built on his height (DerivedRecipe::onHeight): the rating of his

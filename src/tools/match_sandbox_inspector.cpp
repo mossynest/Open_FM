@@ -520,6 +520,13 @@ void DebugInspector::renderPlayer(const SandboxRecorder& recorder,
                                    derivedLayerName(info.layer),
                                    info.description);
       }
+      derivedText += std::format(
+          " · weight {:.0f} kg",
+          bodyMassKilograms(slot->heightMetres,
+                            slot->derivedStat(DerivedStat::STRENGTH)));
+      derivedHelp +=
+          "\nWeight: a proxy until the game carries one, from his height and "
+          "Strength (collision plan).";
       property("Derived stats", derivedText, derivedHelp.c_str());
     }
     if (const PlayerMatchStats* stats = engine.findPlayerStats(inspected))

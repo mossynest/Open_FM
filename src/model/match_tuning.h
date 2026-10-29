@@ -313,6 +313,12 @@ struct MatchTuning final
     static constexpr float MINIMUM_BODY_SEPARATION_METRES = 0.8f;
     static constexpr float BODY_SEPARATION_SHARE = 0.5f;
     static constexpr float BODY_COLLISION_VELOCITY_RETAINED = 0.9f;
+    /** Collision plan step 1: his weight (no weight stat yet) is his height
+     * squared times a body-mass index from Strength, 17 at Strength 1 to 31
+     * at 99 (a straight line). Crouch 2.01 m / ~75 kg is BMI 18.6, a typical
+     * pro ~23, Adama Traore ~27. A heavy but weak player comes out light. */
+    static constexpr float BODY_MASS_INDEX_AT_STRENGTH_1 = 17.0f;
+    static constexpr float BODY_MASS_INDEX_AT_STRENGTH_99 = 31.0f;
     static constexpr float SUBSTITUTION_SETTLE_SECONDS = 1.5f;
     static constexpr float MAX_LOOSE_BALL_LOOKAHEAD_SECONDS = 1.2f;
     static constexpr float COVER_LOOSE_BALL_OFFSET = 0.055f;
