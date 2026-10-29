@@ -2959,6 +2959,324 @@ class TackleDrill final : public Drill
   std::vector<Vector2F> trail;
 };
 
+// --- Collision ---------------------------------------------------------------
+
+/**
+ * Collision (collision plan): two players run into each other. Each sprints
+ * flat out through a meeting point after his run-up (none: he stands on it),
+ * the later starter held back so they get there together; B's run at an
+ * angle to A's, and his line moved aside to make it glancing. Each one's
+ * speed before, jolt, speed after, the two measures and his pause.
+ */
+class CollisionDrill final : public Drill
+{
+ public:
+  const char* name() const override { return "Collision"; }
+  const char* summary() const override
+  {
+    return "Two players run into each other: A sprints through a meeting "
+           "point after his run-up, B from his own run-up (none: he stands "
+           "there) at an angle to A's run. Each one's speed before and "
+           "after, his jolt, where he ends up against what he can run that "
+           "way, how sudden it was, and his pause.";
+  }
+
+  std::vector<DrillParameter> parameters() override
+  {
+    std::vector<DrillParameter> list;
+    const auto runner = [&](const char* section, Physique& physique)
+    {
+      DrillParameter runUp = setting("Run-up (m)", &physique.runUp, 0.0f, 40.0f,
+                                     false,
+                                     "How far he runs, flat out from standing, "
+                                     "to the meeting point (0: he stands on it).");
+      runUp.section = section;
+      list.push_back(runUp);
+      list.push_back(setting("Pace", &physique.pace, 1.0f, 100.0f, true));
+      list.push_back(setting("Height (cm)", &physique.height, 160.0f, 205.0f, true));
+      list.push_back(setting("Strength", &physique.strength, 1.0f, 99.0f, true,
+                             "With his height, his weight (BMI 17 at 1 to 31 at "
+                             "99)."));
+    };
+    runner("A", a);
+    runner("B", b);
+    // Names must be unique for presets and sweeps: label the B copies.
+    for (std::size_t index = 4; index < 8; ++index) list[index].label = list[index].name;
+    list[4].name = "B run-up (m)";
+    list[5].name = "B Pace";
+    list[6].name = "B height (cm)";
+    list[7].name = "B Strength";
+    DrillParameter angle = setting("B's run against A's (deg)", &angleSetting, 0.0f,
+                                   180.0f, true,
+                                   "180: head-on; 90: across A's run from his "
+                                   "right; 0: the same way (from behind).");
+    angle.section = "The meeting";
+    list.push_back(angle);
+    list.push_back(setting("Miss by (m)", &missSetting, -0.6f, 0.6f, false,
+                           "B's line moved this far to his left: 0 centre to "
+                           "centre, 0.4 only just touching."));
+    list.push_back(setting("Timing nudge (s)", &nudgeSetting, -1.0f, 1.0f, false,
+                           "B starts this much later (+) or earlier (-) than "
+                           "the drill's estimate of when they meet."));
+    return list;
+  }
+
+  std::vector<DrillPreset> presets() const override
+  {
+    return {
+        {"Sprinter into a man standing", "A at full speed, B standing facing him.",
+         {{"Run-up (m)", 30.0f}, {"B run-up (m)", 0.0f}, {"B's run against A's (deg)", 180.0f}}},
+        {"Head-on sprinters", "Both at full speed, straight into each other.",
+         {{"Run-up (m)", 30.0f}, {"B run-up (m)", 30.0f}, {"B's run against A's (deg)", 180.0f}}},
+        {"Joggers head-on", "Short run-ups: both at about 3 m/s.",
+         {{"Run-up (m)", 0.9f}, {"B run-up (m)", 0.9f}, {"B's run against A's (deg)", 180.0f}}},
+        {"Light winger into a big defender",
+         "A slight 1.70 m into a strong 1.92 m, standing.",
+         {{"Run-up (m)", 20.0f}, {"Height (cm)", 170.0f}, {"Strength", 20.0f},
+          {"B run-up (m)", 0.0f}, {"B height (cm)", 192.0f}, {"B Strength", 90.0f}}},
+        {"Clipped from the side", "B runs across A's sprint.",
+         {{"Run-up (m)", 30.0f}, {"B run-up (m)", 6.0f}, {"B's run against A's (deg)", 90.0f}}},
+        {"Glancing head-on", "Head-on, the lines 0.35 m apart (of a 0.4 m touch).",
+         {{"Run-up (m)", 20.0f}, {"B run-up (m)", 10.0f}, {"B's run against A's (deg)", 180.0f},
+          {"Miss by (m)", 0.35f}}},
+    };
+  }
+
+  std::vector<DrillPlayerSpec> players() const override
+  {
+    const auto spec = [](const char* name, bool home, const Physique& physique)
+    {
+      DrillPlayerSpec player{name, PlayerRole::CM, home, {{"Pace", physique.pace}},
+                             static_cast<int>(physique.height + 0.5f)};
+      player.derived[DerivedStat::STRENGTH] = physique.strength;
+      return player;
+    };
+    return {spec("A", true, a), spec("B", false, b)};
+  }
+
+  void begin(MatchEngine& engine, const std::vector<PlayerID>& ids) override
+  {
+    MatchEngine::DrillRules rules = engine.getDrillRules();
+    rules.chaseEffort = true;
+    engine.setDrillRules(rules);
+    aId = ids[0];
+    bId = ids[1];
+    const float radians = angleSetting * PI / 180.0f;
+    directionA = {1.0f, 0.0f};
+    directionB = {std::cos(radians), std::sin(radians)};
+    meetA = MEET;
+    meetB = along(MEET, {-directionB.y, directionB.x}, missSetting);
+    startA = along(meetA, directionA, -a.runUp);
+    startB = along(meetB, directionB, -b.runUp);
+    MatchScenario scenario;
+    scenario.players.push_back({aId, startA, false});
+    scenario.players.push_back({bId, startB, false});
+    scenario.ballPosition = BALL_OUT_OF_THE_WAY;
+    engine.startDrill(scenario);
+    // When each sets off: the later arrival first, so they meet.
+    const float timeA = a.runUp > 0.0f ? runTime(engine, aId, a.runUp) : 0.0f;
+    const float timeB = b.runUp > 0.0f ? runTime(engine, bId, b.runUp) : 0.0f;
+    releaseA.reset();
+    releaseB.reset();
+    if (a.runUp > 0.0f) releaseA = std::max(0.0f, timeB - timeA - nudgeSetting);
+    if (b.runUp > 0.0f) releaseB = std::max(0.0f, timeA - timeB + nudgeSetting);
+    // Until then each waits on his start, facing his run.
+    engine.setDrillTarget(aId, startA, false, {}, 0.0f, 0.0f, facingOf(directionA));
+    engine.setDrillTarget(bId, startB, false, {}, 0.0f, 0.0f, facingOf(directionB));
+    released = {false, false};
+    hits.clear();
+    first.reset();
+    ended = false;
+    weights = {weightOf(engine, aId), weightOf(engine, bId)};
+    trailA.clear();
+    trailB.clear();
+  }
+
+  bool afterStep(MatchEngine& engine) override
+  {
+    const double now = secondsOf(engine);
+    const auto release = [&](std::size_t which, const std::optional<float>& at,
+                             PlayerID id, Vector2F meet, Vector2F direction)
+    {
+      if (released[which] || !at || now + 1e-6 < *at) return;
+      released[which] = true;
+      engine.setDrillTarget(id, along(meet, direction, BEYOND_METRES), true, {}, 0.0f,
+                            0.0f, std::nullopt, true);
+    };
+    release(0, releaseA, aId, meetA, directionA);
+    release(1, releaseB, bId, meetB, directionB);
+    for (const MatchEngine::CollisionHit& hit : engine.getLastCollisions())
+    {
+      const bool ours = (hit.sides[0].player == aId || hit.sides[1].player == aId) &&
+                        (hit.sides[0].player == bId || hit.sides[1].player == bId);
+      if (!ours) continue;
+      hits.push_back(hit);
+      if (!first)
+      {
+        first = hit;
+        firstAt = now - STEP + hit.atSeconds;
+      }
+    }
+    const MatchPlayer* playerA = slotOf(engine, aId);
+    const MatchPlayer* playerB = slotOf(engine, bId);
+    if (!playerA || !playerB) return false;
+    if (engine.getSimulatedSteps() % 2 == 0)
+    {
+      trailA.push_back(playerA->position);
+      trailB.push_back(playerB->position);
+    }
+    ended = (first && now > firstAt + AFTER_SECONDS) || now >= TIME_LIMIT_SECONDS;
+    return !ended;
+  }
+
+  void drawOverlay(const IMatchRenderer& renderer, ImDrawList& draw) const override
+  {
+    const float scale = Theme::scale();
+    DrillDraw::path(renderer, draw, trailA, IM_COL32(120, 200, 255, 200), 2.0f * scale);
+    DrillDraw::path(renderer, draw, trailB, IM_COL32(255, 140, 120, 200), 2.0f * scale);
+    DrillDraw::marker(renderer, draw, MEET, 0.15f, IM_COL32(240, 240, 240, 255));
+    if (first)
+      DrillDraw::marker(renderer, draw, first->where, 0.2f, IM_COL32(255, 220, 60, 255));
+  }
+
+  std::vector<std::string> report() const override
+  {
+    std::vector<std::string> lines;
+    lines.push_back(std::format(
+        "A: {:.0f} m run-up, {:.0f} kg · B: {:.0f} m run-up, {:.0f} kg · B's run "
+        "at {:.0f} deg, {:+.2f} m aside",
+        a.runUp, weights[0], b.runUp, weights[1], angleSetting, missSetting));
+    if (!first)
+    {
+      lines.push_back(ended ? "OUTCOME  no contact: they missed each other"
+                            : "No contact yet.");
+      return lines;
+    }
+    for (const PlayerID id : {aId, bId})
+    {
+      const MatchEngine::CollisionSide& side = sideOf(*first, id);
+      lines.push_back(std::format(
+          "{}: {:.1f} -> {:.1f} m/s, jolt {:.2f} m/s · ends up {:.0f}% · sudden "
+          "{:.0f}% · pause {:.2f} s",
+          id == aId ? "A" : "B", speedBefore(side), length2(side.after),
+          length2(side.jolt), side.endsUp * 100.0f, side.sudden * 100.0f, side.pause));
+    }
+    lines.push_back(std::format("Run-ins in all: {} (after the first: driving on "
+                                "into each other)",
+                                hits.size()));
+    lines.push_back(std::format("OUTCOME  contact at {:.2f} s: A jolted {:.2f} m/s, "
+                                "B {:.2f} m/s",
+                                firstAt, length2(sideOf(*first, aId).jolt),
+                                length2(sideOf(*first, bId).jolt)));
+    return lines;
+  }
+
+  std::vector<DrillMetric> metrics() const override
+  {
+    if (!first) return {{"Contact", 0.0}};
+    std::vector<DrillMetric> out{{"Contact", 1.0}, {"Contact at (s)", firstAt}};
+    for (const PlayerID id : {aId, bId})
+    {
+      const MatchEngine::CollisionSide& side = sideOf(*first, id);
+      const std::string who = id == aId ? "A " : "B ";
+      out.push_back({who + "speed before (m/s)", speedBefore(side)});
+      out.push_back({who + "speed after (m/s)", length2(side.after)});
+      out.push_back({who + "jolt (m/s)", length2(side.jolt)});
+      out.push_back({who + "ends up (%)", side.endsUp * 100.0});
+      out.push_back({who + "sudden (%)", side.sudden * 100.0});
+      out.push_back({who + "pause (s)", side.pause});
+    }
+    out.push_back({"Run-ins", static_cast<double>(hits.size())});
+    return out;
+  }
+
+ private:
+  struct Physique
+  {
+    float runUp = 20.0f;
+    float pace = 70.0f;
+    float height = 180.0f;
+    float strength = 50.0f;
+  };
+  static constexpr Vector2F MEET{0.5f, 0.5f};
+  /** Each runs on through the meeting point to this far beyond it. */
+  static constexpr float BEYOND_METRES = 20.0f;
+  /** The run goes on this long after the first contact. */
+  static constexpr double AFTER_SECONDS = 2.0;
+  static constexpr double TIME_LIMIT_SECONDS = 20.0;
+
+  static float length2(Vector2F vector) { return std::hypot(vector.x, vector.y); }
+  static float speedBefore(const MatchEngine::CollisionSide& side)
+  {
+    return std::hypot(side.after.x - side.jolt.x, side.after.y - side.jolt.y);
+  }
+  static const MatchEngine::CollisionSide& sideOf(const MatchEngine::CollisionHit& hit,
+                                                  PlayerID id)
+  {
+    return hit.sides[0].player == id ? hit.sides[0] : hit.sides[1];
+  }
+  /** A direction in metres as a facing angle (normalised pitch space). */
+  static float facingOf(Vector2F direction)
+  {
+    return std::atan2(direction.y / WIDTH, direction.x / LENGTH);
+  }
+  static float weightOf(const MatchEngine& engine, PlayerID id)
+  {
+    const MatchPlayer* player = slotOf(engine, id);
+    return player ? bodyMassKilograms(player->heightMetres,
+                                      player->derivedStat(DerivedStat::STRENGTH))
+                  : 0.0f;
+  }
+  /** About how long he takes to run `metres` flat out from standing:
+   * a(v) = A0 (1 - v / vmax), so x(t) = vmax (t - tau (1 - e^(-t/tau))). */
+  static float runTime(const MatchEngine& engine, PlayerID id, float metres)
+  {
+    const MatchPlayer* player = slotOf(engine, id);
+    if (!player) return 0.0f;
+    const float top = std::max(player->maxSpeed, 1.0f);
+    const float push = std::max(
+        derivedPhysicalValue(DerivedStat::ACCELERATION,
+                             player->derivedStat(DerivedStat::ACCELERATION)),
+        1.0f);
+    const float tau = top / push;
+    const auto distance = [&](float time)
+    { return top * (time - tau * (1.0f - std::exp(-time / tau))); };
+    float low = 0.0f;
+    float high = 30.0f;
+    for (int pass = 0; pass < 40; ++pass)
+    {
+      const float middle = 0.5f * (low + high);
+      (distance(middle) < metres ? low : high) = middle;
+    }
+    return 0.5f * (low + high);
+  }
+
+  Physique a{30.0f, 70.0f, 180.0f, 50.0f};
+  Physique b{0.0f, 70.0f, 180.0f, 50.0f};
+  float angleSetting = 180.0f;
+  float missSetting = 0.0f;
+  float nudgeSetting = 0.0f;
+
+  PlayerID aId = 0;
+  PlayerID bId = 0;
+  Vector2F directionA{};
+  Vector2F directionB{};
+  Vector2F meetA{};
+  Vector2F meetB{};
+  Vector2F startA{};
+  Vector2F startB{};
+  std::optional<float> releaseA;
+  std::optional<float> releaseB;
+  std::array<bool, 2> released{};
+  std::array<float, 2> weights{};
+  std::vector<MatchEngine::CollisionHit> hits;
+  std::optional<MatchEngine::CollisionHit> first;
+  double firstAt = 0.0;
+  bool ended = false;
+  std::vector<Vector2F> trailA;
+  std::vector<Vector2F> trailB;
+};
+
 // --- Shot from a spot --------------------------------------------------------
 
 /**
@@ -8001,6 +8319,7 @@ std::vector<std::unique_ptr<Drill>> makeDrills()
   drills.push_back(std::make_unique<OvertakeDrill>());
   drills.push_back(std::make_unique<LooseBallDrill>());
   drills.push_back(std::make_unique<TackleDrill>());
+  drills.push_back(std::make_unique<CollisionDrill>());
   drills.push_back(std::make_unique<ShotDrill>());
   drills.push_back(std::make_unique<ShotTargetDrill>());
   drills.push_back(std::make_unique<FirstTouchDrill>());

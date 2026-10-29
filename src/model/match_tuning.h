@@ -330,6 +330,33 @@ struct MatchTuning final
   };
 
   /**
+   * Collisions (Binturong body, both players; Notes and
+   * plans/match_engine_collision_plan.md): two players running into each
+   * other. Contact changes velocity, never position.
+   */
+  struct Collision final
+  {
+    /** A body is a cylinder 40 cm across: two touch with their centres
+     * this far apart. */
+    static constexpr float BODY_DIAMETER_METRES = 0.4f;
+    /** Kept his feet and balance: no drive, steering or braking for this
+     * long per m/s of jolt (a pushed person's legs act after ~0.2-0.3 s). */
+    static constexpr float PAUSE_SECONDS_PER_JOLT = 0.1f;
+    /** Through the pause he slows as a runner who has stopped running (the
+     * body's arrival deceleration). */
+    static constexpr float PAUSE_DECELERATION = 2.0f;
+    /** Bodies left overlapping (a pile-up) are eased apart at this speed
+     * (m/s) per metre of overlap: 1 m/s per 0.1 m. */
+    static constexpr float OVERLAP_EASING_PER_SECOND = 10.0f;
+    /** How sudden a jolt is: against his hardest braking over this long
+     * (react, ~0.2-0.3 s, and get a recovery step down). */
+    static constexpr float SUDDEN_WINDOW_SECONDS = 0.5f;
+    /** Contacts resolved within one step at most (each a pair's first
+     * touch in what is left of the step). */
+    static constexpr int MAX_CONTACTS_PER_STEP = 32;
+  };
+
+  /**
    * First touch (Binturong body, feet): the touch plays the ball on under real
    * physics and the player runs onto it. He owns it from the touch (a
    * claimed ball) until an opponent plays it or play stops (see Notes and

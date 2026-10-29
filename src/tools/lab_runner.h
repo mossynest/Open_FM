@@ -155,6 +155,11 @@ struct MatchSample
   int intents_win = 0;
   int intents_clear = 0;
   int intents_control = 0;
+  /** Collision plan: run-ins (Binturong bodies), and those jolting either
+   * player by 2 m/s or more, and by 4 or more. */
+  int collisions = 0;
+  int collisions_jolt_two = 0;
+  int collisions_jolt_four = 0;
   std::array<int, 2> keeper_claim_attempts{};
   std::array<int, 2> keeper_claims{};
   /** Aerial duels with both sides involved, and those the home side won. */

@@ -1840,7 +1840,9 @@ void MatchEngine::updateMovement(float dt)
     ball.meetFor = nullptr;
 
   // Every target was read from the same snapshot of the play; now the bodies
-  // move: diving keepers, the controlled player and a batch of the rest.
+  // move: diving keepers, players coasting after a collision, the
+  // controlled player and a batch of the rest.
+  rememberStepStart();
   std::array<std::uint8_t, 32> batch;
   std::size_t batched = 0;
   for (std::size_t slot = 0; slot < players.size() && slot < batch.size();
@@ -1851,13 +1853,15 @@ void MatchEngine::updateMovement(float dt)
     if (player.isGoalkeeper &&
         keepers[player.isHomeTeam ? 0 : 1].state == GoalkeeperState::DIVE)
       diveGoalkeeper(player, dt);
+    else if (player.collisionPause > 0.0f)
+      coastBinturong(player, dt);
     else if (controlledIndex && slot == *controlledIndex)
       integrateControlled(player, dt);
     else
       batch[batched++] = static_cast<std::uint8_t>(slot);
   }
   movePlayers(batch.data(), batched, dt, false);
-  separatePlayers();
+  collidePlayers(dt);
   observeRunJitter(dt);
 }
 
@@ -1960,6 +1964,7 @@ void MatchEngine::updateRestartMovement(float dt)
   // During a stoppage players walk to their restart positions (set-piece
   // slots, the restart spot or their last tactical target).
   const MatchPlayer* taker = restartTaker();
+  rememberStepStart();
   std::array<std::uint8_t, 32> batch;
   std::size_t batched = 0;
   for (std::size_t slot = 0; slot < players.size() && slot < batch.size();
@@ -2006,17 +2011,24 @@ void MatchEngine::updateRestartMovement(float dt)
     player.arriveAtSpeed = false;
     player.facingRequested = false;
     if (&player == taker && restartLineUp) steerRestartLineUp(player, dt);
-    batch[batched++] = static_cast<std::uint8_t>(slot);
+    if (player.collisionPause > 0.0f)
+      coastBinturong(player, dt);
+    else
+      batch[batched++] = static_cast<std::uint8_t>(slot);
   }
   movePlayers(batch.data(), batched, dt, true);
-  separatePlayers();
+  collidePlayers(dt);
 }
 
 void MatchEngine::separatePlayers()
 {
   // Resolve body contact after movement: players cannot overlap. Players who
   // left the pitch are static obstacles. Pairs are swept along the length of
-  // the pitch so only neighbours within a body width are examined.
+  // the pitch so only neighbours within a body width are examined. Pairs who
+  // both have the Binturong body meet by the collision plan instead
+  // (collidePlayers); a pair with an Aardvark body in it is separated here.
+  if (bodyOf(true) == BodyId::BINTURONG && bodyOf(false) == BodyId::BINTURONG)
+    return;
   constexpr float MINIMUM = MatchTuning::Player::MINIMUM_BODY_SEPARATION_METRES;
   constexpr float MINIMUM_X = MINIMUM / MatchTuning::Pitch::LENGTH_METRES;
   // The order persists between steps: players move little per step, so the
@@ -2066,6 +2078,7 @@ void MatchEngine::separatePlayers()
     {
       if (xs[order[secondIndex]] - xs[order[firstIndex]] >= MINIMUM_X) break;
       MatchPlayer& second = players[order[secondIndex]];
+      if (collidesByMomentum(first, second)) continue;
       const bool firstMoves = first.onPitch;
       const bool secondMoves = second.onPitch;
       if (!firstMoves && !secondMoves) continue;

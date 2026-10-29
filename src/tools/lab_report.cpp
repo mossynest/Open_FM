@@ -180,7 +180,11 @@ constexpr std::array TARGETS = {
   TargetSpec{"CON-HOLD", "holds_per_team", "Steps held in a contest per team", "", NO_BAND, Info, "contests", Number, Engine, "the ball in both reaches, he held"},
   TargetSpec{"CON-INW", "intents_win_per_team", "Tackles meant to win it per team", "", NO_BAND, Info, "contests", Number, Engine, "his brain's intent"},
   TargetSpec{"CON-INC", "intents_clear_per_team", "Tackles meant to knock it away per team", "", NO_BAND, Info, "contests", Number, Engine, "own third, at a stretch, or the last man"},
-  TargetSpec{"CON-INO", "intents_control_per_team", "Free balls simply controlled per team", "", NO_BAND, Info, "contests", Number, Engine, "a free ball well away from the carrier"},  TargetSpec{"CON-AERH", "aerial_home_share", "Contested aerial duels won by home", "", NO_BAND, Info, "contests", Percent, Engine, "both sides within reach"},
+  TargetSpec{"CON-INO", "intents_control_per_team", "Free balls simply controlled per team", "", NO_BAND, Info, "contests", Number, Engine, "a free ball well away from the carrier"},
+  TargetSpec{"COL-ALL", "collisions_per_match", "Run-ins per match", "", NO_BAND, Info, "contests", Number, Engine, "players running into each other (collision plan; Binturong bodies)"},
+  TargetSpec{"COL-J2", "collisions_jolt_two_per_match", "Run-ins jolting 2 m/s or more per match", "", NO_BAND, Info, "contests", Number, Engine, "either player"},
+  TargetSpec{"COL-J4", "collisions_jolt_four_per_match", "Run-ins jolting 4 m/s or more per match", "", NO_BAND, Info, "contests", Number, Engine, "either player: a big hit becomes possible"},
+  TargetSpec{"CON-AERH", "aerial_home_share", "Contested aerial duels won by home", "", NO_BAND, Info, "contests", Percent, Engine, "both sides within reach"},
   TargetSpec{"CON-CLMH", "keeper_claim_success_home", "Keeper claims held, home keeper", "", NO_BAND, Info, "contests", Percent, Engine, "the rest punched clear"},
   TargetSpec{"CON-CLMA", "keeper_claim_success_away", "Keeper claims held, away keeper", "", NO_BAND, Info, "contests", Percent, Engine, "the rest punched clear"},
   // ---- Movement jitter INFO (outfield players, open play) -------------------

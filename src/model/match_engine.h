@@ -274,6 +274,10 @@ struct MatchPlayer
   /** Planted for a thigh touch: how long until he can accelerate again (s;
    * he can still brake). */
   float plantedSeconds = 0.0f;
+  /** Collision plan: after a knock he kept his feet and balance through,
+   * how long until he can drive, steer or brake again (s); until then he
+   * coasts (MatchTuning::Collision). */
+  float collisionPause = 0.0f;
   [[nodiscard]] bool airborne() const { return feetHeight > 0.0f || jumpSpeed > 0.0f; }
   bool isPressing = false;
   bool isMakingRun = false;
@@ -1029,6 +1033,12 @@ struct MatchStats
   int awayBlocks = 0;
   int blocksCommitted = 0;
   int blocksPoppedUp = 0;
+  /** Collision plan: players running into each other (Binturong bodies),
+   * and those where either was jolted by 2 m/s or more, and by 4 or more
+   * (where a big hit becomes possible). */
+  int collisions = 0;
+  int collisionsJoltTwo = 0;
+  int collisionsJoltFour = 0;
   /** Tackling plan step 5: steps a defender went into a contest (by his
    * side), those on the carrier's free foot (row 5, a misread), steps he
    * held, and the intents his brain chose. */
@@ -1866,6 +1876,33 @@ class MatchEngine
     std::array<std::uint32_t, 3> other{};
   };
   const BodyContactStats& getBodyContacts() const { return bodyContacts; }
+  /** Collision plan: one player's side of a run-in. */
+  struct CollisionSide
+  {
+    PlayerID player = 0;
+    /** His sudden change of velocity (m/s, x along the length). */
+    Vector2F jolt{};
+    /** His velocity after it (m/s). */
+    Vector2F after{};
+    /** Where he ends up: his speed after, as a share of the fastest he can
+     * naturally move that way against his facing. */
+    float endsUp = 0.0f;
+    /** How sudden: the jolt against his hardest braking over
+     * SUDDEN_WINDOW_SECONDS. */
+    float sudden = 0.0f;
+    /** The pause it gave him (s). */
+    float pause = 0.0f;
+  };
+  /** One run-in: when in the step (s), where (pitch), and both sides. */
+  struct CollisionHit
+  {
+    std::uint64_t step = 0;
+    float atSeconds = 0.0f;
+    Vector2F where{};
+    std::array<CollisionSide, 2> sides{};
+  };
+  /** The run-ins of the last movement step. */
+  const std::vector<CollisionHit>& getLastCollisions() const { return lastCollisions; }
   /** His lines between feet, thigh, chest and head, standing (his body's:
    * chest and thigh control plan step 1). */
   BodyLines bodyLines(const MatchPlayer& player) const;
@@ -2538,6 +2575,10 @@ class MatchEngine
    * contact (an unchanged, contact-free field needs no new pass). */
   std::array<Vector2F, 32> separationPositions{};
   bool separationClear = false;
+  /** Collision plan: everyone's position before this step's movement (the
+   * start of each swept path), and the run-ins it found. */
+  std::array<Vector2F, 32> stepStartPositions{};
+  std::vector<CollisionHit> lastCollisions;
   /** Ball situation at the last tactical refresh (event-driven refresh). */
   const Player* tacticalOwner = nullptr;
   std::uint8_t tacticalFlags = 0;
@@ -3227,6 +3268,15 @@ class MatchEngine
   bool userRestartPassRequested() const;
   void updateRestartSupport(MatchPlayer& player, const MatchPlayer* taker);
   void separatePlayers();
+  /** Collision plan: whether a pair meets by the new rules (both on the
+   * Binturong body; otherwise today's separation). */
+  bool collidesByMomentum(const MatchPlayer& first, const MatchPlayer& second) const;
+  /** Before a movement step: where everyone starts. */
+  void rememberStepStart();
+  /** After a movement step: run-ins found along each path within the step
+   * (wound back to the moment of contact, the hit, wound forward), easing
+   * of any overlap left, then today's separation for the other pairs. */
+  void collidePlayers(float dt);
   Vector2F goalkeeperTarget(MatchPlayer& keeper, const MatchPlayer* carrier);
   void diveGoalkeeper(MatchPlayer& keeper, float dt);
   void planGoalkeeperDive(bool defendingHome, bool penalty);

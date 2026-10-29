@@ -1069,6 +1069,61 @@ SpeedBand MatchEngine::speedBandBinturong(const MatchPlayer& player,
                        currentTopSpeedBinturong(player));
 }
 
+float MatchEngine::directionTopSpeedBinturong(const MatchPlayer& player,
+                                              Vector2F velocity) const
+{
+  using P = MatchTuning::Player;
+  // His body's facing, in metres (facingAngle is in normalised pitch space).
+  const Vector2F body{std::cos(player.facingAngle) * MatchTuning::Pitch::LENGTH_METRES,
+                      std::sin(player.facingAngle) * MatchTuning::Pitch::WIDTH_METRES};
+  const float bodyLength = std::max(length(body), EPSILON);
+  const float speed = length(velocity);
+  const float alignment =
+      speed > EPSILON
+          ? std::clamp((body.x * velocity.x + body.y * velocity.y) /
+                           (bodyLength * speed),
+                       -1.0f, 1.0f)
+          : 1.0f;
+  const std::array<float, MOVEMENT_MODE_COUNT> tops{
+      speedBandBinturong(player, MovementMode::WALK).high,
+      speedBandBinturong(player, MovementMode::JOG).high,
+      speedBandBinturong(player, MovementMode::RUN).high,
+      currentTopSpeedBinturong(player)};
+  const auto cap = [&](std::size_t direction)
+  {
+    return P::DIRECTION_SPEED_SHARE[direction] *
+           tops[static_cast<std::size_t>(P::DIRECTION_TOP_BAND[direction])];
+  };
+  const DirectionMix mix = directionMix(std::acos(alignment));
+  return cap(mix.below) + (cap(mix.below + 1) - cap(mix.below)) * mix.onward;
+}
+
+float MatchEngine::hardestBrakingBinturong(const MatchPlayer& player) const
+{
+  return playerBraking(player, 1.0f);
+}
+
+void MatchEngine::coastBinturong(MatchPlayer& player, float dt)
+{
+  // No drive, no steering, no braking of his own: he carries the velocity
+  // the collision left him, slowing as a runner who has stopped running.
+  const float speed = length(player.velocity);
+  const float slowed =
+      std::max(0.0f, speed - MatchTuning::Collision::PAUSE_DECELERATION * dt);
+  const float scale = speed > EPSILON ? slowed / speed : 0.0f;
+  const Vector2F before = player.velocity;
+  player.velocity = {before.x * scale, before.y * scale};
+  // The mean of the step's velocities: exact for a steady slowing.
+  const Vector2F moved = toPitch({0.5f * (before.x + player.velocity.x) * dt,
+                                  0.5f * (before.y + player.velocity.y) * dt});
+  player.position = {
+      std::clamp(player.position.x + moved.x, MatchTuning::Pitch::PLAYER_MIN_X,
+                 MatchTuning::Pitch::PLAYER_MAX_X),
+      std::clamp(player.position.y + moved.y, MatchTuning::Pitch::PLAYER_MIN_Y,
+                 MatchTuning::Pitch::PLAYER_MAX_Y)};
+  player.collisionPause = std::max(0.0f, player.collisionPause - dt);
+}
+
 FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     const std::uint8_t* slots, std::size_t count, float dt, bool walking)
 {

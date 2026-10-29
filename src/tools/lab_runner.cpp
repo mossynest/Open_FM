@@ -199,6 +199,9 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
   sample.intents_win = stats.intentsWin;
   sample.intents_clear = stats.intentsClear;
   sample.intents_control = stats.intentsControl;
+  sample.collisions = stats.collisions;
+  sample.collisions_jolt_two = stats.collisionsJoltTwo;
+  sample.collisions_jolt_four = stats.collisionsJoltFour;
   sample.tackle_duels_won = {stats.homeTackleDuelsWon,
                              stats.awayTackleDuelsWon};
   sample.free_ball_tackles = {stats.homeFreeBallTackles,
@@ -781,6 +784,12 @@ std::map<std::string, Estimate> matchMetrics(
   metrics["intents_win_per_team"] = perTeam([](const MatchSample& s) { return s.intents_win; });
   metrics["intents_clear_per_team"] = perTeam([](const MatchSample& s) { return s.intents_clear; });
   metrics["intents_control_per_team"] = perTeam([](const MatchSample& s) { return s.intents_control; });
+  metrics["collisions_per_match"] = meanEstimate(
+      column([](const MatchSample& s) { return static_cast<double>(s.collisions); }));
+  metrics["collisions_jolt_two_per_match"] = meanEstimate(column(
+      [](const MatchSample& s) { return static_cast<double>(s.collisions_jolt_two); }));
+  metrics["collisions_jolt_four_per_match"] = meanEstimate(column(
+      [](const MatchSample& s) { return static_cast<double>(s.collisions_jolt_four); }));
   metrics["blocks_popped_share"] = ratioEstimate(
       column([](const MatchSample& s) { return s.blocks_popped; }), blocks);
   metrics["free_ball_tackle_success"] = ratioEstimate(

@@ -152,8 +152,16 @@ These are semantic labels attached to targets, not independent scripts that
 teleport players. `integrateMovements()` blends a tactical target into the
 movement target with a familiarity-dependent response. It applies acceleration,
 braking, turning, fatigue and speed limits. Players slow to arrive and cannot
-reverse their velocity instantly. `separatePlayers()` resolves body overlap
-after movement. Its sorted nearby-pair pass avoids checking every distant pair.
+reverse their velocity instantly. `collidePlayers()` resolves body contact
+after movement. Two players who both have the Binturong body are 0.4 m
+cylinders: each pair's first contact is found along their straight paths
+through the step, both are wound back to it, the hit is applied by momentum
+(no bounce along the line between their centres, the sideways part kept,
+weight from height and Strength) and both are wound forward. A hit player
+coasts for 0.1 s per m/s of jolt, neither driving, steering nor braking.
+Contact changes velocity, never position. Any pair with an Aardvark body in
+it is still pushed apart to 0.8 m by `separatePlayers()`, whose sorted
+nearby-pair pass avoids checking every distant pair.
 
 The movement kernel gathers values into arrays so the compiler can process
 multiple players efficiently. Preserve its relationship with scalar

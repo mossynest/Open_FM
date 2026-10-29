@@ -203,6 +203,7 @@ set(FM_CORE_SOURCES
     model/match_engine.cpp
     model/match_engine_tracking.cpp
     model/match_engine_drills.cpp
+    model/match_collisions.cpp
     model/match_engine_jitter.cpp
     model/match_engine_play.cpp
     model/match_events.h

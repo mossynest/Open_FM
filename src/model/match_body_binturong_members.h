@@ -35,6 +35,15 @@
   /** A movement mode's speed band for him now: his walk-run transition,
    * critical speed and top speed as fuel has left them. */
   SpeedBand speedBandBinturong(const MatchPlayer& player, MovementMode mode) const;
+  /** Collision plan: the fastest he can naturally move (m/s) in the
+   * direction of `velocity` (metres), against his body's facing: the
+   * direction caps (forward a sprint, backward a jog at 0.7...). */
+  float directionTopSpeedBinturong(const MatchPlayer& player, Vector2F velocity) const;
+  /** Collision plan: his hardest braking (m/s^2), fresh, by Agility. */
+  float hardestBrakingBinturong(const MatchPlayer& player) const;
+  /** Collision plan: a player in his collision pause neither drives, steers
+   * nor brakes; he keeps his velocity, slowing gently. */
+  void coastBinturong(MatchPlayer& player, float dt);
   float executionErrorScaleBinturong(const MatchPlayer& player) const;
   /** Moves the dribbled ball with its carrier; false if a heavy touch lost it.
    */
