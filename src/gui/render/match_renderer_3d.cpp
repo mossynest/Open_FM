@@ -512,6 +512,23 @@ float playerHeightMetres(const MatchRenderPlayer& player)
   if (height <= 0.0f) height = P::REFERENCE_HEIGHT_METRES;
   return std::clamp(height, P::MIN_HEIGHT_METRES, P::MAX_HEIGHT_METRES);
 }
+
+/// The rig's heading: his facing; down after a collision, a quarter turn
+/// from the way he lies, so that rolling the body onto its side lays it
+/// along that way (head first).
+float rigYaw(const MatchRenderPlayer& player, float alpha)
+{
+  if (player.fallen)
+  {
+    // Getting up, he turns from lying to the way he will face.
+    const float lying = RenderMath::worldYawFromFacing(player.lyingAngle) -
+                        0.5f * std::numbers::pi_v<float>;
+    return RenderMath::lerpAngle(lying, RenderMath::worldYawFromFacing(player.upFacingAngle),
+                                 player.getUpShare);
+  }
+  return RenderMath::worldYawFromFacing(RenderMath::lerpAngle(
+      player.previousFacingAngle, player.currentFacingAngle, alpha));
+}
 }  // namespace
 
 struct MatchRenderer3D::State
@@ -1890,8 +1907,7 @@ void MatchRenderer3D::State::updateMotion(const MatchRenderPlayer& player,
   using R = Tuning::Rig;
   const Vec3 root = RenderMath::worldFromPitch(lerpRenderPosition(
       player.previousPosition, player.currentPosition, alpha));
-  const float yaw = RenderMath::worldYawFromFacing(RenderMath::lerpAngle(
-      player.previousFacingAngle, player.currentFacingAngle, alpha));
+  const float yaw = rigYaw(player, alpha);
   if (slot.player != player.player)
   {
     slot = AnimationSlot{};
@@ -2043,6 +2059,14 @@ void MatchRenderer3D::State::updateMotion(const MatchRenderPlayer& player,
       setTarget = 1.0f;
     }
   }
+  // Down after a collision: the same easing lays him on his side. Getting
+  // up, he rises over the time it takes.
+  if (player.fallen)
+  {
+    setTarget = 0.0f;
+    holdTarget = 0.0f;
+    diveTarget = 1.0f - player.getUpShare;
+  }
   slot.setBlend += (setTarget - slot.setBlend) * blend;
   slot.holdBlend += (holdTarget - slot.holdBlend) * blend;
   slot.diveBlend += (diveTarget - slot.diveBlend) * blend;
@@ -2192,8 +2216,7 @@ void MatchRenderer3D::State::addPlayer(const MatchRenderPlayer& player,
   // Broad-shouldered or slight: widths vary a little from player to player.
   const float bulk = scale * look.bulk;
 
-  const float yaw = RenderMath::worldYawFromFacing(RenderMath::lerpAngle(
-      player.previousFacingAngle, player.currentFacingAngle, alpha));
+  const float yaw = rigYaw(player, alpha);
   const Vec3 forward{std::cos(yaw), std::sin(yaw), 0.0f};
   const Vec3 flatSide{-forward.y, forward.x, 0.0f};
   const float stride = slot.stride;
@@ -2365,6 +2388,28 @@ void MatchRenderer3D::State::addPlayer(const MatchRenderPlayer& player,
       }
       pose = mixPose(pose, dive, slot.diveBlend);
     }
+  }
+  if (player.fallen && slot.diveBlend > 0.01f)
+  {
+    // Lying on his side along the ground, legs out, arms loose.
+    Pose lie = pose;
+    lie.bodyRoll = 0.5f * std::numbers::pi_v<float>;
+    lie.lift = Tuning::Keeper::FALLEN_LIFT;
+    lie.lean = 0.0f;
+    lie.turnRoll = 0.0f;
+    lie.twist = 0.0f;
+    lie.hipDrop = 0.0f;
+    for (std::size_t index = 0; index < 2; ++index)
+    {
+      const float outward = index == 0 ? 1.0f : -1.0f;
+      lie.thigh[index] = index == 0 ? 0.25f : -0.05f;
+      lie.knee[index] = index == 0 ? -0.6f : -0.2f;
+      lie.legSpread[index] = outward * 0.05f;
+      lie.armSwing[index] = 0.4f;
+      lie.armSpread[index] = outward * 0.3f;
+      lie.elbow[index] = 0.6f;
+    }
+    pose = mixPose(pose, lie, slot.diveBlend);
   }
 
   if (celebrating)

@@ -396,6 +396,15 @@ inline float bodyMassKilograms(float heightMetres, float strengthRating)
   return heightMetres * heightMetres * index;
 }
 
+/** A value on a straight line from `at1` (the rating at stat 1) to `at99`
+ * (at stat 99), held at the ends. */
+inline float alongStatScale(float rating, float at1, float at99)
+{
+  const float share = std::clamp(
+      (rating - STAT_1_RATING) / (STAT_99_RATING - STAT_1_RATING), 0.0f, 1.0f);
+  return at1 + (at99 - at1) * share;
+}
+
 /** A stat built on his height (DerivedRecipe::onHeight): the rating of his
  * height plus the part `blend` rates, unclamped. */
 inline float derivedRatingOnHeight(DerivedStat stat, const DerivedRecipe& recipe,

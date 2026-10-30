@@ -668,7 +668,7 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
       for (MatchPlayer* const pointer : onPitch(homeTeam))
       {
         MatchPlayer& candidate = *pointer;
-        if (&candidate == carrier || candidate.isInjured ||
+        if (&candidate == carrier || candidate.isInjured || candidate.fallen ||
             std::ranges::find(runners, &candidate) != runners.end())
           continue;
         const bool striker = candidate.player->getRole() == PlayerRole::ST;
@@ -733,7 +733,7 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
     for (MatchPlayer* const pointer : onPitch(homeTeam))
     {
       MatchPlayer& candidate = *pointer;
-      if (&candidate == carrier || candidate.isInjured) continue;
+      if (&candidate == carrier || candidate.isInjured || candidate.fallen) continue;
       const auto& runners = homeTeam ? homeRunners : awayRunners;
       if (std::ranges::find(runners, &candidate) != runners.end()) continue;
       const PlayerRole role = candidate.player->getRole();
@@ -2640,6 +2640,7 @@ MatchEngine::Challenge MatchEngine::chooseChallengeBinturong(
   MatchPlayer* defender =
       findClosestPlayer(ball.position, !carrier.isHomeTeam, false);
   if (!defender || defender->tackleCooldown > 0.0f || defender->isInjured ||
+      defender->fallen ||
       defender->trapTimer > 0.0f || isControlled(*defender))
     return challenge;
   using D = MatchTuning::Defending;
@@ -4609,4 +4610,50 @@ float MatchEngine::pushMetresBinturong(const MatchPlayer& player, Vector2F from,
     }
   }
   return longest;
+}
+
+float MatchEngine::chooseGetUpBinturong(const MatchPlayer& player)
+{
+  // How quick to get up is his call, by urgency (collision plan step 5).
+  using C = MatchTuning::Collision;
+  const float agility = player.derivedStat(DerivedStat::AGILITY);
+  const float gingerly = alongStatScale(agility, C::GINGERLY_SECONDS_AT_AGILITY_1,
+                                        C::GINGERLY_SECONDS_AT_AGILITY_99);
+  // Play has stopped: up, ready for the restart.
+  if (state != MatchState::PLAYING)
+  {
+    ++stats.collisionGetUpsInStoppage;
+    return gingerly;
+  }
+  // The ball near and still to be won (loose, his side's, or an opponent's
+  // with a team-mate of his on it): he jumps up.
+  if (distance(player.position, ball.position) <= C::GET_UP_BALL_METRES)
+  {
+    const MatchPlayer* holder = findMatchPlayer(ball.possessedBy);
+    bool chance = holder == nullptr || holder->isHomeTeam == player.isHomeTeam;
+    if (holder == nullptr && ball.isPass) chance = ball.passByHome == player.isHomeTeam;
+    if (!chance)
+      for (const MatchPlayer& mate : players)
+        if (active(mate) && &mate != &player && mate.isHomeTeam == player.isHomeTeam &&
+            !mate.fallen &&
+            distance(mate.position, ball.position) <=
+                C::CONTESTED_METRES)
+        {
+          chance = true;
+          break;
+        }
+    if (chance)
+    {
+      ++stats.collisionGetUpsForBall;
+      return alongStatScale(agility, C::GET_UP_SECONDS_AT_AGILITY_1,
+                            C::GET_UP_SECONDS_AT_AGILITY_99);
+    }
+  }
+  // Play has run on a long while with him down: up, gingerly.
+  if (player.downSeconds >= C::GINGERLY_AFTER_SECONDS)
+  {
+    ++stats.collisionGetUpsGingerly;
+    return gingerly;
+  }
+  return 0.0f;
 }

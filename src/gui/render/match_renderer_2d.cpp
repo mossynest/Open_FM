@@ -1250,7 +1250,8 @@ void MatchRenderer2D::State::drawToken(const TokenOnScreen& token, float radius,
   const ImVec2 at = token.position;
   const float outlineWidth = std::max(1.0f, radius * T::OUTLINE_SHARE);
 
-  // Facing wedge first, so only its tip shows past the token.
+  // Facing wedge first, so only its tip shows past the token (none while
+  // he is down after a collision).
   const ImVec2 dir = token.direction;
   const auto rotate = [&](float angle, float reach)
   {
@@ -1264,12 +1265,15 @@ void MatchRenderer2D::State::drawToken(const TokenOnScreen& token, float radius,
   const ImVec2 tipOutline{
       at.x + dir.x * (radius * T::WEDGE_REACH + outlineWidth),
       at.y + dir.y * (radius * T::WEDGE_REACH + outlineWidth)};
-  drawList->AddTriangleFilled(
-      tipOutline, rotate(T::WEDGE_HALF_ANGLE + 0.08f, radius),
-      rotate(-T::WEDGE_HALF_ANGLE - 0.08f, radius), faded(outline));
-  drawList->AddTriangleFilled(tip, rotate(T::WEDGE_HALF_ANGLE, radius * 0.9f),
-                              rotate(-T::WEDGE_HALF_ANGLE, radius * 0.9f),
-                              faded(T::WEDGE_COLOR));
+  if (!player.fallen)
+  {
+    drawList->AddTriangleFilled(
+        tipOutline, rotate(T::WEDGE_HALF_ANGLE + 0.08f, radius),
+        rotate(-T::WEDGE_HALF_ANGLE - 0.08f, radius), faded(outline));
+    drawList->AddTriangleFilled(tip, rotate(T::WEDGE_HALF_ANGLE, radius * 0.9f),
+                                rotate(-T::WEDGE_HALF_ANGLE, radius * 0.9f),
+                                faded(T::WEDGE_COLOR));
+  }
 
   drawList->AddCircleFilled(at, radius + outlineWidth, faded(outline));
   drawList->AddCircleFilled(at, radius, faded(ring));
@@ -1288,9 +1292,27 @@ void MatchRenderer2D::State::drawToken(const TokenOnScreen& token, float radius,
     const ImVec2 size = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, text);
     const ImVec2 origin{at.x - size.x * 0.5f, at.y - size.y * 0.5f};
     const ImU32 color = faded(kitNumberColor(kit));
+    const int firstVertex = drawList->VtxBuffer.Size;
     drawList->AddText(font, fontSize, origin, color, text);
     drawList->AddText(font, fontSize, {origin.x + fontSize * 0.05f, origin.y},
                       color, text);
+    if (player.fallen)
+    {
+      // Down: the number turns a quarter, clockwise on his front, the
+      // other way on his back (and over again as he rolls); getting up,
+      // it turns back upright over the time it takes.
+      const float turn = (player.onFront ? 1.0f : -1.0f) * 0.5f *
+                         std::numbers::pi_v<float> * (1.0f - player.getUpShare);
+      const float c = std::cos(turn);
+      const float s = std::sin(turn);
+      for (int index = firstVertex; index < drawList->VtxBuffer.Size; ++index)
+      {
+        ImVec2& point = drawList->VtxBuffer[index].pos;
+        const float dx = point.x - at.x;
+        const float dy = point.y - at.y;
+        point = {at.x + dx * c - dy * s, at.y + dx * s + dy * c};
+      }
+    }
   }
   if (player.yellowCards > 0)
   {

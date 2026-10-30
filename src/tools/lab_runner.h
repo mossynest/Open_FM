@@ -167,6 +167,20 @@ struct MatchSample
   int collision_slips = 0;
   int collision_knocks_by_ends_up = 0;
   int collision_knocks_small_jolt = 0;
+  /** Steps 4-5: big hits, falls that lost him the ball, player-seconds
+   * down (all, in open play), get-ups by the call that started them, and
+   * spells down of 15 s or more. */
+  int collision_big_hits = 0;
+  int collision_falls_losing_ball = 0;
+  double collision_down_seconds = 0.0;
+  double collision_down_play_seconds = 0.0;
+  int collision_get_ups_for_ball = 0;
+  int collision_get_ups_in_stoppage = 0;
+  int collision_get_ups_gingerly = 0;
+  int collision_get_ups_fixed = 0;
+  int collision_downs_fifteen = 0;
+  /** Step 6: times the ball came off a fallen body. */
+  int collision_ball_off_fallen = 0;
   std::array<int, 2> keeper_claim_attempts{};
   std::array<int, 2> keeper_claims{};
   /** Aerial duels with both sides involved, and those the home side won. */

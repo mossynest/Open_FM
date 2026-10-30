@@ -157,8 +157,16 @@ after movement. Two players who both have the Binturong body are 0.4 m
 cylinders: each pair's first contact is found along their straight paths
 through the step, both are wound back to it, the hit is applied by momentum
 (no bounce along the line between their centres, the sideways part kept,
-weight from height and Strength) and both are wound forward. A hit player
-coasts for 0.1 s per m/s of jolt, neither driving, steering nor braking.
+weight from height and Strength) and both are wound forward. `judgeKnock()`
+scores each hit player (the worse of where he ends up against his
+directional top speed and how sudden the jolt was, with a Balance-scaled
+wobble) against his Balance lines: below them he coasts for 0.1 s per m/s
+of jolt, neither driving, steering nor braking; above the first he
+stumbles (`stumbleBinturong()`); above the second he falls (`knockOver()`).
+A fallen player slides to a stop, may roll about after a big hit, can't
+play the ball, is hurdled by others (no collisions), and gets up when his
+side's brain says (`chooseGetUp()`; the Binturong brain jumps up for a ball
+near and still to be won, gets up in a stoppage, or gingerly after 15 s).
 Contact changes velocity, never position. Any pair with an Aardvark body in
 it is still pushed apart to 0.8 m by `separatePlayers()`, whose sorted
 nearby-pair pass avoids checking every distant pair.

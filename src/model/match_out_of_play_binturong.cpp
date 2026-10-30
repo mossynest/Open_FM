@@ -92,7 +92,7 @@ void MatchEngine::checkOutOfBoundsBinturong()
       return;
     }
 
-    const bool lastTouchHome = isHomePlayer(ball.lastPossessor);
+    const bool lastTouchHome = isHomePlayer(lastTouchForRestart());
     if (!rightGoalLine)
     {
       // Home defends the left goal.
@@ -105,7 +105,7 @@ void MatchEngine::checkOutOfBoundsBinturong()
     else
     {
       // Away defends the right goal.
-      if (!lastTouchHome && ball.lastPossessor)
+      if (!lastTouchHome && lastTouchForRestart())
         setupCornerBinturong(true,
                              ball.position.y < MatchTuning::Pitch::CENTRE);
       else
@@ -116,7 +116,7 @@ void MatchEngine::checkOutOfBoundsBinturong()
 
   if (ball.position.y <= 0.0f || ball.position.y >= 1.0f)
   {
-    const bool receivingHome = !isHomePlayer(ball.lastPossessor);
+    const bool receivingHome = !isHomePlayer(lastTouchForRestart());
     setupThrowInBinturong(receivingHome);
   }
 }

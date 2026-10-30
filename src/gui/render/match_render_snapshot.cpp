@@ -44,6 +44,11 @@ void fillMatchRenderSnapshot(const MatchEngine& engine,
         std::sqrt(source.velocity.x * source.velocity.x +
                   source.velocity.y * source.velocity.y);
     renderPlayer.tackleCooldown = source.tackleCooldown;
+    renderPlayer.fallen = source.fallen;
+    renderPlayer.lyingAngle = source.lyingAngle;
+    renderPlayer.onFront = source.onFront();
+    renderPlayer.getUpShare = source.getUpShare();
+    renderPlayer.upFacingAngle = source.slideAngle;
     renderPlayer.previousPosition = index < previousPositions.size()
                                         ? previousPositions[index]
                                         : renderPlayer.currentPosition;

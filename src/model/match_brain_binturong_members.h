@@ -146,4 +146,8 @@
   /** Presser's lateral shade onto the carrier's stronger side (normalised
    * y; 0 without a weaker-foot order). */
   float weakFootShadeBinturong(const MatchPlayer& carrier) const;
+  /** Collision plan step 5: a fallen player gets up by urgency: jumps up
+   * for a ball near and still to be won, gets up in a stoppage, gingerly if
+   * play runs on long; else stays down (0). */
+  float chooseGetUpBinturong(const MatchPlayer& player);
 // clang-format on

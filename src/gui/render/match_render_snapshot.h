@@ -71,6 +71,15 @@ struct MatchRenderPlayer
   /** Seconds before this player may challenge again; it jumps up when he
    * goes into a tackle (renderers start the tackle pose on the rise). */
   float tackleCooldown = 0.0f;
+  /** Down after a collision (the cylinder on its side), and the way his
+   * body lies (an angle like the facing angles). */
+  bool fallen = false;
+  float lyingAngle = 0.0f;
+  /** While down: on his front (else on his back), turning over as he rolls. */
+  bool onFront = false;
+  /** Getting up: how far through (0 lying, 1 up), and the way he will face. */
+  float getUpShare = 0.0f;
+  float upFacingAngle = 0.0f;
 };
 
 struct MatchRenderBall

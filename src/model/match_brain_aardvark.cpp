@@ -337,7 +337,7 @@ void MatchEngine::refreshTacticalTargetsAardvark(float dt, bool planHome)
       for (MatchPlayer* const pointer : onPitch(homeTeam))
       {
         MatchPlayer& candidate = *pointer;
-        if (&candidate == carrier || candidate.isInjured ||
+        if (&candidate == carrier || candidate.isInjured || candidate.fallen ||
             std::ranges::find(runners, &candidate) != runners.end())
           continue;
         const bool striker = candidate.player->getRole() == PlayerRole::ST;
@@ -402,7 +402,7 @@ void MatchEngine::refreshTacticalTargetsAardvark(float dt, bool planHome)
     for (MatchPlayer* const pointer : onPitch(homeTeam))
     {
       MatchPlayer& candidate = *pointer;
-      if (&candidate == carrier || candidate.isInjured) continue;
+      if (&candidate == carrier || candidate.isInjured || candidate.fallen) continue;
       const auto& runners = homeTeam ? homeRunners : awayRunners;
       if (std::ranges::find(runners, &candidate) != runners.end()) continue;
       const PlayerRole role = candidate.player->getRole();
@@ -1679,6 +1679,7 @@ MatchEngine::Challenge MatchEngine::chooseChallengeAardvark(
   MatchPlayer* defender =
       findClosestPlayer(ball.position, !carrier.isHomeTeam, false);
   if (!defender || defender->tackleCooldown > 0.0f || defender->isInjured ||
+      defender->fallen ||
       defender->trapTimer > 0.0f || isControlled(*defender))
     return challenge;
   using D = MatchTuning::Defending;
@@ -3279,4 +3280,13 @@ MatchPlayer* MatchEngine::chooseTakeOnAardvark(MatchPlayer& carrier)
 void MatchEngine::planOvertakeAardvark(std::size_t /*slot*/)
 {
   // The Aardvark brain never plans a way round: he carries on (and bumps).
+}
+
+float MatchEngine::chooseGetUpAardvark(const MatchPlayer& player)
+{
+  // No urgency cues: up as soon as he has stopped (collision plan step 4).
+  using C = MatchTuning::Collision;
+  ++stats.collisionGetUpsFixed;
+  return alongStatScale(player.derivedStat(DerivedStat::AGILITY),
+                        C::GET_UP_SECONDS_AT_AGILITY_1, C::GET_UP_SECONDS_AT_AGILITY_99);
 }

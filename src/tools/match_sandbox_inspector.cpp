@@ -483,6 +483,20 @@ void DebugInspector::renderPlayer(const SandboxRecorder& recorder,
     flag(slot->stumbleSeconds > 0.0f, "stumbling");
     flag(slot->collisionPause > 0.0f && slot->stumbleSeconds <= 0.0f,
          "knocked (paused)");
+    std::string downText;
+    if (slot->fallen)
+    {
+      downText = std::format("down {:.1f} s", slot->downSeconds);
+      if (slot->bigHitSeconds > 0.0f)
+        downText += std::format(" (big hit, at least {:.1f} s)", slot->bigHitSeconds);
+      if (slot->velocity.x != 0.0f || slot->velocity.y != 0.0f)
+        downText += slot->lyingAcross ? ", tumbling" : ", sliding";
+      else if (slot->rollSeconds > 0.0f)
+        downText += ", rolling in pain";
+      else if (slot->gettingUp)
+        downText += std::format(", getting up ({:.1f} s)", slot->getUpSeconds);
+    }
+    flag(slot->fallen, downText.c_str());
     flag(engine.getControlledPlayer() == inspected, "human-controlled");
     property("State", flagsText.empty() ? std::string("-") : flagsText);
     property("Engine attributes",

@@ -207,6 +207,16 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
   sample.collision_slips = stats.collisionSlips;
   sample.collision_knocks_by_ends_up = stats.collisionKnocksByEndsUp;
   sample.collision_knocks_small_jolt = stats.collisionKnocksSmallJolt;
+  sample.collision_big_hits = stats.collisionBigHits;
+  sample.collision_falls_losing_ball = stats.collisionFallsLosingBall;
+  sample.collision_down_seconds = stats.collisionDownSeconds;
+  sample.collision_down_play_seconds = stats.collisionDownPlaySeconds;
+  sample.collision_get_ups_for_ball = stats.collisionGetUpsForBall;
+  sample.collision_get_ups_in_stoppage = stats.collisionGetUpsInStoppage;
+  sample.collision_get_ups_gingerly = stats.collisionGetUpsGingerly;
+  sample.collision_get_ups_fixed = stats.collisionGetUpsFixed;
+  sample.collision_downs_fifteen = stats.collisionDownsFifteen;
+  sample.collision_ball_off_fallen = stats.collisionBallOffFallen;
   sample.tackle_duels_won = {stats.homeTackleDuelsWon,
                              stats.awayTackleDuelsWon};
   sample.free_ball_tackles = {stats.homeFreeBallTackles,
@@ -809,6 +819,20 @@ std::map<std::string, Estimate> matchMetrics(
   metrics["collision_knocks_small_jolt_share"] = ratioEstimate(
       column([](const MatchSample& s) { return static_cast<double>(s.collision_knocks_small_jolt); }),
       knocks);
+  const auto perMatch = [&](const char* name, auto field)
+  { metrics[name] = meanEstimate(column([field](const MatchSample& s) { return static_cast<double>(s.*field); })); };
+  perMatch("collision_big_hits_per_match", &MatchSample::collision_big_hits);
+  perMatch("collision_falls_losing_ball_per_match", &MatchSample::collision_falls_losing_ball);
+  perMatch("collision_down_play_seconds_per_match", &MatchSample::collision_down_play_seconds);
+  perMatch("collision_get_ups_for_ball_per_match", &MatchSample::collision_get_ups_for_ball);
+  perMatch("collision_get_ups_in_stoppage_per_match", &MatchSample::collision_get_ups_in_stoppage);
+  perMatch("collision_get_ups_gingerly_per_match", &MatchSample::collision_get_ups_gingerly);
+  perMatch("collision_get_ups_fixed_per_match", &MatchSample::collision_get_ups_fixed);
+  perMatch("collision_downs_fifteen_per_match", &MatchSample::collision_downs_fifteen);
+  perMatch("collision_ball_off_fallen_per_match", &MatchSample::collision_ball_off_fallen);
+  metrics["collision_down_seconds_per_fall"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.collision_down_seconds; }),
+      column([](const MatchSample& s) { return static_cast<double>(s.collision_falls); }));
   metrics["blocks_popped_share"] = ratioEstimate(
       column([](const MatchSample& s) { return s.blocks_popped; }), blocks);
   metrics["free_ball_tackle_success"] = ratioEstimate(

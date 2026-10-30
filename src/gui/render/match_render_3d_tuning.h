@@ -568,6 +568,9 @@ struct MatchRender3DTuning final
     static constexpr float DIVE_ROLL = 1.3f;
     static constexpr float DIVE_LIFT = 0.42f;
     static constexpr float DIVE_RATE = 12.0f;
+    /** Down after a collision, lying on his side: the pelvis this far from
+     * standing hip height (m; near the ground). */
+    static constexpr float FALLEN_LIFT = -0.75f;
   };
 
   /** Players after a goal (simulated seconds since the goal). */

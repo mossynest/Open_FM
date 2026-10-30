@@ -2979,8 +2979,8 @@ class CollisionDrill final : public Drill
            "there) at an angle to A's run. Each one's speed before and "
            "after, his jolt, where he ends up against what he can run that "
            "way, how sudden it was, and whether he kept his balance (a "
-           "pause), stumbled (amber ring) or fell (red ring; a stumble "
-           "until falls are built).";
+           "pause), stumbled (amber ring) or fell (red ring while down: "
+           "a big hit, which way he lies, how long until he is up).";
   }
 
   std::vector<DrillParameter> parameters() override
@@ -3030,6 +3030,19 @@ class CollisionDrill final : public Drill
     list.push_back(setting("Timing nudge (s)", &nudgeSetting, -1.0f, 1.0f, false,
                            "B starts this much later (+) or earlier (-) than "
                            "the drill's estimate of when they meet."));
+    DrillParameter ballIn = setting("Ball in after (s)", &ballDelay, 0.0f, 10.0f, false,
+                                    "This long after the contact a loose ball is "
+                                    "played at whoever is down (A first) from "
+                                    "10 m away; 0: no ball.");
+    ballIn.section = "Ball at the fallen";
+    list.push_back(ballIn);
+    list.push_back(setting("Ball speed (m/s)", &ballSpeed, 2.0f, 25.0f, false));
+    list.push_back(setting("Ball from (deg)", &ballAngle, 0.0f, 360.0f, true,
+                           "Where it comes from round him: 0 from +x (the "
+                           "way A ran), 90 from +y."));
+    list.push_back(setting("Ball lift (m/s)", &ballLift, 0.0f, 6.0f, false,
+                           "Upward speed: a ball above 0.5 m (centre) goes "
+                           "over him."));
     return list;
   }
 
@@ -3051,6 +3064,10 @@ class CollisionDrill final : public Drill
         {"Glancing head-on", "Head-on, the lines 0.35 m apart (of a 0.4 m touch).",
          {{"Run-up (m)", 20.0f}, {"B run-up (m)", 10.0f}, {"B's run against A's (deg)", 180.0f},
           {"Miss by (m)", 0.35f}}},
+        {"Ball into a fallen man", "Head-on sprinters; 2 s on, a ball rolled into A from the side.",
+         {{"Run-up (m)", 30.0f}, {"B run-up (m)", 30.0f}, {"B's run against A's (deg)", 180.0f},
+          {"Ball in after (s)", 2.0f}, {"Ball speed (m/s)", 12.0f}, {"Ball from (deg)", 90.0f},
+          {"Ball lift (m/s)", 0.0f}}},
     };
   }
 
@@ -3102,6 +3119,12 @@ class CollisionDrill final : public Drill
     first.reset();
     ended = false;
     ring = {};
+    wentDown = {};
+    upAt = {};
+    ballFedAt.reset();
+    ballAt = 0;
+    ballOff.reset();
+    ballSpeedBefore = 0.0f;
     weights = {weightOf(engine, aId), weightOf(engine, bId)};
     trailA.clear();
     trailB.clear();
@@ -3140,20 +3163,43 @@ class CollisionDrill final : public Drill
       trailA.push_back(playerA->position);
       trailB.push_back(playerB->position);
     }
-    // A ring round each while he stumbles, by how his last knock was judged.
+    // A ring round each while he stumbles (amber) or is down (red).
     for (std::size_t which = 0; which < 2; ++which)
     {
       const MatchPlayer& player = which == 0 ? *playerA : *playerB;
       at[which] = player.position;
-      if (player.stumbleSeconds <= 0.0f)
-        ring[which] = 0;
-      else
-        for (const MatchEngine::CollisionHit& hit : engine.getLastCollisions())
-          for (const MatchEngine::CollisionSide& side : hit.sides)
-            if (side.player == (which == 0 ? aId : bId) && side.outcome > 0)
-              ring[which] = side.outcome;
+      ring[which] = player.fallen ? 2 : player.stumbleSeconds > 0.0f ? 1 : 0;
+      if (player.fallen) wentDown[which] = true;
+      if (wentDown[which] && !player.fallen && !upAt[which]) upAt[which] = now;
     }
-    ended = (first && now > firstAt + AFTER_SECONDS) || now >= TIME_LIMIT_SECONDS;
+    // The ball at whoever is down (A first), and what it does off him.
+    const MatchBall& ballNow = engine.getBall();
+    const int offCount = engine.getStats().collisionBallOffFallen;
+    if (ballFedAt && !ballOff && offCount > ballOffAtFeed)
+    {
+      ballOff = BallOff{ballNow.deflectedBy && ballNow.deflectedBy->getId() == aId ? 'A' : 'B',
+                        ballSpeedBefore, length2(ballNow.velocity), now - *ballFedAt};
+    }
+    ballSpeedBefore = length2(ballNow.velocity);
+    if (ballDelay > 0.0f && first && !ballFedAt && now >= firstAt + ballDelay)
+    {
+      const MatchPlayer* target = playerA->fallen ? playerA : playerB->fallen ? playerB : nullptr;
+      ballFedAt = now;
+      ballAt = target == playerA ? 1 : target == playerB ? 2 : 0;
+      if (target)
+      {
+        const float radians = ballAngle * PI / 180.0f;
+        const Vector2F from{std::cos(radians), std::sin(radians)};
+        ballOffAtFeed = offCount;
+        engine.feedBall(along(target->position, from, BALL_FROM_METRES),
+                        {-from.x * ballSpeed, -from.y * ballSpeed}, ballLift, 0);
+      }
+    }
+    // On until both are on their feet again (and the ball has had time).
+    const bool bothUp = (!wentDown[0] || upAt[0]) && (!wentDown[1] || upAt[1]);
+    const bool ballDone = ballDelay <= 0.0f || (ballFedAt && now > *ballFedAt + BALL_WATCH_SECONDS);
+    ended = (first && bothUp && ballDone && now > firstAt + AFTER_SECONDS) ||
+            now >= TIME_LIMIT_SECONDS;
     return !ended;
   }
 
@@ -3165,7 +3211,7 @@ class CollisionDrill final : public Drill
     DrillDraw::marker(renderer, draw, MEET, 0.15f, IM_COL32(240, 240, 240, 255));
     if (first)
       DrillDraw::marker(renderer, draw, first->where, 0.2f, IM_COL32(255, 220, 60, 255));
-    // Stumbling: amber; knocked over (a stumble for now): red.
+    // Stumbling: amber; down: red.
     for (std::size_t which = 0; which < 2; ++which)
       if (ring[which] > 0)
         DrillDraw::circle(renderer, draw, at[which], 0.6f, 0,
@@ -3199,9 +3245,28 @@ class CollisionDrill final : public Drill
           "   score {:.0f}% (lines {:.0f}% / {:.0f}%): {}{}{}", side.score * 100.0f,
           side.stumbleLine * 100.0f, side.fallLine * 100.0f, OUTCOMES[side.outcome],
           side.slipped ? ", a stumble that slipped" : "",
-          side.outcome == 0 ? std::format(", pause {:.2f} s", side.pause)
-                            : std::format(" for {:.2f} s", side.stumble)));
+          side.outcome == 0   ? std::format(", pause {:.2f} s", side.pause)
+          : side.outcome == 1 ? std::format(" for {:.2f} s", side.stumble)
+                              : std::string{}));
+      if (side.outcome == 2)
+      {
+        const std::size_t which = id == aId ? 0 : 1;
+        lines.push_back(std::format(
+            "   lies {} his slide{} · {}", side.lyingAcross ? "across" : "along",
+            side.bigHit ? std::format(" · a big hit: down at least {:.1f} s", side.downAtLeast)
+                        : std::string{},
+            upAt[which] ? std::format("up after {:.1f} s", *upAt[which] - firstAt)
+                        : std::string("still down")));
+      }
     }
+    if (ballFedAt)
+      lines.push_back(
+          ballAt == 0 ? std::string("Ball: nobody was down to play it at")
+          : ballOff  ? std::format("Ball at {}: came off him at {:.1f} s, {:.1f} -> {:.1f} m/s",
+                                   ballAt == 1 ? "A" : "B", ballOff->after, ballOff->before,
+                                   ballOff->speed)
+                     : std::format("Ball at {}: did not hit him (over him, or he was up)",
+                                   ballAt == 1 ? "A" : "B"));
     lines.push_back(std::format("Run-ins in all: {} (after the first: driving on "
                                 "into each other)",
                                 hits.size()));
@@ -3230,8 +3295,15 @@ class CollisionDrill final : public Drill
       out.push_back({who + "slipped", side.slipped ? 1.0 : 0.0});
       out.push_back({who + "pause (s)", side.pause});
       out.push_back({who + "stumble (s)", side.stumble});
+      out.push_back({who + "big hit", side.bigHit ? 1.0 : 0.0});
+      out.push_back({who + "lies across", side.outcome == 2 && side.lyingAcross ? 1.0 : 0.0});
+      const std::size_t which = id == aId ? 0 : 1;
+      out.push_back({who + "down (s)", upAt[which] ? *upAt[which] - firstAt : 0.0});
     }
     out.push_back({"Run-ins", static_cast<double>(hits.size())});
+    out.push_back({"Ball off the fallen", ballOff ? 1.0 : 0.0});
+    out.push_back({"Ball speed in (m/s)", ballOff ? ballOff->before : 0.0});
+    out.push_back({"Ball speed off (m/s)", ballOff ? ballOff->speed : 0.0});
     return out;
   }
 
@@ -3246,13 +3318,17 @@ class CollisionDrill final : public Drill
     float agility = 50.0f;
   };
   static constexpr std::array<const char*, 3> OUTCOMES{
-      "kept his feet and balance", "stumbled", "fell (a stumble until falls are built)"};
+      "kept his feet and balance", "stumbled", "fell"};
   static constexpr Vector2F MEET{0.5f, 0.5f};
   /** Each runs on through the meeting point to this far beyond it. */
   static constexpr float BEYOND_METRES = 20.0f;
-  /** The run goes on this long after the first contact. */
+  /** The run goes on at least this long after the first contact, and until
+   * anyone knocked over is up. */
   static constexpr double AFTER_SECONDS = 2.0;
-  static constexpr double TIME_LIMIT_SECONDS = 20.0;
+  static constexpr double TIME_LIMIT_SECONDS = 45.0;
+  /** The ball comes from this far away and is watched this long. */
+  static constexpr float BALL_FROM_METRES = 10.0f;
+  static constexpr double BALL_WATCH_SECONDS = 3.0;
 
   static float length2(Vector2F vector) { return std::hypot(vector.x, vector.y); }
   static float speedBefore(const MatchEngine::CollisionSide& side)
@@ -3323,8 +3399,29 @@ class CollisionDrill final : public Drill
   double firstAt = 0.0;
   bool ended = false;
   std::array<Vector2F, 2> at{};
-  /** 0 no ring; 1 stumbling; 2 knocked over (stumbling until step 4). */
+  /** 0 no ring; 1 stumbling; 2 down. */
   std::array<std::uint8_t, 2> ring{};
+  /** Whether each went down, and when he was up again (drill seconds). */
+  std::array<bool, 2> wentDown{};
+  std::array<std::optional<double>, 2> upAt{};
+  /** The ball: its settings, when it was played and at whom (0 nobody, 1
+   * A, 2 B), and what it did off him. */
+  float ballDelay = 0.0f;
+  float ballSpeed = 12.0f;
+  float ballAngle = 90.0f;
+  float ballLift = 0.0f;
+  std::optional<double> ballFedAt;
+  int ballAt = 0;
+  int ballOffAtFeed = 0;
+  float ballSpeedBefore = 0.0f;
+  struct BallOff
+  {
+    char who = 'A';
+    float before = 0.0f;
+    float speed = 0.0f;
+    double after = 0.0;
+  };
+  std::optional<BallOff> ballOff;
   std::vector<Vector2F> trailA;
   std::vector<Vector2F> trailB;
 };

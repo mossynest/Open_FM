@@ -1853,6 +1853,8 @@ void MatchEngine::updateMovement(float dt)
     if (player.isGoalkeeper &&
         keepers[player.isHomeTeam ? 0 : 1].state == GoalkeeperState::DIVE)
       diveGoalkeeper(player, dt);
+    else if (player.fallen)
+      fallenBinturong(player, dt);
     else if (player.stumbleSeconds > 0.0f)
       stumbleBinturong(player, dt);
     else if (player.collisionPause > 0.0f)
@@ -2013,7 +2015,9 @@ void MatchEngine::updateRestartMovement(float dt)
     player.arriveAtSpeed = false;
     player.facingRequested = false;
     if (&player == taker && restartLineUp) steerRestartLineUp(player, dt);
-    if (player.stumbleSeconds > 0.0f)
+    if (player.fallen)
+      fallenBinturong(player, dt);
+    else if (player.stumbleSeconds > 0.0f)
       stumbleBinturong(player, dt);
     else if (player.collisionPause > 0.0f)
       coastBinturong(player, dt);
@@ -2170,6 +2174,12 @@ void MatchEngine::accumulatePlayerLoad(float dt)
     slots[lane] = static_cast<std::uint8_t>(index);
     fromX[lane] = previous.x;
     fromY[lane] = previous.y;
+    // A slide or roll on the floor is not running.
+    if (player.fallen)
+    {
+      fromX[lane] = player.position.x;
+      fromY[lane] = player.position.y;
+    }
     toX[lane] = player.position.x;
     toY[lane] = player.position.y;
     topSpeed[lane] = player.maxSpeed;
@@ -2332,7 +2342,8 @@ void MatchEngine::resolvePossessionAndActions(float dt)
     const bool sliding = controlInput.action == MatchInputAction::SLIDE_TACKLE;
     if ((sliding || controlInput.action == MatchInputAction::TACKLE) &&
         active(controlled) && controlled.isHomeTeam != carrier->isHomeTeam &&
-        controlled.tackleCooldown <= 0.0f && !controlled.isInjured)
+        controlled.tackleCooldown <= 0.0f && !controlled.isInjured &&
+        !controlled.fallen)
     {
       using D = MatchTuning::Defending;
       const float reach =
@@ -3208,7 +3219,8 @@ void MatchEngine::reportKick(MatchActionRecord& action,
 void MatchEngine::planGoalkeeperDive(bool defendingHome, bool penalty)
 {
   MatchPlayer* keeper = findGoalkeeper(defendingHome);
-  if (!keeper) return;
+  // Down on the floor (a collision), he can't dive.
+  if (!keeper || keeper->fallen) return;
   GoalkeeperControl& control = keepers[defendingHome ? 0 : 1];
   control.state = GoalkeeperState::DIVE;
   control.timer = 0.0f;
@@ -3287,6 +3299,22 @@ void MatchEngine::setBallMotion(const BallMotion& motion)
 
 std::optional<float> MatchEngine::moveBallStretch(float seconds)
 {
+  // A fallen body in the ball's way (collision plan step 6) ends the
+  // stretch where it reaches him: everything else is read up to there, and
+  // if nothing played it first it comes off him and goes on through the
+  // rest of the stretch.
+  const auto body = fallenBodyInPath(seconds);
+  const float share = body ? body->second : 1.0f;
+  if (const std::optional<float> along = moveBallPart(seconds * share))
+    return *along * share;
+  if (!body || state != MatchState::PLAYING || (ball.possessedBy && !ball.inTouch))
+    return std::nullopt;
+  bounceOffFallen(players[body->first]);
+  return share;
+}
+
+std::optional<float> MatchEngine::moveBallPart(float seconds)
+{
   // Where the ball would be by the end of the stretch about to happen: the
   // keeper's plane, the lines and the sweep read the path to there, and a
   // contact on the way is played where the ball reaches it.
@@ -3325,7 +3353,7 @@ std::optional<float> MatchEngine::moveBallStretch(float seconds)
   {
     ball.shotElapsedSeconds += seconds;
     MatchPlayer* keeper = findGoalkeeper(!ball.shotByHome);
-    if (!ball.shotSaveResolved && keeper)
+    if (!ball.shotSaveResolved && keeper && !keeper->fallen)
     {
       // Resolve the save when the ball reaches the keeper's plane.
       const float before = substepBallPosition.x - keeper->position.x;
@@ -3527,7 +3555,9 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
         position.y < boundMinY || position.y > boundMaxY)
       continue;
     // In the air (a jump), only his head plays it (headInSweep).
-    if (!active(player) || player.trapTimer > 0.0f || player.airborne()) continue;
+    if (!active(player) || player.trapTimer > 0.0f || player.airborne() ||
+        player.fallen)
+      continue;
     if (touchOwner)
     {
       // He plays his own ball once collected; in his reach nobody else
@@ -3982,7 +4012,7 @@ bool MatchEngine::resolveAerialContest()
   // A goalkeeper in his own box claims first when he can reach the ball.
   for (auto& player : players)
   {
-    if (!active(player) || !player.isGoalkeeper ||
+    if (!active(player) || !player.isGoalkeeper || player.fallen ||
         (ball.kickerLockout > 0.0f && ball.kicker == player.player) ||
         !inPenaltyArea(player.position, player.isHomeTeam) ||
         distance(player.position, ball.position) >
@@ -4047,7 +4077,7 @@ bool MatchEngine::resolveAerialContest()
   for (auto& player : players)
   {
     if (!active(player) || player.isGoalkeeper || count == candidates.size() ||
-        player.trapTimer > 0.0f ||
+        player.trapTimer > 0.0f || player.fallen ||
         (ball.kickerLockout > 0.0f && ball.kicker == player.player) ||
         (ball.inTouch && ball.possessedBy == player.player))
       continue;
@@ -4194,7 +4224,7 @@ bool MatchEngine::headInSweep()
   {
     const MatchPlayer& player = players[slot];
     // Not his own touched ball (a cushion dropping to him).
-    if (!active(player) || player.isGoalkeeper || player.trapTimer > 0.0f ||
+    if (!active(player) || player.isGoalkeeper || player.trapTimer > 0.0f || player.fallen ||
         (ball.kickerLockout > 0.0f && ball.kicker == player.player) ||
         (ball.inTouch && ball.possessedBy == player.player) ||
         getBody(player.isHomeTeam) != BodyId::BINTURONG)
@@ -6176,6 +6206,10 @@ void MatchEngine::resetPositions()
     player.isPressing = false;
     player.isMakingRun = false;
     player.actionCooldown = 0.0f;
+    // Placed for the kick-off: on his feet.
+    if (player.fallen) standUp(player);
+    player.stumbleSeconds = 0.0f;
+    player.collisionPause = 0.0f;
   }
 }
 

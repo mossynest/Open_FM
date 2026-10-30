@@ -379,6 +379,59 @@ struct MatchTuning final
     static constexpr float STUMBLE_LONGEST_SECONDS = 1.0f;
     /** His recovery steps brake him at this share of his hardest braking. */
     static constexpr float STUMBLE_BRAKING_SHARE = 0.5f;
+
+    // The fall (plan step 4): down, he is the cylinder on its side.
+    /** Knocked mostly forward or back (his slide within this many degrees
+     * of his facing or its back) he lies along his slide; otherwise
+     * across it, rolling along it. */
+    static constexpr float LIE_ALONG_WITHIN_DEGREES = 45.0f;
+    /** Sliding or tumbling, grass slows him at this (m/s²; friction ~0.5-0.6). */
+    static constexpr float FALL_DECELERATION = 5.5f;
+    /** One turn of his body rolls him this far (m): 0.4 m across. */
+    static constexpr float ROLL_METRES_PER_TURN = 1.2566f;
+    /** The chance of a big hit, by the jolt: none at the first, certain at
+     * the second (m/s). Only if he fell. */
+    static constexpr float BIG_HIT_JOLT_FROM = 4.0f;
+    static constexpr float BIG_HIT_JOLT_CERTAIN = 7.0f;
+    /** A big hit keeps him down at least this long (s), from the first
+     * jolt to the second. */
+    static constexpr float BIG_HIT_DOWN_AT_FROM = 5.0f;
+    static constexpr float BIG_HIT_DOWN_AT_CERTAIN = 10.0f;
+    /** Rolling about in pain (big hits, through the least time down): a
+     * roll of a quarter to a full turn, pauses of 1-2 s between, each
+     * roll's chance rising with the jolt over the big-hit range; most go
+     * back the way the last came. */
+    static constexpr float ROLL_SHORTEST_TURNS = 0.25f;
+    static constexpr float ROLL_LONGEST_TURNS = 1.0f;
+    static constexpr float ROLL_PAUSE_SHORTEST_SECONDS = 1.0f;
+    static constexpr float ROLL_PAUSE_LONGEST_SECONDS = 2.0f;
+    static constexpr float ROLL_REVERSE_SHARE = 0.75f;
+    /** How fast he rolls (m/s): about a turn a second (to try). */
+    static constexpr float ROLL_SPEED = 1.25f;
+    /** Getting up once he has stopped (s), from Agility 1 to 99. */
+    static constexpr float GET_UP_SECONDS_AT_AGILITY_1 = 2.0f;
+    static constexpr float GET_UP_SECONDS_AT_AGILITY_99 = 1.0f;
+
+    // Getting up (plan step 5): the brain's call, by urgency.
+    /** He jumps up with the ball this near (m) and a chance to win it back. */
+    static constexpr float GET_UP_BALL_METRES = 15.0f;
+    /** An opponent's ball is contested with a team-mate of his this near it
+     * (m; to try). */
+    static constexpr float CONTESTED_METRES = 3.0f;
+    /** Play runs on this long (s) with him down: he gets up gingerly. */
+    static constexpr float GINGERLY_AFTER_SECONDS = 15.0f;
+    /** Getting up gingerly (and in a stoppage), from Agility 1 to 99 (s). */
+    static constexpr float GINGERLY_SECONDS_AT_AGILITY_1 = 4.0f;
+    static constexpr float GINGERLY_SECONDS_AT_AGILITY_99 = 3.0f;
+
+    // The ball against a fallen body (plan step 6), worked out in the flat.
+    /** The ball reaches him with its centre below this (m): his body lies
+     * 0.4 m high, the ball 0.11 m round. */
+    static constexpr float FALLEN_BALL_BELOW_METRES = 0.5f;
+    /** Off his body: this share of the speed straight into it comes back
+     * (an uncushioned chest; the wall rebound), this share along it is kept. */
+    static constexpr float FALLEN_BOUNCE_BACK_SHARE = 0.35f;
+    static constexpr float FALLEN_ALONG_KEPT_SHARE = 0.8f;
   };
 
   /**

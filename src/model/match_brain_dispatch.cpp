@@ -430,3 +430,15 @@ void MatchEngine::updateRestartSupport(MatchPlayer& player,
   }
   updateRestartSupportAardvark(player, taker);
 }
+
+float MatchEngine::chooseGetUp(const MatchPlayer& player)
+{
+  switch (brainOf(player.isHomeTeam))
+  {
+    case BrainId::AARDVARK:
+      break;
+    case BrainId::BINTURONG:
+      return chooseGetUpBinturong(player);
+  }
+  return chooseGetUpAardvark(player);
+}

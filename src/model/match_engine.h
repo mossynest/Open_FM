@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -17,6 +18,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "global/stats_config.h"
@@ -282,6 +284,49 @@ struct MatchPlayer
    * (s): his recovery steps brake him, his body turns to his movement, and
    * he neither drives nor steers. */
   float stumbleSeconds = 0.0f;
+  /** Collision plan step 4: knocked over, he is down, the cylinder on its
+   * side. He slides to a stop, cannot play the ball or be run into (others
+   * hurdle him), and gets up when the brain says (fallenBinturong). */
+  bool fallen = false;
+  /** While down: the way his body lies (an angle like facingAngle), and
+   * whether that is across his slide (he rolls along it). */
+  float lyingAngle = 0.0f;
+  bool lyingAcross = false;
+  /** Knocked forward against his facing he went down on his front,
+   * back on his back (for a sideways knock, whichever way it leaned). */
+  bool fellOnFront = false;
+  /** While down: how far his body has rolled (m), for its turn. */
+  float rolledMetres = 0.0f;
+  /** How long he has been down (s). */
+  float downSeconds = 0.0f;
+  /** A big hit: the least time he stays down (s; 0 if not one), and the
+   * jolt that put him down (m/s). */
+  float bigHitSeconds = 0.0f;
+  float fallJolt = 0.0f;
+  /** Rolling about in pain: what is left of this roll (s), its way (+1 or
+   * -1 across his body; 0 before the first), and the wait for the next. */
+  float rollSeconds = 0.0f;
+  float rollDirection = 0.0f;
+  float rollPauseSeconds = 0.0f;
+  /** Getting up: under way, and how long it still takes (s). */
+  bool gettingUp = false;
+  float getUpSeconds = 0.0f;
+  float getUpTotalSeconds = 0.0f;
+  /** The way he slid (an angle like facingAngle): he faces it when up. */
+  float slideAngle = 0.0f;
+  /** While down: on his front now (each half turn he rolls turns him over). */
+  /** How far through getting up he is: 0 lying (or not yet started), 1 up. */
+  [[nodiscard]] float getUpShare() const
+  {
+    if (!gettingUp || getUpTotalSeconds <= 0.0f) return 0.0f;
+    return std::clamp(1.0f - getUpSeconds / getUpTotalSeconds, 0.0f, 1.0f);
+  }
+  [[nodiscard]] bool onFront() const
+  {
+    const float turns =
+        rolledMetres / MatchTuning::Collision::ROLL_METRES_PER_TURN + (fellOnFront ? 0.0f : 0.5f);
+    return std::cos(turns * 6.2831853f) > 0.0f;
+  }
   [[nodiscard]] bool airborne() const { return feetHeight > 0.0f || jumpSpeed > 0.0f; }
   bool isPressing = false;
   bool isMakingRun = false;
@@ -904,6 +949,12 @@ struct MatchBall
    * already left too soon on this path. */
   double pathSince = 0.0;
   std::uint32_t commitMisses = 0;
+  /** Collision plan step 6: the fallen player it last bounced off, his last
+   * touch for restarts only (not a pass, possession or a deliberate play);
+   * it stands while the path and last possessor it left are unchanged. */
+  const Player* deflectedBy = nullptr;
+  double deflectedPathSince = 0.0;
+  const Player* deflectedAfter = nullptr;
   /** Players (by slot bit) letting this loose ball come closer before they
    * touch it (first-touch timing). */
   std::uint32_t touchWaiting = 0;
@@ -1053,6 +1104,22 @@ struct MatchStats
    * measure (not how sudden), and those from a jolt under 1 m/s. */
   int collisionKnocksByEndsUp = 0;
   int collisionKnocksSmallJolt = 0;
+  /** Step 4: falls that were big hits, falls that cost him the ball, and
+   * player-seconds spent down (of them, in open play). Step 5: get-ups by
+   * the call that started them (jumped up for the ball, in a stoppage,
+   * gingerly as play ran on, or the fixed get-up of a brain without the
+   * cues), and spells down of 15 s or more. */
+  int collisionBigHits = 0;
+  int collisionFallsLosingBall = 0;
+  float collisionDownSeconds = 0.0f;
+  float collisionDownPlaySeconds = 0.0f;
+  int collisionGetUpsForBall = 0;
+  int collisionGetUpsInStoppage = 0;
+  int collisionGetUpsGingerly = 0;
+  int collisionGetUpsFixed = 0;
+  int collisionDownsFifteen = 0;
+  /** Step 6: times the ball came off a fallen body. */
+  int collisionBallOffFallen = 0;
   /** Tackling plan step 5: steps a defender went into a contest (by his
    * side), those on the carrier's free foot (row 5, a misread), steps he
    * held, and the intents his brain chose. */
@@ -1911,13 +1978,17 @@ class MatchEngine
     float score = 0.0f;
     float stumbleLine = 0.0f;
     float fallLine = 0.0f;
-    /** 0 kept his feet and balance, 1 stumbled, 2 fell (until step 4 of
-     * the plan a fall is played as his longest stumble); and whether a
+    /** 0 kept his feet and balance, 1 stumbled, 2 fell; and whether a
      * stumble slipped into the fall. */
     std::uint8_t outcome = 0;
     bool slipped = false;
-    /** His stumble's length (s), if he stumbled or fell. */
+    /** His stumble's length (s), if he stumbled. */
     float stumble = 0.0f;
+    /** If he fell: whether a big hit, the least time it keeps him down (s),
+     * and whether he lies across his slide. */
+    bool bigHit = false;
+    float downAtLeast = 0.0f;
+    bool lyingAcross = false;
   };
   /** One run-in: when in the step (s), where (pitch), and both sides. */
   struct CollisionHit
@@ -2523,6 +2594,9 @@ class MatchEngine
    * keeper's plane, out of play, the sweep); the share of it travelled
    * when a contact was played part way, if one was. */
   std::optional<float> moveBallStretch(float seconds);
+  /** The stretch up to a fallen body in the way, or all of it (the old
+   * stretch: keeper's plane, out of play, the sweep). */
+  std::optional<float> moveBallPart(float seconds);
   float homeFamiliarity = 1.0f;
   float awayFamiliarity = 1.0f;
   struct ShoutState
@@ -3307,6 +3381,24 @@ class MatchEngine
    * set): kept his feet and balance (a pause), a stumble, or a fall;
    * `remaining` is what is left of the step after the contact. */
   void judgeKnock(MatchPlayer& player, CollisionSide& side, float remaining);
+  /** Step 6: the first fallen body the ball's straight path over the next
+   * `seconds` meets low enough to hit: its slot and where along (0-1). */
+  std::optional<std::pair<std::size_t, float>> fallenBodyInPath(float seconds) const;
+  /** Step 6: the ball, at that body, comes off it (35% back off the
+   * surface, 80% along it kept). */
+  void bounceOffFallen(MatchPlayer& player);
+  /** Who last touched the ball for a restart: a fallen body it bounced off
+   * since, else its last possessor. */
+  const Player* lastTouchForRestart() const;
+  /** Step 4: puts him down from a knock judged a fall (the big hit, which
+   * way he lies; a ball he had runs on loose). */
+  void knockOver(MatchPlayer& player, CollisionSide& side);
+  /** Back on his feet: standing still, facing the way he slid. */
+  void standUp(MatchPlayer& player);
+  /** Step 5: whether a fallen player, stopped and past a big hit's least
+   * time down, starts getting up now; how long it takes (s), else 0 (the
+   * side's brain). */
+  float chooseGetUp(const MatchPlayer& player);
   Vector2F goalkeeperTarget(MatchPlayer& keeper, const MatchPlayer* carrier);
   void diveGoalkeeper(MatchPlayer& keeper, float dt);
   void planGoalkeeperDive(bool defendingHome, bool penalty);

@@ -87,4 +87,6 @@
   /** Presser's lateral shade onto the carrier's stronger side (normalised
    * y; 0 without a weaker-foot order). */
   float weakFootShadeAardvark(const MatchPlayer& carrier) const;
+  /** Collision plan step 4: no get-up cues; up at once, by Agility. */
+  float chooseGetUpAardvark(const MatchPlayer& player);
 // clang-format on

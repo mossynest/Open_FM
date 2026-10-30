@@ -1162,6 +1162,98 @@ void MatchEngine::stumbleBinturong(MatchPlayer& player, float dt)
   player.stumbleSeconds = std::max(0.0f, player.stumbleSeconds - dt);
 }
 
+void MatchEngine::fallenBinturong(MatchPlayer& player, float dt)
+{
+  using C = MatchTuning::Collision;
+  using Pitch = MatchTuning::Pitch;
+  player.downSeconds += dt;
+  stats.collisionDownSeconds += dt;
+  if (state == MatchState::PLAYING) stats.collisionDownPlaySeconds += dt;
+  const auto moveBy = [&player](Vector2F metres)
+  {
+    const Vector2F moved = toPitch(metres);
+    player.position = {
+        std::clamp(player.position.x + moved.x, Pitch::PLAYER_MIN_X, Pitch::PLAYER_MAX_X),
+        std::clamp(player.position.y + moved.y, Pitch::PLAYER_MIN_Y, Pitch::PLAYER_MAX_Y)};
+  };
+  // Sliding or tumbling on: the grass slows him to a stop.
+  const float speed = length(player.velocity);
+  if (speed > EPSILON)
+  {
+    const float slowed = std::max(0.0f, speed - C::FALL_DECELERATION * dt);
+    const float scale = slowed / speed;
+    const Vector2F before = player.velocity;
+    player.velocity = {before.x * scale, before.y * scale};
+    // Exact for a steady slowing that stops within the step.
+    const float travelled = slowed > 0.0f
+                                ? 0.5f * (speed + slowed) * dt
+                                : speed * speed / (2.0f * C::FALL_DECELERATION);
+    moveBy({before.x / speed * travelled, before.y / speed * travelled});
+    if (player.lyingAcross) player.rolledMetres += travelled;
+    return;
+  }
+  player.velocity = {0.0f, 0.0f};
+
+  // Rolling about in pain: through a big hit's least time down, a roll now
+  // and then, mostly back the way the last one came.
+  if (player.rollSeconds > 0.0f)
+  {
+    const float rolling = std::min(player.rollSeconds, dt);
+    // Across his body: a quarter turn from the way he lies.
+    const Vector2F along{std::cos(player.lyingAngle) * Pitch::LENGTH_METRES,
+                         std::sin(player.lyingAngle) * Pitch::WIDTH_METRES};
+    const float alongLength = std::max(length(along), EPSILON);
+    const Vector2F across{-along.y / alongLength, along.x / alongLength};
+    const float metres = C::ROLL_SPEED * rolling * player.rollDirection;
+    moveBy({across.x * metres, across.y * metres});
+    player.rolledMetres += metres;
+    player.rollSeconds -= rolling;
+    if (player.rollSeconds <= 0.0f)
+      player.rollPauseSeconds =
+          randomFloat(C::ROLL_PAUSE_SHORTEST_SECONDS, C::ROLL_PAUSE_LONGEST_SECONDS);
+    return;
+  }
+  if (player.downSeconds < player.bigHitSeconds)
+  {
+    player.rollPauseSeconds -= dt;
+    if (player.rollPauseSeconds > 0.0f) return;
+    const float chance =
+        std::clamp((player.fallJolt - C::BIG_HIT_JOLT_FROM) /
+                       (C::BIG_HIT_JOLT_CERTAIN - C::BIG_HIT_JOLT_FROM),
+                   0.0f, 1.0f);
+    if (randomFloat(0.0f, 1.0f) < chance)
+    {
+      const float turns = randomFloat(C::ROLL_SHORTEST_TURNS, C::ROLL_LONGEST_TURNS);
+      player.rollSeconds = turns * C::ROLL_METRES_PER_TURN / C::ROLL_SPEED;
+      player.rollDirection =
+          player.rollDirection == 0.0f
+              ? (randomFloat(0.0f, 1.0f) < 0.5f ? 1.0f : -1.0f)
+              : (randomFloat(0.0f, 1.0f) < C::ROLL_REVERSE_SHARE ? -player.rollDirection
+                                                                  : player.rollDirection);
+    }
+    else
+    {
+      player.rollPauseSeconds =
+          randomFloat(C::ROLL_PAUSE_SHORTEST_SECONDS, C::ROLL_PAUSE_LONGEST_SECONDS);
+    }
+    return;
+  }
+
+  // Stopped, and past a big hit's least time: up when his brain says.
+  if (!player.gettingUp)
+  {
+    const float seconds = chooseGetUp(player);
+    if (seconds <= 0.0f) return;
+    player.gettingUp = true;
+    player.getUpSeconds = seconds;
+    player.getUpTotalSeconds = seconds;
+  }
+  player.getUpSeconds -= dt;
+  if (player.getUpSeconds > 0.0f) return;
+  if (player.downSeconds >= C::GINGERLY_AFTER_SECONDS) ++stats.collisionDownsFifteen;
+  standUp(player);
+}
+
 FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     const std::uint8_t* slots, std::size_t count, float dt, bool walking)
 {
@@ -4842,7 +4934,7 @@ void MatchEngine::stepJumpBinturong(MatchPlayer& player, float dt,
   }
   player.landingSeconds = std::max(player.landingSeconds - dt, 0.0f);
   if (path.empty() || player.landingSeconds > 0.0f || player.isGoalkeeper ||
-      player.trapTimer > 0.0f || !active(player) ||
+      player.trapTimer > 0.0f || !active(player) || player.fallen ||
       (ball.kickerLockout > 0.0f && ball.kicker == player.player) ||
       (ball.inTouch && ball.possessedBy == player.player))
     return;
@@ -5074,7 +5166,7 @@ void MatchEngine::takeDirectFreeKickBinturong(MatchPlayer& taker)
     for (auto& player : players)
     {
       if (!active(player) || player.isHomeTeam == taker.isHomeTeam ||
-          player.isGoalkeeper)
+          player.isGoalkeeper || player.fallen)
         continue;
       const float d = distance(player.position, ball.position);
       if (d < best)

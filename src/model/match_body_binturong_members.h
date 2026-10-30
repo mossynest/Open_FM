@@ -48,6 +48,10 @@
    * (a share of his hardest braking) and his body turns to his movement at
    * his normal rate; no drive, no steering. */
   void stumbleBinturong(MatchPlayer& player, float dt);
+  /** Collision plan step 4: a fallen player slides or tumbles to a stop,
+   * rolls about in pain through a big hit's least time down, then gets up
+   * when his brain says (chooseGetUp), facing the way he slid. */
+  void fallenBinturong(MatchPlayer& player, float dt);
   float executionErrorScaleBinturong(const MatchPlayer& player) const;
   /** Moves the dribbled ball with its carrier; false if a heavy touch lost it.
    */
