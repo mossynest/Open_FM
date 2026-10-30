@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <format>
 
 #include "gui/widgets/theme.h"
@@ -894,8 +895,17 @@ class LapsDrill final : public TrainingDrill
       if (!player) continue;
       const Vector2F at = player->position;
       runner.metres += metresBetween(runner.previous, at);
+      const Vector2F from = runner.previous;
       runner.previous = at;
-      if (routes(engine, *player))
+      if (routes(engine, *player) && passedCorner(runner, from, at))
+      {
+        // Round the corner (across the line from its cone to its flag),
+        // whatever his route says: the plan moves on, as the slalom's
+        // gates move its plan on.
+        runner.next = (runner.next + 1) % 4;
+        planLap(engine, runner);
+      }
+      else if (routes(engine, *player))
       {
         // As his body moves on from a corner (heading for a later one: his
         // next waypoint, or with none left his target), the plan moves on
@@ -1065,12 +1075,27 @@ class LapsDrill final : public TrainingDrill
 
   /** His plan, as a brain would make it: round the next two corners as
    * waypoints, on to the one after; his line through each corner point (a
-   * metre outside its cone), with room outside to widen the turn. */
+   * metre outside its cone), with room outside to widen the turn. He runs
+   * on through that last one (it is not where he stops). */
+  /** Whether his move from `from` to `to` took him round corner
+   * `runner.next`: across the line from its cone out to its flag, going
+   * on (the way through the corner, between its legs). */
+  [[nodiscard]] bool passedCorner(const Runner& runner, Vector2F from, Vector2F to) const
+  {
+    const std::size_t corner = runner.next;
+    const Vector2F in = directionBetween(corners[(corner + 3) % 4], corners[corner]);
+    const Vector2F out = directionBetween(corners[corner], corners[(corner + 1) % 4]);
+    const float size = std::hypot(in.x + out.x, in.y + out.y);
+    if (size < 1e-6f) return false;
+    const Vector2F way{(in.x + out.x) / size, (in.y + out.y) / size};
+    return crossingShare(from, to, cones[corner], way).has_value();
+  }
+
   void planLap(MatchEngine& engine, const Runner& runner) const
   {
     engine.setDrillTarget(runner.id, corners[(runner.next + 2) % 4], true,
                           {corners[runner.next], corners[(runner.next + 1) % 4]},
-                          0.0f, LAP_OUTWARD_ROOM_METRES);
+                          0.0f, LAP_OUTWARD_ROOM_METRES, std::nullopt, true);
   }
 
   /**
@@ -1213,4 +1238,98 @@ const std::vector<TrainingSessionInfo>& trainingSessions()
        "floor.",
        &makeRunningSession}};
   return sessions;
+}
+
+// --- Laps trace (diagnostic) -----------------------------------------------
+
+int runLapsTrace(const std::vector<TrainingPlayer>& squad, const StatsConfig& config,
+                 double seconds, const std::string& follow)
+{
+  using MatchEngineInternal::length;
+  std::unique_ptr<TrainingSession> session = trainingSessions()[0].make(squad);
+  TrainingDrill& laps = *session->drills[2];
+  std::unique_ptr<DrillRun> run =
+      startTrainingRun(laps, config, BrainId::BINTURONG, BodyId::BINTURONG);
+  MatchEngine& engine = run->engine();
+  const auto nameOf = [](const MatchPlayer& player)
+  { return player.player ? player.player->getName() : std::string("?"); };
+  const auto& players = engine.getPlayers();
+  std::vector<int> overtaking(players.size(), -1);
+  std::vector<bool> slow(players.size(), false);
+  const double step = MatchTuning::Timing::FIXED_STEP_SECONDS;
+  double now = 0.0;
+  while (now < seconds && run->step())
+  {
+    now += step;
+    for (const MatchEngine::CollisionHit& hit : engine.getLastCollisions())
+    {
+      std::string who[2];
+      for (std::size_t side = 0; side < 2; ++side)
+        for (const MatchPlayer& player : players)
+          if (player.player && player.player->getId() == hit.sides[side].player)
+            who[side] = nameOf(player);
+      std::printf("%6.1f  RUN-IN %s / %s  jolt %.2f / %.2f  outcome %d / %d\n", now,
+                  who[0].c_str(), who[1].c_str(), length(hit.sides[0].jolt),
+                  length(hit.sides[1].jolt), hit.sides[0].outcome, hit.sides[1].outcome);
+    }
+    for (std::size_t index = 0; index < players.size(); ++index)
+    {
+      const MatchPlayer& player = players[index];
+      if (!MatchEngineInternal::active(player)) continue;
+      const float speed = length(player.velocity);
+      const auto describe = [&]()
+      {
+        const Vector2F at = player.position;
+        const auto metres = [&](Vector2F to)
+        {
+          return std::hypot((to.x - at.x) * MatchTuning::Pitch::LENGTH_METRES,
+                            (to.y - at.y) * MatchTuning::Pitch::WIDTH_METRES);
+        };
+        return std::format(
+            "at ({:.1f},{:.1f}) m speed {:.2f} · route {} next {:.1f} m then {:.1f} m · "
+            "target {:.1f} m · pause {:.2f} stumble {:.2f} fallen {} · stamina {:.2f}",
+            at.x * MatchTuning::Pitch::LENGTH_METRES, at.y * MatchTuning::Pitch::WIDTH_METRES,
+            speed, player.routeWaypoints, metres(player.movementTarget),
+            metres(player.nextTarget), metres(player.tacticalTarget),
+            player.collisionPause, player.stumbleSeconds, player.fallen, player.stamina);
+      };
+      // The player followed: his route every half second.
+      if (!follow.empty() && nameOf(player).find(follow) != std::string::npos &&
+          std::fmod(now + 1e-6, 0.5) < step)
+        std::printf("%6.1f  [%s] vel (%.2f,%.2f) movT (%.1f,%.1f) nextT (%.1f,%.1f) tacT (%.1f,%.1f) wp %d apex %.2f room %.2f intent %d ovt %d %s\n",
+                    now, follow.c_str(), player.velocity.x, player.velocity.y,
+                    player.movementTarget.x * MatchTuning::Pitch::LENGTH_METRES,
+                    player.movementTarget.y * MatchTuning::Pitch::WIDTH_METRES,
+                    player.nextTarget.x * MatchTuning::Pitch::LENGTH_METRES,
+                    player.nextTarget.y * MatchTuning::Pitch::WIDTH_METRES,
+                    player.tacticalTarget.x * MatchTuning::Pitch::LENGTH_METRES,
+                    player.tacticalTarget.y * MatchTuning::Pitch::WIDTH_METRES,
+                    player.routeWaypoints, player.routeApexOffset, player.routeOutwardRoom,
+                    static_cast<int>(player.intent), player.overtaking, describe().c_str());
+      if (player.overtaking != overtaking[index])
+      {
+        if (player.overtaking >= 0)
+        {
+          const MatchPlayer& leader = players[static_cast<std::size_t>(player.overtaking)];
+          std::printf("%6.1f  %s OVERTAKES %s (side %+d, leader %.2f m/s) %s\n", now,
+                      nameOf(player).c_str(), nameOf(leader).c_str(), player.overtakeSide,
+                      length(leader.velocity), describe().c_str());
+        }
+        else
+        {
+          std::printf("%6.1f  %s overtake off  %s\n", now, nameOf(player).c_str(),
+                      describe().c_str());
+        }
+        overtaking[index] = player.overtaking;
+      }
+      const bool nowSlow = now > 4.0 && speed < 2.0f && player.stamina > 0.05f;
+      if (nowSlow != slow[index])
+      {
+        std::printf("%6.1f  %s %s  %s\n", now, nameOf(player).c_str(),
+                    nowSlow ? "SLOWS" : "going again", describe().c_str());
+        slow[index] = nowSlow;
+      }
+    }
+  }
+  return 0;
 }

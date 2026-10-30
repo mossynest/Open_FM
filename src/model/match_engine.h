@@ -226,6 +226,10 @@ struct MatchPlayer
    * tie (movement targets plan 4a). */
   std::int8_t overtaking = -1;
   std::int8_t overtakeSide = 0;
+  /** Collision plan: the player he last ran into (slot, -1: none) and when
+   * (engine seconds). */
+  std::int8_t lastContactSlot = -1;
+  double lastContactAt = -1.0e9;
   /** A body orientation asked of him (orientation plan, stage 1), as an
    * angle like facingAngle (normalised pitch space): his body turns to it
    * and he moves forward, sideways or backward relative to it. Without one
@@ -1120,6 +1124,16 @@ struct MatchStats
   int collisionDownsFifteen = 0;
   /** Step 6: times the ball came off a fallen body. */
   int collisionBallOffFallen = 0;
+  /** Stumbles and falls by the situation they came from (the knocked
+   * player's view; the first that fits): 0 a re-hit (the same pair within
+   * 1 s), 1 both at the ball (within 2 m of the contact), 2 his run aimed
+   * at the other (his target within 1.5 m of him), 3 an overtake of the
+   * other under way, 4 a race to the same spot, the same way, not being
+   * overtaken, 5 either standing or slow (under 1 m/s), 6 paths
+   * crossing or head-on (over 45 degrees apart), 7 anything else; and by
+   * the knocked player's intent. */
+  std::array<int, 8> collisionKnocksBySituation{};
+  std::array<int, PLAYER_INTENT_COUNT> collisionKnocksByIntent{};
   /** Tackling plan step 5: steps a defender went into a contest (by his
    * side), those on the carrier's free foot (row 5, a misread), steps he
    * held, and the intents his brain chose. */
@@ -3381,6 +3395,10 @@ class MatchEngine
    * set): kept his feet and balance (a pause), a stumble, or a fall;
    * `remaining` is what is left of the step after the contact. */
   void judgeKnock(MatchPlayer& player, CollisionSide& side, float remaining);
+  /** Which situation a knock came from (MatchStats::collisionKnocksBySituation),
+   * from `player`'s view: their velocities before it and when (s). */
+  std::size_t knockSituation(std::size_t slot, std::size_t otherSlot, Vector2F before,
+                             Vector2F otherBefore, Vector2F where, double at) const;
   /** Step 6: the first fallen body the ball's straight path over the next
    * `seconds` meets low enough to hit: its slot and where along (0-1). */
   std::optional<std::pair<std::size_t, float>> fallenBodyInPath(float seconds) const;

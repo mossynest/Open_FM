@@ -181,6 +181,10 @@ struct MatchSample
   int collision_downs_fifteen = 0;
   /** Step 6: times the ball came off a fallen body. */
   int collision_ball_off_fallen = 0;
+  /** Stumbles and falls by situation and by the knocked player's intent
+   * (MatchStats::collisionKnocksBySituation, collisionKnocksByIntent). */
+  std::array<int, 8> collision_knocks_by_situation{};
+  std::array<int, PLAYER_INTENT_COUNT> collision_knocks_by_intent{};
   std::array<int, 2> keeper_claim_attempts{};
   std::array<int, 2> keeper_claims{};
   /** Aerial duels with both sides involved, and those the home side won. */

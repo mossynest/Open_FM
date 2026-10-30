@@ -63,6 +63,7 @@
 #include "tools/match_sandbox_scene.h"
 #include "tools/match_sandbox_setup.h"
 #include "tools/match_sandbox_test_teams.h"
+#include "tools/match_sandbox_training.h"
 
 namespace
 {
@@ -88,6 +89,8 @@ int main(int argc, char* argv[])
   std::uint64_t worldSeed = DEFAULT_WORLD_SEED;
   std::optional<int> checkMatches;
   bool kickOff = false;
+  std::optional<double> traceLapsSeconds;
+  std::string traceLapsFollow;
   std::string drill;
   int drillView = 0;
   std::optional<std::vector<std::string>> shotMapArguments;
@@ -228,6 +231,12 @@ int main(int argc, char* argv[])
       while (++index < argc) measureArguments.emplace_back(argv[index]);
       break;
     }
+    else if (argument == "--trace-laps" && index + 1 < argc)
+    {
+      traceLapsSeconds = std::stod(argv[++index]);
+      if (index + 1 < argc && argv[index + 1][0] != '-') traceLapsFollow = argv[++index];
+      continue;
+    }
     else if (argument == "--kick-off")
     {
       kickOff = true;
@@ -256,7 +265,7 @@ int main(int argc, char* argv[])
            " [--handshake H] [--referee R] [--managers HOME,AWAY] [--ball B]"
            " [--out-of-play O]"
            " [--home-advantage X] [--kick-off] [--drill NAME]"
-           " [--check [MATCHES]]\n"
+           " [--check [MATCHES]] [--trace-laps SECONDS [PLAYER]]\n"
            "  (--brains, --bodies, --managers: aardvark or binturong per side, "
            "one name for both; before --measure or --shot-map)\n"
            "  (--referee: aardvark (default) or binturong; --ball: "
@@ -310,6 +319,20 @@ int main(int argc, char* argv[])
     // the two engines meet on equal players. The headless commands above
     // keep the plain world and Aardvark for both.
     addSandboxTestTeams(*controller.getGameData());
+    if (traceLapsSeconds)
+    {
+      // Diagnostic: Team Tiered's laps, headless.
+      std::vector<TrainingPlayer> trainees;
+      for (const auto& team : controller.getTeams())
+        if (team.get().getName() == "Team Tiered")
+          for (const auto& player : controller.getPlayersForTeam(team.get().getId()))
+            if (trainees.size() < TrainingDrill::MAX_PLAYERS)
+              trainees.push_back({player.get().getName(), player.get().getRole(),
+                                  player.get().getStats(), player.get().getHeight(),
+                                  player.get().getFoot()});
+      return runLapsTrace(trainees, controller.getStatsConfig(), *traceLapsSeconds,
+                          traceLapsFollow);
+    }
     if (!brainsGiven) sandboxBrains() = {BrainId::BINTURONG, BrainId::AARDVARK};
     if (!bodiesGiven) sandboxBodies() = {BodyId::BINTURONG, BodyId::AARDVARK};
     GUIView view(controller);

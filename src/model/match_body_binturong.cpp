@@ -106,7 +106,8 @@ Vector2F unitOf(Vector2F vector)
 // is no turn; a sharp reversal (or a leg of no length) is a stop on the
 // spot. Where its curve would run the length of a leg's half (no straight
 // before the next turn's), it is joined: two arcs meeting at the apex, each
-// from the middle of a leg, where the curve before or after it takes over.
+// from half the shorter leg out along its leg (the middle of a slalom's
+// alike legs, where the curve before or after it takes over).
 struct Turn
 {
   bool straight = false;
@@ -197,8 +198,15 @@ Turn turnThrough(Vector2F from, Vector2F waypoint, Vector2F to,
       const float along = offset.x * way.x + offset.y * way.y;
       return across > 1e-3f ? (along * along + across * across) / (2.0f * across) : 0.0f;
     };
-    const Vector2F entry{waypoint.x - in.x * 0.5f, waypoint.y - in.y * 0.5f};
-    const Vector2F end{waypoint.x + out.x * 0.5f, waypoint.y + out.y * 0.5f};
+    // Both ends half the shorter leg from the corner: the curve is only
+    // squeezed by the shorter one (a slalom's legs are alike), and a long
+    // leg is left straight, not curved down to its middle (from a start
+    // just short of a corner, that curve swung far wide of the line).
+    const float reach = 0.5f * std::min(inLength, outLength);
+    const Vector2F entry{waypoint.x - in.x / inLength * reach,
+                         waypoint.y - in.y / inLength * reach};
+    const Vector2F end{waypoint.x + out.x / outLength * reach,
+                       waypoint.y + out.y / outLength * reach};
     const float radiusIn = arcTo(entry);
     const float radiusOut = arcTo(end);
     if (radiusIn >= 0.05f && radiusOut >= 0.05f)
@@ -213,7 +221,7 @@ Turn turnThrough(Vector2F from, Vector2F waypoint, Vector2F to,
       turn.way = way;
       turn.entry = entry;
       turn.end = end;
-      turn.lead = 0.5f * inLength;
+      turn.lead = reach;
       return turn;
     }
   }

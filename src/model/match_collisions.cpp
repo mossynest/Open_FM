@@ -381,6 +381,24 @@ void MatchEngine::collidePlayers(float dt)
                                            C::SUDDEN_WINDOW_SECONDS,
                                        EPSILON);
         judgeKnock(player, entry, dt - now);
+        if (entry.outcome > 0)
+        {
+          const std::size_t otherSide = 1 - side;
+          const Vector2F before{entry.after.x - entry.jolt.x, entry.after.y - entry.jolt.y};
+          const Vector2F otherAfter = paths[indices[otherSide]].velocity;
+          const Vector2F otherBefore{otherAfter.x - jolts[otherSide].x,
+                                     otherAfter.y - jolts[otherSide].y};
+          ++stats.collisionKnocksBySituation[knockSituation(
+              indices[side], indices[otherSide], before, otherBefore,
+              scaled(add(oneAt, twoAt), 0.5f), getSimulatedSeconds() + now)];
+          ++stats.collisionKnocksByIntent[static_cast<std::size_t>(player.intent)];
+        }
+      }
+      // Who ran into whom, and when: a re-hit is read against it.
+      for (std::size_t side = 0; side < 2; ++side)
+      {
+        players[indices[side]].lastContactSlot = static_cast<std::int8_t>(indices[1 - side]);
+        players[indices[side]].lastContactAt = getSimulatedSeconds() + now;
       }
       lastCollisions.push_back(record);
       ++stats.collisions;
@@ -582,4 +600,35 @@ const Player* MatchEngine::lastTouchForRestart() const
       ball.lastPossessor == ball.deflectedAfter)
     return ball.deflectedBy;
   return ball.lastPossessor;
+}
+
+std::size_t MatchEngine::knockSituation(std::size_t slot, std::size_t otherSlot,
+                                        Vector2F before, Vector2F otherBefore,
+                                        Vector2F where, double at) const
+{
+  // Constants of the breakdown only (a measure, not a rule).
+  constexpr double REHIT_SECONDS = 1.0;
+  constexpr float BALL_METRES = 2.0f;
+  constexpr float AIMED_METRES = 1.5f;
+  constexpr float SAME_TARGET_METRES = 2.0f;
+  constexpr float SAME_WAY_COSINE = 0.7071f;
+  constexpr float SLOW_SPEED = 1.0f;
+  const MatchPlayer& player = players[slot];
+  const MatchPlayer& other = players[otherSlot];
+  if (player.lastContactSlot == static_cast<std::int8_t>(otherSlot) &&
+      at - player.lastContactAt <= REHIT_SECONDS)
+    return 0;
+  const Vector2F ballAt = toMetres(ball.position);
+  if (length({ballAt.x - where.x, ballAt.y - where.y}) <= BALL_METRES) return 1;
+  if (distance(player.tacticalTarget, other.position) <= AIMED_METRES) return 2;
+  if (player.overtaking == static_cast<std::int8_t>(otherSlot)) return 3;
+  const float speed = length(before);
+  const float otherSpeed = length(otherBefore);
+  const bool sameWay = speed > EPSILON && otherSpeed > EPSILON &&
+                       dot(before, otherBefore) / (speed * otherSpeed) >= SAME_WAY_COSINE;
+  if (sameWay && distance(player.tacticalTarget, other.tacticalTarget) <= SAME_TARGET_METRES)
+    return 4;
+  if (speed < SLOW_SPEED || otherSpeed < SLOW_SPEED) return 5;
+  if (!sameWay) return 6;
+  return 7;
 }

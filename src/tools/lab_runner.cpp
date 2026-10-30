@@ -217,6 +217,8 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
   sample.collision_get_ups_fixed = stats.collisionGetUpsFixed;
   sample.collision_downs_fifteen = stats.collisionDownsFifteen;
   sample.collision_ball_off_fallen = stats.collisionBallOffFallen;
+  sample.collision_knocks_by_situation = stats.collisionKnocksBySituation;
+  sample.collision_knocks_by_intent = stats.collisionKnocksByIntent;
   sample.tackle_duels_won = {stats.homeTackleDuelsWon,
                              stats.awayTackleDuelsWon};
   sample.free_ball_tackles = {stats.homeFreeBallTackles,
@@ -830,6 +832,17 @@ std::map<std::string, Estimate> matchMetrics(
   perMatch("collision_get_ups_fixed_per_match", &MatchSample::collision_get_ups_fixed);
   perMatch("collision_downs_fifteen_per_match", &MatchSample::collision_downs_fifteen);
   perMatch("collision_ball_off_fallen_per_match", &MatchSample::collision_ball_off_fallen);
+  for (std::size_t index = 0; index < 8; ++index)
+    metrics[std::format("collision_knocks_situation_{}_share", index)] = ratioEstimate(
+        column([index](const MatchSample& s)
+               { return static_cast<double>(s.collision_knocks_by_situation[index]); }),
+        knocks);
+  for (std::size_t index = 0; index < PLAYER_INTENT_COUNT; ++index)
+    metrics[std::format("collision_knocks_intent_{}_share",
+                        MatchEngineInternal::intentName(static_cast<PlayerIntent>(index)))] =
+        ratioEstimate(column([index](const MatchSample& s)
+                             { return static_cast<double>(s.collision_knocks_by_intent[index]); }),
+                      knocks);
   metrics["collision_down_seconds_per_fall"] = ratioEstimate(
       column([](const MatchSample& s) { return s.collision_down_seconds; }),
       column([](const MatchSample& s) { return static_cast<double>(s.collision_falls); }));

@@ -115,3 +115,10 @@ struct TrainingSessionInfo
   std::unique_ptr<TrainingSession> (*make)(std::vector<TrainingPlayer> squad);
 };
 const std::vector<TrainingSessionInfo>& trainingSessions();
+
+/** Diagnostic (match_sandbox --trace-laps SECONDS [PLAYER]): runs the Running
+ * session's laps for `squad` headless (the Binturong brain and body) and
+ * prints overtakes, slow-downs and run-ins; with `follow`, the route of
+ * each player whose name contains it, every half second. */
+int runLapsTrace(const std::vector<TrainingPlayer>& squad, const StatsConfig& config,
+                 double seconds, const std::string& follow = {});
