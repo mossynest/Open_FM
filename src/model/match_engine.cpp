@@ -1853,6 +1853,8 @@ void MatchEngine::updateMovement(float dt)
     if (player.isGoalkeeper &&
         keepers[player.isHomeTeam ? 0 : 1].state == GoalkeeperState::DIVE)
       diveGoalkeeper(player, dt);
+    else if (player.stumbleSeconds > 0.0f)
+      stumbleBinturong(player, dt);
     else if (player.collisionPause > 0.0f)
       coastBinturong(player, dt);
     else if (controlledIndex && slot == *controlledIndex)
@@ -2011,7 +2013,9 @@ void MatchEngine::updateRestartMovement(float dt)
     player.arriveAtSpeed = false;
     player.facingRequested = false;
     if (&player == taker && restartLineUp) steerRestartLineUp(player, dt);
-    if (player.collisionPause > 0.0f)
+    if (player.stumbleSeconds > 0.0f)
+      stumbleBinturong(player, dt);
+    else if (player.collisionPause > 0.0f)
       coastBinturong(player, dt);
     else
       batch[batched++] = static_cast<std::uint8_t>(slot);

@@ -480,6 +480,9 @@ void DebugInspector::renderPlayer(const SandboxRecorder& recorder,
     flag(slot->isTrapping, "controlling the ball");
     flag(slot->isDiving, "diving");
     flag(slot->isInjured, "injured");
+    flag(slot->stumbleSeconds > 0.0f, "stumbling");
+    flag(slot->collisionPause > 0.0f && slot->stumbleSeconds <= 0.0f,
+         "knocked (paused)");
     flag(engine.getControlledPlayer() == inspected, "human-controlled");
     property("State", flagsText.empty() ? std::string("-") : flagsText);
     property("Engine attributes",

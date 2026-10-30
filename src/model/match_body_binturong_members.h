@@ -44,6 +44,10 @@
   /** Collision plan: a player in his collision pause neither drives, steers
    * nor brakes; he keeps his velocity, slowing gently. */
   void coastBinturong(MatchPlayer& player, float dt);
+  /** Collision plan step 3: a stumbling player's recovery steps brake him
+   * (a share of his hardest braking) and his body turns to his movement at
+   * his normal rate; no drive, no steering. */
+  void stumbleBinturong(MatchPlayer& player, float dt);
   float executionErrorScaleBinturong(const MatchPlayer& player) const;
   /** Moves the dribbled ball with its carrier; false if a heavy touch lost it.
    */

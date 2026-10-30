@@ -202,6 +202,11 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
   sample.collisions = stats.collisions;
   sample.collisions_jolt_two = stats.collisionsJoltTwo;
   sample.collisions_jolt_four = stats.collisionsJoltFour;
+  sample.collision_stumbles = stats.collisionStumbles;
+  sample.collision_falls = stats.collisionFalls;
+  sample.collision_slips = stats.collisionSlips;
+  sample.collision_knocks_by_ends_up = stats.collisionKnocksByEndsUp;
+  sample.collision_knocks_small_jolt = stats.collisionKnocksSmallJolt;
   sample.tackle_duels_won = {stats.homeTackleDuelsWon,
                              stats.awayTackleDuelsWon};
   sample.free_ball_tackles = {stats.homeFreeBallTackles,
@@ -790,6 +795,20 @@ std::map<std::string, Estimate> matchMetrics(
       [](const MatchSample& s) { return static_cast<double>(s.collisions_jolt_two); }));
   metrics["collisions_jolt_four_per_match"] = meanEstimate(column(
       [](const MatchSample& s) { return static_cast<double>(s.collisions_jolt_four); }));
+  metrics["collision_stumbles_per_match"] = meanEstimate(column(
+      [](const MatchSample& s) { return static_cast<double>(s.collision_stumbles); }));
+  metrics["collision_falls_per_match"] = meanEstimate(column(
+      [](const MatchSample& s) { return static_cast<double>(s.collision_falls); }));
+  metrics["collision_slips_per_match"] = meanEstimate(column(
+      [](const MatchSample& s) { return static_cast<double>(s.collision_slips); }));
+  const std::vector<double> knocks = column([](const MatchSample& s)
+                                            { return static_cast<double>(s.collision_stumbles + s.collision_falls); });
+  metrics["collision_knocks_by_ends_up_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return static_cast<double>(s.collision_knocks_by_ends_up); }),
+      knocks);
+  metrics["collision_knocks_small_jolt_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return static_cast<double>(s.collision_knocks_small_jolt); }),
+      knocks);
   metrics["blocks_popped_share"] = ratioEstimate(
       column([](const MatchSample& s) { return s.blocks_popped; }), blocks);
   metrics["free_ball_tackle_success"] = ratioEstimate(

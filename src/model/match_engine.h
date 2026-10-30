@@ -278,6 +278,10 @@ struct MatchPlayer
    * how long until he can drive, steer or brake again (s); until then he
    * coasts (MatchTuning::Collision). */
   float collisionPause = 0.0f;
+  /** Collision plan: knocked off balance, how long his stumble still lasts
+   * (s): his recovery steps brake him, his body turns to his movement, and
+   * he neither drives nor steers. */
+  float stumbleSeconds = 0.0f;
   [[nodiscard]] bool airborne() const { return feetHeight > 0.0f || jumpSpeed > 0.0f; }
   bool isPressing = false;
   bool isMakingRun = false;
@@ -1039,6 +1043,16 @@ struct MatchStats
   int collisions = 0;
   int collisionsJoltTwo = 0;
   int collisionsJoltFour = 0;
+  /** Collision plan step 3: players knocked into a stumble, knocked over
+   * (falls, stumbles until step 4), and of those the stumbles that slipped
+   * into a fall. */
+  int collisionStumbles = 0;
+  int collisionFalls = 0;
+  int collisionSlips = 0;
+  /** Of the stumbles and falls: those where where-he-ends-up was the worse
+   * measure (not how sudden), and those from a jolt under 1 m/s. */
+  int collisionKnocksByEndsUp = 0;
+  int collisionKnocksSmallJolt = 0;
   /** Tackling plan step 5: steps a defender went into a contest (by his
    * side), those on the carrier's free foot (row 5, a misread), steps he
    * held, and the intents his brain chose. */
@@ -1890,8 +1904,20 @@ class MatchEngine
     /** How sudden: the jolt against his hardest braking over
      * SUDDEN_WINDOW_SECONDS. */
     float sudden = 0.0f;
-    /** The pause it gave him (s). */
+    /** The pause it gave him (s), if he kept his feet and balance. */
     float pause = 0.0f;
+    /** The judged score (the worse measure, with its wobble) and the two
+     * lines it met (lowered if he was already stumbling). */
+    float score = 0.0f;
+    float stumbleLine = 0.0f;
+    float fallLine = 0.0f;
+    /** 0 kept his feet and balance, 1 stumbled, 2 fell (until step 4 of
+     * the plan a fall is played as his longest stumble); and whether a
+     * stumble slipped into the fall. */
+    std::uint8_t outcome = 0;
+    bool slipped = false;
+    /** His stumble's length (s), if he stumbled or fell. */
+    float stumble = 0.0f;
   };
   /** One run-in: when in the step (s), where (pitch), and both sides. */
   struct CollisionHit
@@ -3277,6 +3303,10 @@ class MatchEngine
    * (wound back to the moment of contact, the hit, wound forward), easing
    * of any overlap left, then today's separation for the other pairs. */
   void collidePlayers(float dt);
+  /** Collision plan step 3: judges one player's knock (its measures are
+   * set): kept his feet and balance (a pause), a stumble, or a fall;
+   * `remaining` is what is left of the step after the contact. */
+  void judgeKnock(MatchPlayer& player, CollisionSide& side, float remaining);
   Vector2F goalkeeperTarget(MatchPlayer& keeper, const MatchPlayer* carrier);
   void diveGoalkeeper(MatchPlayer& keeper, float dt);
   void planGoalkeeperDive(bool defendingHome, bool penalty);

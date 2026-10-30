@@ -19,6 +19,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <numbers>
 #include <optional>
 
 #include "model/match_derived_stats.h"
@@ -74,6 +75,73 @@ std::optional<float> contactTime(Vector2F gap, Vector2F closing, float from,
   return time;
 }
 }  // namespace
+
+void MatchEngine::judgeKnock(MatchPlayer& player, CollisionSide& side,
+                             float remaining)
+{
+  using C = MatchTuning::Collision;
+  // Where his Balance sits from 1 (0) to 99 (1).
+  const float balance = std::clamp(
+      (player.derivedStat(DerivedStat::BALANCE) - STAT_1_RATING) /
+          (STAT_99_RATING - STAT_1_RATING),
+      0.0f, 1.0f);
+  const auto line = [balance](float at1, float at99)
+  { return at1 + (at99 - at1) * balance; };
+  // Already off balance, he goes over more easily.
+  const float drop = player.stumbleSeconds > 0.0f ? C::STUMBLING_LINE_DROP : 0.0f;
+  side.stumbleLine =
+      line(C::STUMBLE_LINE_AT_BALANCE_1, C::STUMBLE_LINE_AT_BALANCE_99) - drop;
+  side.fallLine = line(C::FALL_LINE_AT_BALANCE_1, C::FALL_LINE_AT_BALANCE_99) - drop;
+  // The worse measure, wobbled on a bell curve (Box-Muller): unpredictable
+  // for a poor Balance, nearly always as expected for a good one.
+  const float uniform = std::max(randomFloat(0.0f, 1.0f), 1e-7f);
+  const float angle = randomFloat(0.0f, 1.0f);
+  const float bell = std::sqrt(-2.0f * std::log(uniform)) *
+                     std::cos(2.0f * std::numbers::pi_v<float> * angle);
+  side.score = std::max(side.endsUp, side.sudden) +
+               bell * line(C::WOBBLE_AT_BALANCE_1, C::WOBBLE_AT_BALANCE_99);
+  if (side.score < side.stumbleLine)
+  {
+    // Kept his feet and balance: a pause by the jolt, from the moment of
+    // contact (the rest of this step he already carries on).
+    side.outcome = 0;
+    side.pause = C::PAUSE_SECONDS_PER_JOLT * length(side.jolt);
+    player.collisionPause =
+        std::max(player.collisionPause, side.pause - remaining);
+    return;
+  }
+  side.outcome = side.score >= side.fallLine ? 2 : 1;
+  if (side.endsUp >= side.sudden) ++stats.collisionKnocksByEndsUp;
+  if (length(side.jolt) < 1.0f) ++stats.collisionKnocksSmallJolt;
+  if (side.outcome == 1)
+  {
+    // A stumble can slip into a fall: his footing went.
+    const float slip =
+        balance < 0.5f
+            ? C::SLIP_AT_BALANCE_1 +
+                  (C::SLIP_AT_BALANCE_50 - C::SLIP_AT_BALANCE_1) * balance / 0.5f
+            : C::SLIP_AT_BALANCE_50 + (C::SLIP_AT_BALANCE_99 - C::SLIP_AT_BALANCE_50) *
+                                          (balance - 0.5f) / 0.5f;
+    if (randomFloat(0.0f, 1.0f) < slip)
+    {
+      side.outcome = 2;
+      side.slipped = true;
+      ++stats.collisionSlips;
+    }
+  }
+  // A stumble: longer the nearer he came to falling. A fall is played as
+  // his longest stumble until the fall is built (plan step 4).
+  const float share = side.outcome == 2
+                          ? 1.0f
+                          : std::clamp((side.score - side.stumbleLine) /
+                                           std::max(side.fallLine - side.stumbleLine,
+                                                    EPSILON),
+                                       0.0f, 1.0f);
+  side.stumble = C::STUMBLE_SHORTEST_SECONDS +
+                 (C::STUMBLE_LONGEST_SECONDS - C::STUMBLE_SHORTEST_SECONDS) * share;
+  player.stumbleSeconds = std::max(player.stumbleSeconds, side.stumble - remaining);
+  ++(side.outcome == 2 ? stats.collisionFalls : stats.collisionStumbles);
+}
 
 bool MatchEngine::collidesByMomentum(const MatchPlayer& first,
                                      const MatchPlayer& second) const
@@ -217,12 +285,7 @@ void MatchEngine::collidePlayers(float dt)
         entry.sudden = jolt / std::max(hardestBrakingBinturong(player) *
                                            C::SUDDEN_WINDOW_SECONDS,
                                        EPSILON);
-        // Kept his feet and balance (every hit, until the outcomes are
-        // judged): a pause by the jolt, from the moment of contact. The rest
-        // of this step he already carries on at his new velocity.
-        entry.pause = C::PAUSE_SECONDS_PER_JOLT * jolt;
-        player.collisionPause =
-            std::max(player.collisionPause, entry.pause - (dt - now));
+        judgeKnock(player, entry, dt - now);
       }
       lastCollisions.push_back(record);
       ++stats.collisions;

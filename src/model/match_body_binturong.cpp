@@ -1124,6 +1124,44 @@ void MatchEngine::coastBinturong(MatchPlayer& player, float dt)
   player.collisionPause = std::max(0.0f, player.collisionPause - dt);
 }
 
+void MatchEngine::stumbleBinturong(MatchPlayer& player, float dt)
+{
+  using C = MatchTuning::Collision;
+  constexpr float PI = std::numbers::pi_v<float>;
+  // His recovery steps brake him; he neither drives nor steers.
+  const float speed = length(player.velocity);
+  const float slowed = std::max(
+      0.0f, speed - C::STUMBLE_BRAKING_SHARE * hardestBrakingBinturong(player) * dt);
+  const float scale = speed > EPSILON ? slowed / speed : 0.0f;
+  const Vector2F before = player.velocity;
+  player.velocity = {before.x * scale, before.y * scale};
+  const Vector2F moved = toPitch({0.5f * (before.x + player.velocity.x) * dt,
+                                  0.5f * (before.y + player.velocity.y) * dt});
+  player.position = {
+      std::clamp(player.position.x + moved.x, MatchTuning::Pitch::PLAYER_MIN_X,
+                 MatchTuning::Pitch::PLAYER_MAX_X),
+      std::clamp(player.position.y + moved.y, MatchTuning::Pitch::PLAYER_MIN_Y,
+                 MatchTuning::Pitch::PLAYER_MAX_Y)};
+  // His body turns to face the way he is carried (forward is where he
+  // copes best), at his normal rate.
+  if (speed > EPSILON)
+  {
+    const float target = std::atan2(before.y / MatchTuning::Pitch::WIDTH_METRES,
+                                    before.x / MatchTuning::Pitch::LENGTH_METRES);
+    float difference = target - player.facingAngle;
+    while (difference > PI) difference -= TWO_PI;
+    while (difference < -PI) difference += TWO_PI;
+    const float turn = bodyTurnRate(player, 1.0f) * dt;
+    player.facingAngle += std::clamp(difference, -turn, turn);
+    if (player.facingAngle > PI)
+      player.facingAngle -= TWO_PI;
+    else if (player.facingAngle < -PI)
+      player.facingAngle += TWO_PI;
+    player.targetAngle = player.facingAngle;
+  }
+  player.stumbleSeconds = std::max(0.0f, player.stumbleSeconds - dt);
+}
+
 FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     const std::uint8_t* slots, std::size_t count, float dt, bool walking)
 {

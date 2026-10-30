@@ -70,6 +70,7 @@ std::optional<MatchPlayer*> MatchEngine::placeScenario(
     matchPlayer.trapTimer = 0.0f;
     matchPlayer.plantedSeconds = 0.0f;
     matchPlayer.collisionPause = 0.0f;
+    matchPlayer.stumbleSeconds = 0.0f;
     matchPlayer.isPressing = false;
     matchPlayer.isMakingRun = false;
     if (resetCondition) matchPlayer.stamina = 1.0f;

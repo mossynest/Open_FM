@@ -160,6 +160,13 @@ struct MatchSample
   int collisions = 0;
   int collisions_jolt_two = 0;
   int collisions_jolt_four = 0;
+  /** Collision plan step 3: players knocked into a stumble, knocked over,
+   * and stumbles that slipped into a fall. */
+  int collision_stumbles = 0;
+  int collision_falls = 0;
+  int collision_slips = 0;
+  int collision_knocks_by_ends_up = 0;
+  int collision_knocks_small_jolt = 0;
   std::array<int, 2> keeper_claim_attempts{};
   std::array<int, 2> keeper_claims{};
   /** Aerial duels with both sides involved, and those the home side won. */

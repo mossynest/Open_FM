@@ -354,6 +354,31 @@ struct MatchTuning final
     /** Contacts resolved within one step at most (each a pair's first
      * touch in what is left of the step). */
     static constexpr int MAX_CONTACTS_PER_STEP = 32;
+    /** Judging a knock: the worse of where he ends up and how sudden it
+     * was, against two lines Balance moves (straight lines from 1 to 99):
+     * below the first he keeps his feet and balance, from it he stumbles,
+     * from the second he falls. */
+    static constexpr float STUMBLE_LINE_AT_BALANCE_1 = 0.65f;
+    static constexpr float STUMBLE_LINE_AT_BALANCE_99 = 0.85f;
+    static constexpr float FALL_LINE_AT_BALANCE_1 = 0.90f;
+    static constexpr float FALL_LINE_AT_BALANCE_99 = 1.10f;
+    /** Already stumbling, a knock is judged against lines this much lower. */
+    static constexpr float STUMBLING_LINE_DROP = 0.25f;
+    /** The wobble on the score (a bell curve, its typical size), from
+     * Balance 1 to 99 (to try). */
+    static constexpr float WOBBLE_AT_BALANCE_1 = 0.15f;
+    static constexpr float WOBBLE_AT_BALANCE_99 = 0.05f;
+    /** The chance a stumble slips into a fall, at Balance 1, 50 and 99
+     * (straight lines between; to try). */
+    static constexpr float SLIP_AT_BALANCE_1 = 0.20f;
+    static constexpr float SLIP_AT_BALANCE_50 = 0.10f;
+    static constexpr float SLIP_AT_BALANCE_99 = 0.03f;
+    /** A stumble lasts this long just over the stumble line, up to the
+     * longest just short of the fall line (one to three recovery steps). */
+    static constexpr float STUMBLE_SHORTEST_SECONDS = 0.5f;
+    static constexpr float STUMBLE_LONGEST_SECONDS = 1.0f;
+    /** His recovery steps brake him at this share of his hardest braking. */
+    static constexpr float STUMBLE_BRAKING_SHARE = 0.5f;
   };
 
   /**

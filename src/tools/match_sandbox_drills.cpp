@@ -2978,7 +2978,9 @@ class CollisionDrill final : public Drill
            "point after his run-up, B from his own run-up (none: he stands "
            "there) at an angle to A's run. Each one's speed before and "
            "after, his jolt, where he ends up against what he can run that "
-           "way, how sudden it was, and his pause.";
+           "way, how sudden it was, and whether he kept his balance (a "
+           "pause), stumbled (amber ring) or fell (red ring; a stumble "
+           "until falls are built).";
   }
 
   std::vector<DrillParameter> parameters() override
@@ -2997,15 +2999,25 @@ class CollisionDrill final : public Drill
       list.push_back(setting("Strength", &physique.strength, 1.0f, 99.0f, true,
                              "With his height, his weight (BMI 17 at 1 to 31 at "
                              "99)."));
+      list.push_back(setting("Balance", &physique.balance, 1.0f, 99.0f, true,
+                             "Where his stumble and fall lines sit, and how "
+                             "much the outcome wobbles."));
+      list.push_back(setting("Agility", &physique.agility, 1.0f, 99.0f, true,
+                             "His hardest braking (how sudden a jolt is for "
+                             "him) and how fast his body turns."));
     };
     runner("A", a);
     runner("B", b);
     // Names must be unique for presets and sweeps: label the B copies.
-    for (std::size_t index = 4; index < 8; ++index) list[index].label = list[index].name;
-    list[4].name = "B run-up (m)";
-    list[5].name = "B Pace";
-    list[6].name = "B height (cm)";
-    list[7].name = "B Strength";
+    constexpr std::array<const char*, 6> B_NAMES{"B run-up (m)", "B Pace",
+                                                 "B height (cm)", "B Strength",
+                                                 "B Balance", "B Agility"};
+    for (std::size_t index = 0; index < B_NAMES.size(); ++index)
+    {
+      DrillParameter& parameter = list[B_NAMES.size() + index];
+      parameter.label = parameter.name;
+      parameter.name = B_NAMES[index];
+    }
     DrillParameter angle = setting("B's run against A's (deg)", &angleSetting, 0.0f,
                                    180.0f, true,
                                    "180: head-on; 90: across A's run from his "
@@ -3049,6 +3061,8 @@ class CollisionDrill final : public Drill
       DrillPlayerSpec player{name, PlayerRole::CM, home, {{"Pace", physique.pace}},
                              static_cast<int>(physique.height + 0.5f)};
       player.derived[DerivedStat::STRENGTH] = physique.strength;
+      player.derived[DerivedStat::BALANCE] = physique.balance;
+      player.derived[DerivedStat::AGILITY] = physique.agility;
       return player;
     };
     return {spec("A", true, a), spec("B", false, b)};
@@ -3087,6 +3101,7 @@ class CollisionDrill final : public Drill
     hits.clear();
     first.reset();
     ended = false;
+    ring = {};
     weights = {weightOf(engine, aId), weightOf(engine, bId)};
     trailA.clear();
     trailB.clear();
@@ -3125,6 +3140,19 @@ class CollisionDrill final : public Drill
       trailA.push_back(playerA->position);
       trailB.push_back(playerB->position);
     }
+    // A ring round each while he stumbles, by how his last knock was judged.
+    for (std::size_t which = 0; which < 2; ++which)
+    {
+      const MatchPlayer& player = which == 0 ? *playerA : *playerB;
+      at[which] = player.position;
+      if (player.stumbleSeconds <= 0.0f)
+        ring[which] = 0;
+      else
+        for (const MatchEngine::CollisionHit& hit : engine.getLastCollisions())
+          for (const MatchEngine::CollisionSide& side : hit.sides)
+            if (side.player == (which == 0 ? aId : bId) && side.outcome > 0)
+              ring[which] = side.outcome;
+    }
     ended = (first && now > firstAt + AFTER_SECONDS) || now >= TIME_LIMIT_SECONDS;
     return !ended;
   }
@@ -3137,6 +3165,13 @@ class CollisionDrill final : public Drill
     DrillDraw::marker(renderer, draw, MEET, 0.15f, IM_COL32(240, 240, 240, 255));
     if (first)
       DrillDraw::marker(renderer, draw, first->where, 0.2f, IM_COL32(255, 220, 60, 255));
+    // Stumbling: amber; knocked over (a stumble for now): red.
+    for (std::size_t which = 0; which < 2; ++which)
+      if (ring[which] > 0)
+        DrillDraw::circle(renderer, draw, at[which], 0.6f, 0,
+                          ring[which] == 2 ? IM_COL32(240, 60, 60, 255)
+                                           : IM_COL32(255, 180, 40, 255),
+                          2.5f * scale);
   }
 
   std::vector<std::string> report() const override
@@ -3157,17 +3192,22 @@ class CollisionDrill final : public Drill
       const MatchEngine::CollisionSide& side = sideOf(*first, id);
       lines.push_back(std::format(
           "{}: {:.1f} -> {:.1f} m/s, jolt {:.2f} m/s · ends up {:.0f}% · sudden "
-          "{:.0f}% · pause {:.2f} s",
+          "{:.0f}%",
           id == aId ? "A" : "B", speedBefore(side), length2(side.after),
-          length2(side.jolt), side.endsUp * 100.0f, side.sudden * 100.0f, side.pause));
+          length2(side.jolt), side.endsUp * 100.0f, side.sudden * 100.0f));
+      lines.push_back(std::format(
+          "   score {:.0f}% (lines {:.0f}% / {:.0f}%): {}{}{}", side.score * 100.0f,
+          side.stumbleLine * 100.0f, side.fallLine * 100.0f, OUTCOMES[side.outcome],
+          side.slipped ? ", a stumble that slipped" : "",
+          side.outcome == 0 ? std::format(", pause {:.2f} s", side.pause)
+                            : std::format(" for {:.2f} s", side.stumble)));
     }
     lines.push_back(std::format("Run-ins in all: {} (after the first: driving on "
                                 "into each other)",
                                 hits.size()));
-    lines.push_back(std::format("OUTCOME  contact at {:.2f} s: A jolted {:.2f} m/s, "
-                                "B {:.2f} m/s",
-                                firstAt, length2(sideOf(*first, aId).jolt),
-                                length2(sideOf(*first, bId).jolt)));
+    lines.push_back(std::format("OUTCOME  contact at {:.2f} s: A {}, B {}", firstAt,
+                                OUTCOMES[sideOf(*first, aId).outcome],
+                                OUTCOMES[sideOf(*first, bId).outcome]));
     return lines;
   }
 
@@ -3184,7 +3224,12 @@ class CollisionDrill final : public Drill
       out.push_back({who + "jolt (m/s)", length2(side.jolt)});
       out.push_back({who + "ends up (%)", side.endsUp * 100.0});
       out.push_back({who + "sudden (%)", side.sudden * 100.0});
+      out.push_back({who + "score (%)", side.score * 100.0});
+      out.push_back({who + "stumbled", side.outcome == 1 ? 1.0 : 0.0});
+      out.push_back({who + "fell", side.outcome == 2 ? 1.0 : 0.0});
+      out.push_back({who + "slipped", side.slipped ? 1.0 : 0.0});
       out.push_back({who + "pause (s)", side.pause});
+      out.push_back({who + "stumble (s)", side.stumble});
     }
     out.push_back({"Run-ins", static_cast<double>(hits.size())});
     return out;
@@ -3197,7 +3242,11 @@ class CollisionDrill final : public Drill
     float pace = 70.0f;
     float height = 180.0f;
     float strength = 50.0f;
+    float balance = 50.0f;
+    float agility = 50.0f;
   };
+  static constexpr std::array<const char*, 3> OUTCOMES{
+      "kept his feet and balance", "stumbled", "fell (a stumble until falls are built)"};
   static constexpr Vector2F MEET{0.5f, 0.5f};
   /** Each runs on through the meeting point to this far beyond it. */
   static constexpr float BEYOND_METRES = 20.0f;
@@ -3251,8 +3300,8 @@ class CollisionDrill final : public Drill
     return 0.5f * (low + high);
   }
 
-  Physique a{30.0f, 70.0f, 180.0f, 50.0f};
-  Physique b{0.0f, 70.0f, 180.0f, 50.0f};
+  Physique a{30.0f, 70.0f, 180.0f, 50.0f, 50.0f, 50.0f};
+  Physique b{0.0f, 70.0f, 180.0f, 50.0f, 50.0f, 50.0f};
   float angleSetting = 180.0f;
   float missSetting = 0.0f;
   float nudgeSetting = 0.0f;
@@ -3273,6 +3322,9 @@ class CollisionDrill final : public Drill
   std::optional<MatchEngine::CollisionHit> first;
   double firstAt = 0.0;
   bool ended = false;
+  std::array<Vector2F, 2> at{};
+  /** 0 no ring; 1 stumbling; 2 knocked over (stumbling until step 4). */
+  std::array<std::uint8_t, 2> ring{};
   std::vector<Vector2F> trailA;
   std::vector<Vector2F> trailB;
 };
