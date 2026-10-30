@@ -85,12 +85,12 @@ constexpr std::uint64_t planJob(PlanBranch branch, std::uint32_t choices = 0,
 // Walkers adjust only when their predicted closest approach is under ~1 m
 // (Olivier et al. 2012), and look ahead about 3 s (time to collision:
 // Karamouzas, Skinner & Guy 2014). Design choices: a team-mate is passed
-// at the body-contact distance; "the same target" and "the same way"; a
-// side kept unless the other is this much shorter; running speeds below
-// this are not racing.
+// close, with a little margin (0.6 m between centres: the 0.4 m bodies of
+// the collision plan and 0.2 m between them; collision plan step 7);
+// "the same target" and "the same way"; a side kept unless the other is
+// this much shorter; running speeds below this are not racing.
 constexpr float OVERTAKE_OPPONENT_CLEARANCE_METRES = 1.0f;
-constexpr float OVERTAKE_TEAM_MATE_CLEARANCE_METRES =
-    MatchTuning::Player::MINIMUM_BODY_SEPARATION_METRES;
+constexpr float OVERTAKE_TEAM_MATE_CLEARANCE_METRES = 0.6f;
 constexpr float OVERTAKE_HORIZON_SECONDS = 3.0f;
 constexpr float OVERTAKE_SAME_TARGET_METRES = 2.0f;
 constexpr float OVERTAKE_SAME_DIRECTION_COSINE = 0.7071f;
