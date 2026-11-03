@@ -821,7 +821,9 @@ void MatchScene::update(float deltaTime)
   pauseAtBreak();
   // Play mode: the pad and keys become this step's input first.
   updatePlay(deltaTime);
-  if (engine && !match_finished && !is_paused)
+  // Play waits for a team talk (before kick-off, at half-time) until it is
+  // given or dismissed.
+  if (engine && !match_finished && !is_paused && !team_talk.isOpen())
   {
     const auto startedAt = std::chrono::steady_clock::now();
     // Real time times the chosen speed; highlights skip the quiet spells.
@@ -1168,6 +1170,20 @@ void MatchScene::render()
         std::max(1.0f, available.x),
         std::max(scaled(MatchSceneTuning::View::MIN_HEIGHT), available.y)));
   }
+  else if (sandbox && sandbox->on_side_panel)
+  {
+    // A sandbox: always beside the pitch, wider, one scrolling column.
+    using S = MatchSceneTuning::Panel;
+    const float panelWidth =
+        std::clamp(std::floor(available.x * S::SANDBOX_PANEL_WIDTH_RATIO),
+                   scaled(S::SIDE_PANEL_MIN_WIDTH), scaled(S::SANDBOX_PANEL_MAX_WIDTH));
+    const float viewHeight =
+        std::max(scaled(MatchSceneTuning::View::MIN_HEIGHT), available.y);
+    renderPitchArea(
+        ImVec2(std::max(1.0f, available.x - panelWidth - style.ItemSpacing.x), viewHeight));
+    ImGui::SameLine();
+    renderSandboxPanel(ImVec2(panelWidth, viewHeight));
+  }
   else if (sidePanel)
   {
     const float panelWidth =
@@ -1207,6 +1223,21 @@ void MatchScene::render()
 
   ImGui::End();
   renderSandboxTools();
+}
+
+void MatchScene::renderSandboxPanel(ImVec2 size)
+{
+  using S = MatchSceneTuning::Panel;
+  if (ImGui::BeginChild("##sandbox_panel", size, ImGuiChildFlags_None))
+  {
+    // Statistics and events at fixed heights; the column scrolls.
+    if (ImGui::CollapsingHeader(LOC("REPORT_STATS"), ImGuiTreeNodeFlags_DefaultOpen))
+      renderStatistics(ImVec2(0.0f, scaled(S::SANDBOX_STATISTICS_HEIGHT)));
+    if (ImGui::CollapsingHeader(LOC("MATCH_EVENTS"), ImGuiTreeNodeFlags_DefaultOpen))
+      renderEvents(ImVec2(0.0f, scaled(S::SANDBOX_EVENTS_HEIGHT)));
+    sandbox->on_side_panel(*engine, is_paused);
+  }
+  ImGui::EndChild();
 }
 
 void MatchScene::renderSandboxTools()
@@ -1554,6 +1585,7 @@ void MatchScene::renderControls()
       if (ImGui::Button(LOC("MATCH_SANDBOX_LEAVE"))) guiView->popScene();
     }
   }
+  if (sandbox && sandbox->on_controls && !quick_result.valid()) sandbox->on_controls();
   if (managed_is_home)
   {
     UI::sameLineIfFits(UI::buttonWidth(LOC("MATCH_ANALYSIS")));
@@ -1840,8 +1872,24 @@ void MatchScene::renderPitch(ImVec2 size)
                          ImGuiButtonFlags_MouseButtonLeft |
                              ImGuiButtonFlags_MouseButtonRight |
                              ImGuiButtonFlags_MouseButtonMiddle);
+  // A sandbox's overlay hears of a click released without a drag.
+  Sandbox::ViewClick click;
+  if (sandbox && sandbox->on_view_overlay)
+  {
+    const ImGuiIO& io = ImGui::GetIO();
+    click.clicked = ImGui::IsItemHovered() &&
+                    ImGui::IsMouseReleased(ImGuiMouseButton_Left) &&
+                    io.MouseDragMaxDistanceSqr[ImGuiMouseButton_Left] <
+                        io.MouseDragThreshold * io.MouseDragThreshold;
+    click.ctrl = io.KeyCtrl;
+    click.x = io.MousePos.x;
+    click.y = io.MousePos.y;
+  }
   handleViewInput();
-  if (view_mode == MatchViewMode::BROADCAST_3D)
+  // A sandbox's true view: the 3D view with no figures.
+  const bool trueView = sandboxTrueView();
+  renderOptions.hidePlayerFigures = trueView;
+  if (view_mode == MatchViewMode::BROADCAST_3D || trueView)
   {
     viewport = {viewOrigin.x, viewOrigin.y, size.x, size.y};
     renderer = renderer_3d.get();
@@ -1883,12 +1931,20 @@ void MatchScene::renderPitch(ImVec2 size)
 #endif
     const auto renderStartedAt = std::chrono::steady_clock::now();
     const ImVec2 viewEnd(viewOrigin.x + size.x, viewOrigin.y + size.y);
-    fillMatchRenderSnapshot(*engine, snapshot);
+    // A sandbox may show a rewound moment in place of the live match,
+    // exactly (not between two steps).
+    const MatchEngine* rewound =
+        sandbox && sandbox->shown_engine ? sandbox->shown_engine() : nullptr;
+    const MatchEngine& shown = rewound ? *rewound : *engine;
+    fillMatchRenderSnapshot(shown, snapshot);
+    if (rewound) snapshot.interpolationAlpha = 1.0f;
     snapshot.homeTeam = home_team_id;
     snapshot.awayTeam = away_team_id;
     ImGui::GetWindowDrawList()->PushClipRect(viewOrigin, viewEnd, true);
     renderer->render(snapshot, renderOptions, viewport);
     renderPlayOverlay(*renderer, viewOrigin, viewEnd);
+    if (sandbox && sandbox->on_view_overlay)
+      sandbox->on_view_overlay(*renderer, shown, snapshot, click);
     ImGui::GetWindowDrawList()->PopClipRect();
     last_render_milliseconds =
         std::chrono::duration<float, std::milli>(
@@ -1900,10 +1956,15 @@ void MatchScene::renderPitch(ImVec2 size)
   }
 }
 
+bool MatchScene::sandboxTrueView() const
+{
+  return sandbox && sandbox->true_view && sandbox->true_view();
+}
+
 void MatchScene::handleViewInput()
 {
   const ImGuiIO& io = ImGui::GetIO();
-  const bool view3D = view_mode == MatchViewMode::BROADCAST_3D;
+  const bool view3D = view_mode == MatchViewMode::BROADCAST_3D || sandboxTrueView();
   // The wheel zooms the camera instead of scrolling the scene.
   if (view3D && ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY))
     pending_zoom_steps += io.MouseWheel;

@@ -45,6 +45,7 @@
 #include "tools/match_sandbox_test_teams.h"
 #include "tools/match_sandbox_training_scene.h"
 #include "tools/match_sandbox_shot_map.h"
+#include "tools/match_sandbox_true_view.h"
 
 namespace
 {
@@ -196,11 +197,18 @@ SceneID MatchSandboxScene::getID() const { return SceneID::MATCH_SANDBOX; }
 
 void MatchSandboxScene::onEnter()
 {
-  // Told apart from the game in the taskbar.
+  // Told apart from the game in the taskbar, and opened maximised (once:
+  // a size the user picks afterwards is kept).
+  static bool maximised = false;
   int windowCount = 0;
   if (SDL_Window** windows = SDL_GetWindows(&windowCount))
   {
-    if (windowCount > 0) SDL_SetWindowTitle(windows[0], "Player12 match sandbox");
+    if (windowCount > 0)
+    {
+      SDL_SetWindowTitle(windows[0], "Player12 match sandbox");
+      if (!maximised) SDL_MaximizeWindow(windows[0]);
+      maximised = true;
+    }
     SDL_free(static_cast<void*>(windows));
   }
 
@@ -242,6 +250,12 @@ void MatchSandboxScene::update(float /*deltaTime*/)
     drill_view = 0;
     mode = 3;
     guiView->overlayScene(std::make_unique<TechniqueBenchScene>(guiView, true));
+  }
+  if (drill_view == 5)
+  {
+    drill_view = 0;
+    mode = 3;
+    guiView->overlayScene(std::make_unique<TrueViewScene>(guiView));
   }
   if (!drill_pending.empty())
   {
@@ -352,8 +366,8 @@ void MatchSandboxScene::render()
 
   renderFooter();
   ImGui::End();
-  if (show_last_log) renderDebugTools(nullptr, nullptr);
-  if (show_last_log && loaded && replay_info)
+  renderDebugTools(nullptr, nullptr);
+  if ((show_review || show_debugger) && loaded && replay_info)
     comparison.render(*loaded, *replay_info, recorder.get(), review, inspector);
   renderRecordings();
 }
@@ -412,8 +426,7 @@ void MatchSandboxScene::renderDrills()
 void MatchSandboxScene::renderVisualisers()
 {
   const float scale = Theme::scale();
-  UI::beginCard("##visualiser_page", "Contact difficulty",
-                ImVec2(0.0f, 0.0f), true);
+  UI::beginAutoHeightCard("##visualiser_page", "Contact difficulty");
   ImGui::PushTextWrapPos(0.0f);
   ImGui::TextUnformatted(
       "How hard a touch or strike is across his reach (Binturong body, "
@@ -429,7 +442,23 @@ void MatchSandboxScene::renderVisualisers()
   ImGui::TextDisabled("Also: match_sandbox --contact-view");
   UI::endCard();
 
-  UI::beginCard("##bench_page", "Technique bench", ImVec2(0.0f, 0.0f), true);
+  UI::beginAutoHeightCard("##true_view_page", "True view");
+  ImGui::PushTextWrapPos(0.0f);
+  ImGui::TextUnformatted(
+      "One player in 3D as the Binturong body models him, with no figure on "
+      "top: the body cylinder, the lines between feet, thigh, chest and "
+      "head, each part's reach with its comfort gap, dead zone and stretch, "
+      "each technique's own range, jumping, falling and getting up, and the "
+      "personal space the brain keeps, with where every number comes from.");
+  ImGui::PopTextWrapPos();
+  ImGui::Spacing();
+  if (UI::primaryButton("Open##true_view"))
+    guiView->overlayScene(std::make_unique<TrueViewScene>(guiView));
+  ImGui::SameLine(0.0f, Theme::Space::L * scale);
+  ImGui::TextDisabled("Also: match_sandbox --true-view");
+  UI::endCard();
+
+  UI::beginAutoHeightCard("##bench_page", "Technique bench");
   ImGui::PushTextWrapPos(0.0f);
   ImGui::TextUnformatted(
       "A catalogue of pass and shot tests (short and long, ground, driven, "
@@ -567,17 +596,53 @@ void MatchSandboxScene::renderTraining()
 void MatchSandboxScene::renderDebugTools(MatchEngine* live, bool* livePaused)
 {
   if (!recorder) return;
-  review.render(*recorder, live, livePaused, match_home, match_away,
-                &inspector);
+  if (show_review)
+    review.render(*recorder, live, livePaused, match_home, match_away,
+                  &inspector, &show_review);
   // The inspector reads the moment under review, or the live match.
   const MatchEngine* inspected =
       review.shownEngine() ? review.shownEngine() : live;
-  debugger.render(*recorder, live, livePaused, review.cursor(), inspected,
-                  inspector);
+  if (show_debugger)
+    debugger.render(*recorder, live, livePaused, review.cursor(), inspected,
+                    inspector, &show_debugger);
   // A clicked log row rewinds the review (and pauses the live match).
   if (const auto tick = debugger.takeSeekRequest())
   {
     if (livePaused) *livePaused = true;
+    review.seek(*recorder, *tick);
+  }
+}
+
+void MatchSandboxScene::renderMatchPanel(MatchEngine& engine, bool& paused)
+{
+  if (match_true_view && ImGui::CollapsingHeader("True view", ImGuiTreeNodeFlags_DefaultOpen))
+  {
+    ImGui::PushID("true_view");
+    true_view.renderSettings(review.shownEngine() ? *review.shownEngine() : engine);
+    ImGui::PopID();
+  }
+  if (!match_debug || !recorder) return;
+  if (ImGui::CollapsingHeader("Review", ImGuiTreeNodeFlags_DefaultOpen))
+  {
+    ImGui::PushID("review");
+    review.renderPanel(*recorder, &engine, &paused, &inspector);
+    ImGui::PopID();
+  }
+  if (ImGui::CollapsingHeader("Debugger", ImGuiTreeNodeFlags_DefaultOpen))
+  {
+    // The log and the inspector's tabs scroll inside a box whose height
+    // the bottom edge drags.
+    const MatchEngine* inspected = review.shownEngine() ? review.shownEngine() : &engine;
+    if (ImGui::BeginChild("##debug_feed", ImVec2(0.0f, 560.0f * Theme::scale()),
+                          ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeY))
+      debugger.renderContents(*recorder, &engine, &paused, review.cursor(), inspected,
+                              inspector);
+    ImGui::EndChild();
+  }
+  // A clicked log row rewinds the review (and pauses the live match).
+  if (const auto tick = debugger.takeSeekRequest())
+  {
+    paused = true;
     review.seek(*recorder, *tick);
   }
 }
@@ -973,15 +1038,23 @@ void MatchSandboxScene::renderFooter()
         "execution and duels, and kinder refereeing. 0 is a neutral venue "
         "(the sandbox default), 1 the game's full edge, 2 double.");
   ImGui::SameLine(0.0f, Theme::Space::XL * scale);
-  ImGui::Checkbox("Engine debugger", &show_debugger);
+  ImGui::Checkbox("Debug at kick-off", &debug_at_kick_off);
   if (ImGui::IsItemHovered())
-    ImGui::SetTooltip("Show the debugger window over the match: pause, step "
-                      "one tick at a time and read the decision log.");
+    ImGui::SetTooltip("Start the match in debug: the review and the debugger "
+                      "in its side panel (pause, step one tick at a time and "
+                      "read the decision log). In the match, the Debug and "
+                      "True view buttons turn them on and off.");
   if (recorder)
   {
+    // The last match's review and debugger, as windows (no match pitch
+    // here).
     ImGui::SameLine();
-    if (UI::toggleButton("Review last match", show_last_log))
-      show_last_log = !show_last_log;
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("Last match:");
+    ImGui::SameLine();
+    if (UI::toggleButton("Review", show_review)) show_review = !show_review;
+    ImGui::SameLine();
+    if (UI::toggleButton("Debugger", show_debugger)) show_debugger = !show_debugger;
   }
 
   const bool sameClub = sides[HOME].team == sides[AWAY].team;
@@ -1076,7 +1149,8 @@ void MatchSandboxScene::loadRecording(
   comparison.reset();
   loaded = std::move(recording);
   replay_info = std::move(replayed);
-  show_last_log = true;
+  show_review = true;
+  show_debugger = true;
   last_result = std::format(
       "{} {} - {} {} (recording, seed {}, {})", loaded->setup.sides[0].name,
       replay_info->homeScore, replay_info->awayScore,
@@ -1221,13 +1295,48 @@ void MatchSandboxScene::kickOff()
   debugger.reset();
   review.reset();
   inspector.reset();
-  show_last_log = false;
+  match_debug = debug_at_kick_off;
+  show_review = false;
+  show_debugger = false;
   match_home = sides[HOME].team;
   match_away = sides[AWAY].team;
   sandbox.recorder = recorder.get();
-  sandbox.on_render = [this](MatchEngine& engine, bool& paused)
+  // In the match: Debug and True view buttons in its controls, their
+  // sections in its side panel, and the moment and shapes on its pitch.
+  sandbox.on_controls = [this]
   {
-    if (show_debugger) renderDebugTools(&engine, &paused);
+    UI::sameLineIfFits(UI::buttonWidth("Debug") + UI::buttonWidth("True view") +
+                       ImGui::GetStyle().ItemSpacing.x);
+    if (UI::toggleButton("Debug", match_debug)) match_debug = !match_debug;
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("The review and the debugger in the side panel; the "
+                        "pitch shows the moment under review, with the "
+                        "inspector's overlays.");
+    ImGui::SameLine();
+    if (UI::toggleButton("True view", match_true_view)) match_true_view = !match_true_view;
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("The pitch in 3D with every player as the engine "
+                        "models him; its settings in the side panel.");
+  };
+  sandbox.on_side_panel = [this](MatchEngine& engine, bool& paused)
+  { renderMatchPanel(engine, paused); };
+  sandbox.shown_engine = [this]() -> const MatchEngine*
+  { return match_debug ? review.shownEngine() : nullptr; };
+  sandbox.true_view = [this] { return match_true_view; };
+  sandbox.on_view_overlay = [this](const IMatchRenderer& renderer, const MatchEngine& engine,
+                                   const MatchRenderSnapshot& snapshot,
+                                   const MatchScene::Sandbox::ViewClick& click)
+  {
+    // The true view takes the click (A, or B with Ctrl) and hands A to the
+    // inspector; without it the inspector picks.
+    if (match_true_view)
+    {
+      const PlayerID picked = true_view.drawOverlay(renderer, engine, snapshot, click.clicked,
+                                                    click.ctrl, ImVec2(click.x, click.y));
+      if (picked != 0 && !click.ctrl) inspector.selected = picked;
+    }
+    if (match_debug && recorder)
+      inspector.drawOverlays(*recorder, engine, renderer, click.clicked && !match_true_view);
   };
   const std::uint32_t seed = match_seed;
   const std::array<BrainId, 2> brains = match_setup->brains;

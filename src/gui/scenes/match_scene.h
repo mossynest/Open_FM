@@ -74,6 +74,35 @@ class MatchScene : public GUIScene
     /** Draws the sandbox's own windows over the match each frame; it may
      * pause the match (`paused`) and step the engine while paused. */
     std::function<void(MatchEngine&, bool& paused)> on_render;
+    /** Draws the sandbox's own buttons in the match controls (after Leave),
+     * on the same line as them. */
+    std::function<void()> on_controls;
+    /**
+     * Set: the side panel is one scrolling column of collapsible sections
+     * (statistics, events, then these, drawn by the sandbox; it may pause
+     * the match and step the engine while paused).
+     */
+    std::function<void(MatchEngine&, bool& paused)> on_side_panel;
+    /** The moment the pitch shows in place of the live match (a rewound
+     * review), or null for the live match. */
+    std::function<const MatchEngine*()> shown_engine;
+    /** True: the pitch is the 3D view with no figures (the sandbox's true
+     * view draws the engine's shapes in their place). */
+    std::function<bool()> true_view;
+    /** A click on the pitch (released without a drag), for the overlay. */
+    struct ViewClick
+    {
+      bool clicked = false;
+      bool ctrl = false;
+      float x = 0.0f;
+      float y = 0.0f;
+    };
+    /** Draws over the pitch just rendered, inside its clip (the true view's
+     * shapes, the inspector's overlays), from the engine and snapshot it
+     * shows. */
+    std::function<void(const IMatchRenderer&, const MatchEngine&,
+                       const MatchRenderSnapshot&, const ViewClick&)>
+        on_view_overlay;
   };
 
   MatchScene(class GUIView* guiView_ptr, uint16_t home_id, uint16_t away_id);
@@ -324,6 +353,11 @@ class MatchScene : public GUIScene
   void renderControls();
   /** The sandbox's windows over the match (see Sandbox::on_render). */
   void renderSandboxTools();
+  /** A sandbox's side panel: statistics, events and its own sections in
+   * one scrolling column (Sandbox::on_side_panel). */
+  void renderSandboxPanel(ImVec2 size);
+  /** A sandbox match showing its true view (Sandbox::true_view). */
+  [[nodiscard]] bool sandboxTrueView() const;
   void renderViewControls();
   void renderPitch(ImVec2 size);
   void renderStatistics(ImVec2 size);

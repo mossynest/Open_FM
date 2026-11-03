@@ -163,7 +163,8 @@ void MatchReview::refreshTimeline(const SandboxRecorder& recorder)
 
 void MatchReview::render(const SandboxRecorder& recorder,
                          const MatchEngine* live, bool* livePaused,
-                         TeamID home, TeamID away, DebugInspector* inspector)
+                         TeamID home, TeamID away, DebugInspector* inspector,
+                         bool* open)
 {
   const float scale = Theme::scale();
   const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -176,12 +177,20 @@ void MatchReview::render(const SandboxRecorder& recorder,
       ImVec2(viewport->WorkSize.x * 0.5f - 1.5f * margin,
              viewport->WorkSize.y - 2.0f * margin),
       ImGuiCond_FirstUseEver);
-  if (!ImGui::Begin("Match review"))
+  if (!ImGui::Begin("Match review", open))
   {
     ImGui::End();
     return;
   }
+  renderPanel(recorder, live, livePaused, nullptr);
+  renderPitch(recorder, live, home, away, inspector);
+  ImGui::End();
+}
 
+void MatchReview::renderPanel(const SandboxRecorder& recorder,
+                              const MatchEngine* live, bool* livePaused,
+                              DebugInspector* inspector)
+{
   std::uint64_t end = 0;
   {
     const auto guard = recorder.lock();
@@ -215,8 +224,9 @@ void MatchReview::render(const SandboxRecorder& recorder,
   renderTimeline(recorder, end, livePaused);
   renderTransport(recorder, end, livePaused);
   if (playing) play(recorder, end);
-  renderPitch(recorder, live, home, away, inspector);
-  ImGui::End();
+  // Embedded (the moment on the match's own pitch): the overlay switches
+  // here; in the window they sit above its pitch.
+  if (inspector) inspector->renderOverlayToggles();
 }
 
 void MatchReview::renderTimeline(const SandboxRecorder& recorder,

@@ -40,11 +40,20 @@ class MatchReview
 
   /**
    * Draws the window. `live` and `livePaused` are the live match during it
-   * and null after it. The team ids pick the kits.
+   * and null after it. The team ids pick the kits. `open`, when given,
+   * gets the window's close button.
    */
   void render(const SandboxRecorder& recorder, const MatchEngine* live,
               bool* livePaused, TeamID home, TeamID away,
-              DebugInspector* inspector = nullptr);
+              DebugInspector* inspector = nullptr, bool* open = nullptr);
+
+  /**
+   * The window's contents but its pitch, to embed (the sandbox match's side
+   * panel, where the match's own pitch shows the moment): where it is, the
+   * timeline, the transport and the inspector's overlay switches.
+   */
+  void renderPanel(const SandboxRecorder& recorder, const MatchEngine* live,
+                   bool* livePaused, DebugInspector* inspector);
 
   /** Hide players off the pitch (a drill's players not in it). */
   bool hideOffPitch = false;

@@ -39,6 +39,7 @@
 //               mode, "Keeper=0"), --csv [PATH]
 //   --shot-map-view  open the Shot map screen and run the default grid
 //   --contact-view  open the contact difficulty view
+//   --true-view  open the true view (a player as the engine models him)
 
 #include <charconv>
 #include <cstdint>
@@ -202,6 +203,11 @@ int main(int argc, char* argv[])
       drillView = 4;
       continue;
     }
+    else if (argument == "--true-view")
+    {
+      drillView = 5;
+      continue;
+    }
     else if (argument == "--shot-map-view")
     {
       drill = "shot";
@@ -290,7 +296,7 @@ int main(int argc, char* argv[])
            "  [--shot-map [--line A:B:N] [--side A:B:N] [--repeats N]\n"
            "   [--set NAME=VALUE]... [--csv [PATH]]]\n"
            "  [--measure-view DRILL] [--shot-map-view] [--contact-view]"
-           " [--bench-view]\n"
+           " [--bench-view] [--true-view]\n"
            "  [--bench [--tests P0*,S1*] [--tag KEY=VALUE]... [--skills LIST]\n"
            "   [--repeats N] [--seed N] [--threads N] [--skill SETTING]\n"
            "   [--catalogue PATH] [--csv PATH]] (Binturong on both sides\n"

@@ -54,6 +54,13 @@ struct MatchSceneTuning final
     static constexpr float SIDE_PANEL_MIN_WIDTH = 290.0f;
     static constexpr float SIDE_PANEL_MAX_WIDTH = 460.0f;
     static constexpr float STATISTICS_HEIGHT_RATIO = 0.5f;
+    /** A sandbox match's panel: wider (its debug log), always beside the
+     * pitch, its statistics and events at fixed heights in a scrolling
+     * column. */
+    static constexpr float SANDBOX_PANEL_WIDTH_RATIO = 0.36f;
+    static constexpr float SANDBOX_PANEL_MAX_WIDTH = 720.0f;
+    static constexpr float SANDBOX_STATISTICS_HEIGHT = 300.0f;
+    static constexpr float SANDBOX_EVENTS_HEIGHT = 260.0f;
     static constexpr float MINUTE_COLUMN_WIDTH = 52.0f;
     static constexpr float EVENT_ICON_SIZE = 14.0f;
     static constexpr float LINEUP_GATE_WIDTH = 640.0f;

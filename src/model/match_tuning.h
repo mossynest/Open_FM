@@ -339,6 +339,12 @@ struct MatchTuning final
     /** A body is a cylinder 40 cm across: two touch with their centres
      * this far apart. */
     static constexpr float BODY_DIAMETER_METRES = 0.4f;
+    /** Personal space (the Binturong brain's overtaking and way round): the
+     * closest he plans to pass another player, centre to centre. A
+     * team-mate close (the bodies and 0.2 m between them; collision plan
+     * step 7); an opponent at walkers' ~1 m (Olivier et al. 2012). */
+    static constexpr float OVERTAKE_OPPONENT_CLEARANCE_METRES = 1.0f;
+    static constexpr float OVERTAKE_TEAM_MATE_CLEARANCE_METRES = 0.6f;
     /** Kept his feet and balance: no drive, steering or braking for this
      * long per m/s of jolt (a pushed person's legs act after ~0.2-0.3 s). */
     static constexpr float PAUSE_SECONDS_PER_JOLT = 0.1f;

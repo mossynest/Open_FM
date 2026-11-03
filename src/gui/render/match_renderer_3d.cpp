@@ -542,6 +542,9 @@ struct MatchRenderer3D::State
   RenderMath::Projection projection;
   /** False until a frame was projected (input maps through it). */
   bool hasProjection = false;
+  /** This frame draws no player figures or their shadows (the sandbox's
+   * true view draws the engine's shapes in their place). */
+  bool hideFigures = false;
   ImDrawList* drawList = nullptr;
   ImVec2 whitePixel;
   float elapsedSeconds = 0.0f;
@@ -1181,6 +1184,7 @@ void MatchRenderer3D::State::drawShadows(const MatchRenderSnapshot& snapshot,
                           std::max(light.direction.z, 0.2f);
   for (const MatchRenderPlayer& player : snapshot.players)
   {
+    if (hideFigures) break;
     const Vec3 root = RenderMath::worldFromPitch(lerpRenderPosition(
         player.previousPosition, player.currentPosition, alpha));
     ScreenPoint screen;
@@ -3939,6 +3943,7 @@ void MatchRenderer3D::render(const MatchRenderSnapshot& snapshot,
           (options.kickoffMinutes >= Tuning::Day::DAY_FROM_MINUTES &&
            options.kickoffMinutes < Tuning::Day::DAY_UNTIL_MINUTES);
   s.light = s.day ? dayLight() : nightLight();
+  s.hideFigures = options.hidePlayerFigures;
 
   s.prepareMatch(snapshot);
   if (s.slots.size() != snapshot.players.size())
@@ -4064,8 +4069,9 @@ void MatchRenderer3D::render(const MatchRenderSnapshot& snapshot,
   s.keys.clear();
   s.texts.clear();
   s.playersOnScreen.clear();
-  for (std::size_t index = 0; index < snapshot.players.size(); ++index)
-    s.addPlayer(snapshot.players[index], s.slots[index], alpha);
+  if (!s.hideFigures)
+    for (std::size_t index = 0; index < snapshot.players.size(); ++index)
+      s.addPlayer(snapshot.players[index], s.slots[index], alpha);
   s.addGoals();
   s.addCornerFlags();
   s.addBoards();

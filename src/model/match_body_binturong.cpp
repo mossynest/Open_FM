@@ -31,6 +31,7 @@
 #include <tuple>
 #include <utility>
 
+#include "model/match_body_shape_binturong.h"
 #include "model/match_contact_binturong.h"
 #include "model/match_engine.h"
 #include "model/match_engine_internal.h"
@@ -4871,11 +4872,9 @@ std::optional<HeadPart> MatchEngine::headMeetBinturong(const MatchPlayer& player
   // from a duck below his forehead (never below his head line, the top of
   // his shoulders where he is then) up to the top of his head.
   using A = MatchTuning::Aerial;
-  const float top = player.heightMetres + feetHeight;
-  const float forehead = top - A::HEAD_OFFSET_METRES;
-  const float lowest = std::max(bodyLinesBinturong(player).head + feetHeight,
-                                forehead - A::DUCK_HEIGHT_SHARE * player.heightMetres);
-  if (gap > A::HEAD_REACH_METRES || heightMetres < lowest || heightMetres > top)
+  const HeadBand band = headBandOf(player.heightMetres, feetHeight);
+  const float forehead = band.forehead;
+  if (gap > A::HEAD_REACH_METRES || heightMetres < band.lowest || heightMetres > band.top)
     return std::nullopt;
   const Vector2F facing = normalized(
       {std::cos(player.facingAngle) * MatchTuning::Pitch::LENGTH_METRES,
@@ -4912,8 +4911,7 @@ float MatchEngine::jumpRiseBinturong(const MatchPlayer& player, bool running) co
 {
   // His running jump takes the top of his head to his Jumping reach; his
   // standing jump rises a share of that (aerial challenge plan step 1).
-  const float rise = std::max(jumpingReachBinturong(player) - player.heightMetres, 0.0f);
-  return running ? rise : rise * MatchTuning::Aerial::STANDING_JUMP_SHARE;
+  return jumpRiseOf(jumpingReachBinturong(player), player.heightMetres, running);
 }
 
 void MatchEngine::stepJumpBinturong(MatchPlayer& player, float dt,
@@ -5237,10 +5235,7 @@ BodyLines MatchEngine::bodyLinesBinturong(const MatchPlayer& player) const
 {
   // From his height (chest and thigh control plan step 1): his knee, the top
   // of a raised thigh, the top of his shoulders.
-  using B = MatchTuning::Ball;
-  return BodyLines{B::FEET_LINE_HEIGHT_SHARE * player.heightMetres,
-                   B::CHEST_LINE_HEIGHT_SHARE * player.heightMetres,
-                   B::HEAD_LINE_HEIGHT_SHARE * player.heightMetres};
+  return bodyLinesOfHeight(player.heightMetres);
 }
 
 float MatchEngine::feetReachBinturong(const MatchPlayer& player) const
@@ -5789,10 +5784,7 @@ MatchEngine::DribbleTurnAhead MatchEngine::dribbleTurnAheadBinturong(
 float MatchEngine::dribbleMeetGapBinturong(const MatchPlayer& player) const
 {
   // A better dribbler keeps it close; a poor one plays it at a stretch.
-  const float comfort = touchKnobs[TouchKnob::COMFORT_GAP];
-  return comfort + (std::max(MatchTuning::Dribble::KICK_REACH_METRES, comfort) -
-                    comfort) *
-                       (1.0f - std::clamp(player.dribbling, 0.0f, 1.0f));
+  return dribbleMeetGapOf(touchKnobs[TouchKnob::COMFORT_GAP], player.dribbling);
 }
 
 void MatchEngine::shapeMeetForStrikeBinturong(const MatchPlayer& owner)

@@ -49,11 +49,17 @@ class EngineDebugger
    * after the match pass nullptr for both (the log stays readable).
    * `cursor` is the tick the review shows (its rows are highlighted);
    * `inspected` the engine at that moment (the live one while following),
-   * read by the inspector's tabs.
+   * read by the inspector's tabs. `open`, when given, gets the window's
+   * close button.
    */
   void render(SandboxRecorder& recorder, MatchEngine* engine, bool* paused,
               std::optional<std::uint64_t> cursor,
-              const MatchEngine* inspected, DebugInspector& inspector);
+              const MatchEngine* inspected, DebugInspector& inspector,
+              bool* open = nullptr);
+  /** The window's contents, to embed (the sandbox match's side panel). */
+  void renderContents(SandboxRecorder& recorder, MatchEngine* engine,
+                      bool* paused, std::optional<std::uint64_t> cursor,
+                      const MatchEngine* inspected, DebugInspector& inspector);
 
   /** A tick the user clicked in the log, once. */
   [[nodiscard]] std::optional<std::uint64_t> takeSeekRequest();

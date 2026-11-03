@@ -198,6 +198,7 @@ set(FM_CORE_SOURCES
     model/match_out_of_play_aardvark.cpp
     model/match_out_of_play_aardvark_members.h
     model/match_contact_binturong.h
+    model/match_body_shape_binturong.h
     model/match_engine.h
     model/match_engine_internal.h
     model/match_engine.cpp
@@ -727,6 +728,12 @@ add_executable(match_sandbox
     tools/match_sandbox_contact_view.cpp
     tools/match_sandbox_bench_scene.h
     tools/match_sandbox_bench_scene.cpp
+    tools/match_sandbox_true_view.h
+    tools/match_sandbox_true_view.cpp
+    tools/match_sandbox_true_view_shapes.h
+    tools/match_sandbox_true_view_shapes.cpp
+    tools/match_sandbox_true_view_match.h
+    tools/match_sandbox_true_view_match.cpp
     tools/match_sandbox_pickers.h
     tools/match_sandbox_pickers.cpp
     tools/match_sandbox_test_teams.h

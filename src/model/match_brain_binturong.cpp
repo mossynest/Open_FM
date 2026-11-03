@@ -28,6 +28,7 @@
 #include <string>
 #include <vector>
 
+#include "model/match_body_shape_binturong.h"
 #include "model/match_contact_binturong.h"
 #include "model/match_engine.h"
 #include "model/match_engine_internal.h"
@@ -88,9 +89,13 @@ constexpr std::uint64_t planJob(PlanBranch branch, std::uint32_t choices = 0,
 // close, with a little margin (0.6 m between centres: the 0.4 m bodies of
 // the collision plan and 0.2 m between them; collision plan step 7);
 // "the same target" and "the same way"; a side kept unless the other is
-// this much shorter; running speeds below this are not racing.
-constexpr float OVERTAKE_OPPONENT_CLEARANCE_METRES = 1.0f;
-constexpr float OVERTAKE_TEAM_MATE_CLEARANCE_METRES = 0.6f;
+// this much shorter; running speeds below this are not racing. The
+// clearances are in MatchTuning::Collision (the sandbox's true view draws
+// them).
+constexpr float OVERTAKE_OPPONENT_CLEARANCE_METRES =
+    MatchTuning::Collision::OVERTAKE_OPPONENT_CLEARANCE_METRES;
+constexpr float OVERTAKE_TEAM_MATE_CLEARANCE_METRES =
+    MatchTuning::Collision::OVERTAKE_TEAM_MATE_CLEARANCE_METRES;
 constexpr float OVERTAKE_HORIZON_SECONDS = 3.0f;
 constexpr float OVERTAKE_SAME_TARGET_METRES = 2.0f;
 constexpr float OVERTAKE_SAME_DIRECTION_COSINE = 0.7071f;
@@ -2975,8 +2980,7 @@ MatchEngine::Challenge MatchEngine::chooseChallengeBinturong(
       defender->trapTimer > 0.0f || isControlled(*defender))
     return challenge;
   using D = MatchTuning::Defending;
-  const float reach = D::TACKLE_DISTANCE_METRES +
-                      defender->defending * D::TACKLE_DEFENDING_REACH_METRES;
+  const float reach = standingTackleReachOf(defender->defending);
   const float ballDistance = distance(defender->position, ball.position);
   if (ballDistance >= D::SLIDE_TACKLE_DISTANCE_METRES) return challenge;
   // A loose dribbled ball is played, not rolled for: outside the carrier's

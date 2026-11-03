@@ -26,6 +26,7 @@
 #include "tools/match_sandbox_recording.h"
 #include "tools/match_sandbox_review.h"
 #include "tools/match_sandbox_setup.h"
+#include "tools/match_sandbox_true_view_match.h"
 
 class Lineup;
 class Strategy;
@@ -47,7 +48,8 @@ class MatchSandboxScene : public GUIScene
    * @param kick_off_now Start a match with the default setup straight away.
    * @param open_drill Open this drill (by name, any case) in Watch mode.
    * @param open_view How to open it: 0 Watch, 1 Measure, 2 Shot map; 3
-   * opens the contact view (no drill).
+   * opens the contact view, 4 the technique bench, 5 the true view (no
+   * drill).
    */
   explicit MatchSandboxScene(GUIView* guiView_ptr, bool kick_off_now = false,
                              std::string open_drill = {},
@@ -146,8 +148,19 @@ class MatchSandboxScene : public GUIScene
   /** Clubs of the recorded match (the pickers may change after it). */
   TeamID match_home = 0;
   TeamID match_away = 0;
-  /** Debugger and review windows over the live match. */
-  bool show_debugger = true;
-  /** The last match's review and log on the setup screen. */
-  bool show_last_log = false;
+  /** In the match (its controls' Debug and True view buttons): debug shows
+   * the review's moment on the match's pitch with the inspector's
+   * overlays, and the review and debugger in its side panel; the true view
+   * makes the pitch the engine's shapes, its settings in the side panel.
+   * The setup screen's checkbox turns debug on at kick-off. */
+  bool match_debug = false;
+  bool match_true_view = false;
+  bool debug_at_kick_off = false;
+  MatchTrueView true_view;
+  /** After a match, on the setup screen: the review and debugger windows
+   * (renderDebugTools), each closed by its own close button. */
+  bool show_review = false;
+  bool show_debugger = false;
+  /** The sandbox's sections in the match's side panel. */
+  void renderMatchPanel(MatchEngine& engine, bool& paused);
 };

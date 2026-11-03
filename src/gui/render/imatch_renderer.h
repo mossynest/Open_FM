@@ -84,6 +84,9 @@ struct MatchRenderOptions
   /** Play mode: the human's active footballer (0 = none), kept in view by
    * the play camera. */
   PlayerID activePlayer = 0;
+  /** No player figures or their shadows (3D view): the sandbox's true view
+   * draws the engine's shapes in their place. */
+  bool hidePlayerFigures = false;
 };
 
 /**

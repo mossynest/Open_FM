@@ -197,7 +197,7 @@ std::optional<std::uint64_t> EngineDebugger::takeSeekRequest()
 void EngineDebugger::render(SandboxRecorder& recorder, MatchEngine* engine,
                             bool* paused, std::optional<std::uint64_t> cursor,
                             const MatchEngine* inspected,
-                            DebugInspector& inspector)
+                            DebugInspector& inspector, bool* open)
 {
   const float scale = Theme::scale();
   const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -211,11 +211,20 @@ void EngineDebugger::render(SandboxRecorder& recorder, MatchEngine* engine,
       ImVec2(viewport->WorkSize.x * 0.5f - 1.5f * margin,
              viewport->WorkSize.y - 2.0f * margin),
       ImGuiCond_FirstUseEver);
-  if (!ImGui::Begin("Engine debugger"))
+  if (!ImGui::Begin("Engine debugger", open))
   {
     ImGui::End();
     return;
   }
+  renderContents(recorder, engine, paused, cursor, inspected, inspector);
+  ImGui::End();
+}
+
+void EngineDebugger::renderContents(SandboxRecorder& recorder, MatchEngine* engine,
+                                    bool* paused, std::optional<std::uint64_t> cursor,
+                                    const MatchEngine* inspected,
+                                    DebugInspector& inspector)
+{
   renderControls(recorder, engine, paused);
   if (const MatchEngine* shown = inspected ? inspected : engine)
     ImGui::TextDisabled(
@@ -263,7 +272,6 @@ void EngineDebugger::render(SandboxRecorder& recorder, MatchEngine* engine,
     }
     ImGui::EndTabBar();
   }
-  ImGui::End();
 }
 
 void EngineDebugger::renderControls(SandboxRecorder& recorder,

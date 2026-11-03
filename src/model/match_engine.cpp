@@ -34,6 +34,7 @@
 #include <span>
 #include <sstream>
 
+#include "model/match_body_shape_binturong.h"
 #include "model/match_commentary.h"
 #include "model/match_contact_binturong.h"
 #include "model/match_engine_internal.h"
@@ -2358,8 +2359,7 @@ void MatchEngine::resolvePossessionAndActions(float dt)
       using D = MatchTuning::Defending;
       const float reach =
           sliding ? D::SLIDE_TACKLE_DISTANCE_METRES
-                  : D::TACKLE_DISTANCE_METRES +
-                        controlled.defending * D::TACKLE_DEFENDING_REACH_METRES;
+                  : standingTackleReachOf(controlled.defending);
       // A loose dribbled ball is played by touching it, not by a standing
       // tackle: a free ball (tackling plan step 1) or a contest (step 2,
       // a Binturong body only).
