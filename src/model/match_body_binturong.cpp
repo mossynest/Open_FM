@@ -1288,6 +1288,9 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
   alignas(16) std::array<float, LANES> stamina;
   alignas(16) std::array<float, LANES> reserve;
   alignas(16) std::array<float, LANES> injury;
+  // Giving way (way-round plan): the speed he holds himself to (m/s), or
+  // none (a large value).
+  alignas(16) std::array<float, LANES> giveWay;
   alignas(16) std::array<float, LANES> acceleration;
   alignas(16) std::array<float, LANES> braking;
   alignas(16) std::array<float, LANES> intentScale;
@@ -1747,6 +1750,9 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
     reserve[lane] = player.sprintReserve;
     injury[lane] =
         player.isInjured ? MatchTuning::Injury::INJURED_SPEED_SCALE : 1.0f;
+    giveWay[lane] = !walking && player.giveWaySpeed >= 0.0f
+                        ? player.giveWaySpeed
+                        : std::numeric_limits<float>::max();
     // Landing from a jump, he has only a share of his acceleration, braking
     // and turning.
     const float landing =
@@ -1869,7 +1875,10 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
                          1.0f)
             : 1.0f;
     const float pacedTop = sustainable + (topSpeed - sustainable) * saved;
-    const float speedCap = std::min(pacedTop, maxSpeed[lane] * effort);
+    // Giving way to someone crossing ahead, he eases off to the speed his
+    // brain holds him to.
+    const float speedCap =
+        std::min({pacedTop, maxSpeed[lane] * effort, giveWay[lane]});
     // Acceleration-speed profile a(v) = A0 (1 - v / vmax), stronger braking,
     // and a lateral limit (scaled by his grip) that forces a player to slow
     // down to turn sharply.

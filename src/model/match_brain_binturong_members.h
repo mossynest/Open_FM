@@ -17,6 +17,9 @@
    * the same target go round him when that still wins the race (movement
    * targets plan 4a). Runs after the targets (and drill targets) are set. */
   void planOvertakeBinturong(std::size_t slot);
+  /** Way-round plan: a loose-ball chaser goes round the first player in his
+   * way (Notes and plans/match_engine_way_round_plan.md). */
+  void planWayRoundBinturong(std::size_t slot);
   void assignMarksBinturong(bool home);
   Vector2F goalkeeperTargetBinturong(MatchPlayer& keeper, const MatchPlayer* carrier);
   BallAction chooseBallActionBinturong(MatchPlayer& carrier);

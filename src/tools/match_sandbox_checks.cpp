@@ -12,7 +12,9 @@
 #include <chrono>
 #include <cstdint>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <algorithm>
 #include <format>
@@ -31,6 +33,7 @@
 
 #include "controller/game_controller.h"
 #include "model/match_engine.h"
+#include "model/match_engine_internal.h"
 #include "model/match_scenario.h"
 #include "model/team.h"
 #include "tools/match_sandbox_detail.h"
@@ -1430,4 +1433,189 @@ int runSandboxChecks(GameController& controller, int matches)
                  possessionWorks && firstTouchWorks && restartsWork
              ? 0
              : 1;
+}
+
+int runMatchTrace(GameController& controller, double seconds, int cases, const std::string& kind)
+{
+  // The first two clubs of the first league, a match from kick-off: each
+  // stumble or fall between two players getting into position (holding
+  // shape, offering support, recovering shape), with both players' last
+  // 1.2 s before it (way-round plan diagnostics).
+  std::vector<const Team*> clubs;
+  const auto& leagues = controller.getLeagues();
+  for (const auto& team : controller.getTeams())
+    if (!leagues.empty() && team.get().getLeagueId() == leagues.front().get().getId())
+      clubs.push_back(&team.get());
+  if (clubs.size() < 2) return 1;
+  auto engine = makeEngine(*clubs[0], *clubs[1], controller.getStatsConfig(), 1000);
+  struct Moment
+  {
+    Vector2F position{};
+    Vector2F velocity{};
+    float facing = 0.0f;
+    PlayerIntent intent = PlayerIntent::HOLD_SHAPE;
+    Vector2F target{};
+    Vector2F heading{};
+    int waypoints = 0;
+    int roundOf = -1;
+    int roundSide = 0;
+    int blockedBy = -1;
+    int givingWayTo = -1;
+    int rightOver = -1;
+    float giveWaySpeed = -1.0f;
+    bool steers = false;
+    bool ballOwned = false;
+    bool setPiece = false;
+  };
+  constexpr std::size_t HISTORY = 20;
+  const auto& players = engine->getPlayers();
+  std::vector<std::deque<Moment>> history(players.size());
+  const auto metres = [](Vector2F pitch)
+  {
+    return Vector2F{pitch.x * MatchTuning::Pitch::LENGTH_METRES,
+                    pitch.y * MatchTuning::Pitch::WIDTH_METRES};
+  };
+  const auto nameOf = [&](std::size_t slot)
+  {
+    return players[slot].player ? players[slot].player->getName() : std::string("?");
+  };
+  const auto positioning = [](PlayerIntent intent)
+  {
+    return intent == PlayerIntent::HOLD_SHAPE || intent == PlayerIntent::OFFER_SUPPORT ||
+           intent == PlayerIntent::RECOVER_SHAPE;
+  };
+  const auto intentText = [](PlayerIntent intent)
+  { return std::string(MatchEngineInternal::intentName(intent)); };
+  int shown = 0;
+  double now = 0.0;
+  while (now < seconds && shown < cases &&
+         engine->getState() != MatchState::FULL_TIME)
+  {
+    engine->advance(MatchTuning::Timing::FIXED_STEP_SECONDS);
+    now += MatchTuning::Timing::FIXED_STEP_SECONDS;
+    for (const MatchEngine::CollisionHit& hit : engine->getLastCollisions())
+    {
+      std::array<std::size_t, 2> slots{players.size(), players.size()};
+      for (std::size_t side = 0; side < 2; ++side)
+        for (std::size_t slot = 0; slot < players.size(); ++slot)
+          if (players[slot].player && players[slot].player->getId() == hit.sides[side].player)
+            slots[side] = slot;
+      if (slots[0] >= players.size() || slots[1] >= players.size()) continue;
+      if (hit.sides[0].outcome == 0 && hit.sides[1].outcome == 0) continue;
+      if (history[slots[0]].empty() || history[slots[1]].empty()) continue;
+      const Moment& lastA = history[slots[0]].back();
+      const Moment& lastB = history[slots[1]].back();
+      if (!positioning(lastA.intent) || !positioning(lastB.intent)) continue;
+      // Only "neither saw it": nobody at his spot, giving way or going round.
+      const auto atSpot = [&](const Moment& m, std::size_t slot)
+      {
+        const Vector2F at = metres(players[slot].position);
+        const Vector2F target = metres(m.target);
+        return std::hypot(target.x - at.x, target.y - at.y) <= 2.0f;
+      };
+      const bool spot = atSpot(lastA, slots[0]) || atSpot(lastB, slots[1]);
+      const auto a8 = static_cast<int>(slots[0]);
+      const auto b8 = static_cast<int>(slots[1]);
+      const bool givingWay = lastA.givingWayTo == b8 || lastB.givingWayTo == a8 ||
+                             lastA.rightOver == b8 || lastB.rightOver == a8;
+      const bool sawIt = lastA.roundOf >= 0 || lastB.roundOf >= 0 || lastA.blockedBy >= 0 ||
+                         lastB.blockedBy >= 0;
+      const bool wanted = kind == "all"       ? true
+                          : kind == "spot"    ? spot
+                          : kind == "giveway" ? !spot && givingWay
+                                              : !spot && !givingWay && !sawIt &&
+                                                    lastA.givingWayTo < 0 &&
+                                                    lastB.givingWayTo < 0 &&
+                                                    lastA.rightOver < 0 && lastB.rightOver < 0;
+      if (!wanted) continue;
+      ++shown;
+      // Why the planner never had them: over the last 2 s, for each.
+      for (std::size_t side = 0; side < 2; ++side)
+      {
+        const auto& h = history[slots[side]];
+        int owned = 0, setPiece = 0, notSteering = 0, intentChanges = 0, targetJumps = 0;
+        float biggestJump = 0.0f;
+        for (std::size_t i = 0; i < h.size(); ++i)
+        {
+          owned += h[i].ballOwned ? 1 : 0;
+          setPiece += h[i].setPiece ? 1 : 0;
+          notSteering += h[i].steers ? 0 : 1;
+          if (i == 0) continue;
+          intentChanges += h[i].intent != h[i - 1].intent ? 1 : 0;
+          const Vector2F t0 = metres(h[i - 1].target);
+          const Vector2F t1 = metres(h[i].target);
+          const float jump = std::hypot(t1.x - t0.x, t1.y - t0.y);
+          if (jump > 1.0f) ++targetJumps;
+          biggestJump = std::max(biggestJump, jump);
+        }
+        std::printf("  WHY %c: ball owned %d/%zu steps, set piece %d, not steering %d, "
+                    "intent changes %d, target jumps >1 m %d (biggest %.1f m)\n",
+                    side == 0 ? 'A' : 'B', owned, h.size(), setPiece, notSteering,
+                    intentChanges, targetJumps, biggestJump);
+      }
+      const bool mates = players[slots[0]].isHomeTeam == players[slots[1]].isHomeTeam;
+      std::printf("\n=== %.1f s  %s (%s) / %s (%s), %s; outcome %d / %d, jolt %.2f / %.2f\n",
+                  now, nameOf(slots[0]).c_str(), intentText(lastA.intent).c_str(),
+                  nameOf(slots[1]).c_str(), intentText(lastB.intent).c_str(),
+                  mates ? "team-mates" : "opponents", hit.sides[0].outcome,
+                  hit.sides[1].outcome, std::hypot(hit.sides[0].jolt.x, hit.sides[0].jolt.y),
+                  std::hypot(hit.sides[1].jolt.x, hit.sides[1].jolt.y));
+      const std::size_t count = std::min(history[slots[0]].size(), history[slots[1]].size());
+      for (std::size_t back = count; back-- > 0;)
+      {
+        if (back % 2 != 1 && back != 0) continue;
+        if (back >= history[slots[0]].size() || back >= history[slots[1]].size()) continue;
+        const Moment& a = history[slots[0]][history[slots[0]].size() - 1 - back];
+        const Moment& b = history[slots[1]][history[slots[1]].size() - 1 - back];
+        const Vector2F pa = metres(a.position);
+        const Vector2F pb = metres(b.position);
+        const auto describe = [&](const Moment& m, Vector2F at)
+        {
+          const Vector2F target = metres(m.target);
+          const Vector2F heading = metres(m.heading);
+          const float speed = std::hypot(m.velocity.x, m.velocity.y);
+          const float course =
+              std::atan2(m.velocity.y, m.velocity.x) * 180.0f / std::numbers::pi_v<float>;
+          return std::format(
+              "{:.1f} m/s course {:.0f} · {} · target {:.1f} m{} · {}{}{}",
+              speed, course, intentText(m.intent).substr(0, 7),
+              std::hypot(target.x - at.x, target.y - at.y),
+              m.waypoints > 0 ? std::format(" (via waypoint {:.1f} m)",
+                                            std::hypot(heading.x - at.x, heading.y - at.y))
+                              : std::string(),
+              m.roundOf >= 0 ? std::format("going round {} on his {}", nameOf(m.roundOf),
+                                           m.roundSide > 0 ? "left" : "right")
+                             : std::string("not going round"),
+              m.blockedBy >= 0 ? std::format(" (blocked by {})", nameOf(m.blockedBy))
+                               : std::string(),
+              m.givingWayTo >= 0
+                  ? std::format(" · GIVING WAY to {} (held to {:.1f} m/s)", nameOf(m.givingWayTo),
+                                m.giveWaySpeed)
+              : m.rightOver >= 0 ? std::format(" · right of way over {}", nameOf(m.rightOver))
+                                 : std::string());
+        };
+        std::printf("  -%.1f s  gap %.2f m%s\n     A: %s%s\n     B: %s%s\n",
+                    0.1 * static_cast<double>(back),
+                    std::hypot(pb.x - pa.x, pb.y - pa.y), a.ballOwned ? "  (ball owned)" : "",
+                    describe(a, pa).c_str(), a.steers ? "" : " · NOT STEERING",
+                    describe(b, pb).c_str(), b.steers ? "" : " · NOT STEERING");
+      }
+    }
+    for (std::size_t slot = 0; slot < players.size(); ++slot)
+    {
+      const MatchPlayer& player = players[slot];
+      Moment moment{player.position,       player.velocity,      player.facingAngle,
+                    player.intent,         player.tacticalTarget, player.movementTarget,
+                    player.routeWaypoints, player.wayRoundOf,    player.wayRoundSide,
+                    player.wayRoundBlockedBy, player.givingWayTo, player.rightOfWayOver,
+                    player.giveWaySpeed,   player.steersRound,
+                    engine->getBall().possessedBy != nullptr,
+                    engine->getSetPiecePhaseRemaining() > 0.0f ||
+                        engine->getState() != MatchState::PLAYING};
+      history[slot].push_back(moment);
+      if (history[slot].size() > HISTORY) history[slot].pop_front();
+    }
+  }
+  std::printf("\n%d cases in %.0f s\n", shown, now);
+  return 0;
 }

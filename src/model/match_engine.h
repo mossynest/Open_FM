@@ -230,6 +230,29 @@ struct MatchPlayer
    * (engine seconds). */
   std::int8_t lastContactSlot = -1;
   double lastContactAt = -1.0e9;
+  /** Way-round plan: chasing a loose ball (the brain's ground chaser, or one
+   * going up for a loose high ball), so no one else's obstacle; and whether
+   * he steers round others (the ground chaser, a player moving to hold
+   * shape, offer support or recover shape), with when he meets it
+   * (s, as the brain reckoned). Set by every plan; a drill's held player is
+   * neither. */
+  bool chasingLooseBall = false;
+  bool steersRound = false;
+  float looseBallMeetSeconds = 0.0f;
+  /** The player he is going round (slot, -1: none) and on which side (+1
+   * his left), kept between refreshes (way-round plan, decision 7). */
+  std::int8_t wayRoundOf = -1;
+  std::int8_t wayRoundSide = 0;
+  /** The player he saw in his way at the last plan but found no clear side
+   * round (slot, -1: none). */
+  std::int8_t wayRoundBlockedBy = -1;
+  /** Giving way (way-round plan): the speed (m/s) he holds himself to
+   * while someone with the right of way crosses ahead of him; below 0,
+   * none. Set by every plan. And whom he gives way to, or has the right
+   * of way over (slot, -1: nobody). */
+  float giveWaySpeed = -1.0f;
+  std::int8_t givingWayTo = -1;
+  std::int8_t rightOfWayOver = -1;
   /** A body orientation asked of him (orientation plan, stage 1), as an
    * angle like facingAngle (normalised pitch space): his body turns to it
    * and he moves forward, sideways or backward relative to it. Without one
@@ -1134,6 +1157,38 @@ struct MatchStats
    * the knocked player's intent. */
   std::array<int, 8> collisionKnocksBySituation{};
   std::array<int, PLAYER_INTENT_COUNT> collisionKnocksByIntent{};
+  /** Of those, the ones with a player chasing a loose ball in them (either
+   * side's intent CLAIM_LOOSE_BALL), by the other player's intent (both
+   * chasing: CLAIM_LOOSE_BALL for opponents, the last entry for team-mates),
+   * and those where the knocked player was the chaser. */
+  /** Every stumble and fall by the knocked player's intent (first index)
+   * and the other player's (second). */
+  std::array<std::array<int, PLAYER_INTENT_COUNT>, PLAYER_INTENT_COUNT>
+      collisionKnocksByIntentPair{};
+  std::array<int, PLAYER_INTENT_COUNT + 1> collisionChaseKnocksWith{};
+  int collisionChaseKnocksOnChaser = 0;
+  /** Way-round plan: a player starting to go round someone (a new one, or
+   * a new side), and refreshes spent going round: chasing a loose ball,
+   * moving to hold shape, offering support, recovering shape. */
+  std::array<int, 4> wayRoundsStarted{};
+  std::array<int, 4> wayRoundRefreshes{};
+  /** Stumbles and falls between two players both moving to hold shape,
+   * offer support or recover shape: by why the way round did not stop it
+   * (0 one within 2 m of his spot, 1 one going round the other, 2 one saw
+   * the other but found no clear side, 3 one going round someone else, 4
+   * neither saw it coming, 5 one giving way to the other) and team-mates (0) or opponents (1); by each
+   * one's speed just before (under 1, 1-3, 3-5, over 5 m/s: the knocked
+   * one first); and by how they were moving (0 one standing, under 0.5
+   * m/s, 1 the same way, 2 crossing, 3 head-on). */
+  std::array<std::array<int, 2>, 6> positioningKnocksByReason{};
+  std::array<std::array<int, 4>, 4> positioningKnocksBySpeed{};
+  std::array<int, 4> positioningKnocksByMotion{};
+  /** Giving way: plans where a player eased off for someone crossing ahead
+   * of him, went round alone (head-on or the same way), and held his line
+   * with the right of way. */
+  int giveWaySlows = 0;
+  int giveWayRounds = 0;
+  int giveWayHolds = 0;
   /** Tackling plan step 5: steps a defender went into a contest (by his
    * side), those on the carrier's free foot (row 5, a misread), steps he
    * held, and the intents his brain chose. */
@@ -1850,6 +1905,8 @@ class MatchEngine
 
   const std::vector<MatchPlayer>& getPlayers() const { return players; }
   const MatchBall& getBall() const { return ball; }
+  /** Seconds left of the set-piece phase (0: none). */
+  float getSetPiecePhaseRemaining() const { return setPiecePhaseRemaining; }
   /** Whether the ball's ownership state is coherent: a ball in a first touch
    * has an owner, in open play. The sandbox checks this every step. */
   bool possessionConsistent() const;
@@ -2531,6 +2588,11 @@ class MatchEngine
    * stops. */
   float setPiecePhaseRemaining = 0.0f;
   bool setPieceHome = true;
+  /** In a set-piece phase: whether the ball has been in the box the set
+   * piece attacks, and whether it has since come out (way-round plan: the
+   * scramble in that box is left alone until then). */
+  bool setPieceBallInBox = false;
+  bool setPieceBoxCleared = false;
 
   std::vector<Vector2F> previousPlayerPositions;
   std::vector<float> previousPlayerFacingAngles;
@@ -2986,6 +3048,9 @@ class MatchEngine
   /** Whether the runner in `slot` goes round someone he is about to run
    * into (MatchPlayer::overtaking). */
   void planOvertake(std::size_t slot);
+  /** Way-round plan: a loose-ball chaser's way round a player in his way
+   * (the side's brain; after the overtakes). */
+  void planWayRound(std::size_t slot);
   /** The team's off-ball intents the moment a pass is released. */
   void afterPassReleased(const MatchPlayer& passer, const MatchPlayer& receiver);
   ShotAim chooseShotAim(const MatchPlayer& shooter, bool header, bool penalty,

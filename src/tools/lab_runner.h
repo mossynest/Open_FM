@@ -185,6 +185,20 @@ struct MatchSample
    * (MatchStats::collisionKnocksBySituation, collisionKnocksByIntent). */
   std::array<int, 8> collision_knocks_by_situation{};
   std::array<int, PLAYER_INTENT_COUNT> collision_knocks_by_intent{};
+  std::array<std::array<int, PLAYER_INTENT_COUNT>, PLAYER_INTENT_COUNT>
+      collision_knocks_by_intent_pair{};
+  std::array<std::array<int, 2>, 6> positioning_knocks_by_reason{};
+  int give_way_slows = 0;
+  int give_way_rounds = 0;
+  int give_way_holds = 0;
+  std::array<std::array<int, 4>, 4> positioning_knocks_by_speed{};
+  std::array<int, 4> positioning_knocks_by_motion{};
+  std::array<int, PLAYER_INTENT_COUNT + 1> collision_chase_knocks_with{};
+  int collision_chase_knocks_on_chaser = 0;
+  /** Way-round plan: chasers starting to go round someone, and refreshes
+   * spent going round (chasing, holding shape, supporting, recovering). */
+  std::array<int, 4> way_rounds_started{};
+  std::array<int, 4> way_round_refreshes{};
   std::array<int, 2> keeper_claim_attempts{};
   std::array<int, 2> keeper_claims{};
   /** Aerial duels with both sides involved, and those the home side won. */

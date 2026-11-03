@@ -96,6 +96,25 @@ constexpr float OVERTAKE_SAME_TARGET_METRES = 2.0f;
 constexpr float OVERTAKE_SAME_DIRECTION_COSINE = 0.7071f;
 constexpr float OVERTAKE_STICKY_METRES = 0.5f;
 constexpr float OVERTAKE_MINIMUM_SPEED = 1.0f;
+// A way round (way-round plan): a loose-ball chaser steers round anyone not
+// chasing it whose predicted closest approach is under the overtake's
+// clearances, looking this far ahead (or to the ball, if sooner), never in
+// the last metres before he meets it; his waypoint a margin outside the
+// clearance (his curve cuts a few centimetres inside); a side kept unless
+// the other is this much shorter (decisions 1-7, agreed 2026-10-30).
+constexpr float WAY_ROUND_HORIZON_SECONDS = 3.0f;
+constexpr float WAY_ROUND_FINAL_METRES = 2.0f;
+constexpr float WAY_ROUND_MARGIN_METRES = 0.1f;
+constexpr float WAY_ROUND_STICKY_METRES = 0.5f;
+// Giving way (decisions 1-2, agreed 2026-10-30): a man moving at least this
+// fast (m/s) is running a line (slower: standing, gone round as before);
+// paths within this cosine of square to each other cross (between 45 and
+// 135 degrees); below the moving speed, giving way is a stop.
+constexpr float GIVE_WAY_MOVING_SPEED = 0.5f;
+constexpr float GIVE_WAY_CROSSING_COSINE = 0.7071f;
+// Giving way the same way with no room to go round: this much under the
+// speed the man ahead is going his way (m/s).
+constexpr float GIVE_WAY_UNDER_LEADER_SPEED = 0.5f;
 // A loose ball's path is projected this far ahead (5 s, as for a first
 // touch); the player already after it keeps it on a near tie by one tick.
 constexpr int LOOSE_BALL_PATH_TICKS = 50;
@@ -1059,6 +1078,9 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
     // (otherwise worked out from his last plan, below), and his job.
     Vector2F targetVelocity{0.0f, 0.0f};
     bool pinned = false;
+    // The ground loose-ball chaser, and when he meets it (way-round plan).
+    bool looseChase = false;
+    float looseMeetSeconds = 0.0f;
     std::uint64_t job = planJob(PlanBranch::SHAPE);
     player.intent = PlayerIntent::HOLD_SHAPE;
     player.isPressing = false;
@@ -1549,7 +1571,9 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
         job = planJob(pressers[0] == &player ? PlanBranch::LOOSE_BALL
                                              : PlanBranch::LOOSE_COVER);
         // Run at where he can first meet it on its path.
-        const Vector2F meet = interception(player).second;
+        const auto [meetSeconds, meet] = interception(player);
+        looseChase = pressers[0] == &player;
+        looseMeetSeconds = meetSeconds;
         target = {std::clamp(meet.x, MatchTuning::Pitch::PLAYER_MIN_X,
                              MatchTuning::Pitch::PLAYER_MAX_X),
                   std::clamp(meet.y, MatchTuning::Pitch::PLAYER_MIN_Y,
@@ -1718,6 +1742,17 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
     player.routeWaypoints = 0;
     player.facingRequested = false;
     player.arriveAtSpeed = throughTarget;
+    // Chasing the loose ball (on the ground, or up for it), and whether he
+    // steers round others on the way: the ground chaser, and a player
+    // moving to hold shape, offer support or recover shape (way-round plan).
+    player.chasingLooseBall =
+        looseChase || player.intent == PlayerIntent::CLAIM_LOOSE_BALL;
+    player.steersRound =
+        !goalkeeper && !challenging &&
+        (looseChase || player.intent == PlayerIntent::HOLD_SHAPE ||
+         player.intent == PlayerIntent::OFFER_SUPPORT ||
+         player.intent == PlayerIntent::RECOVER_SHAPE);
+    player.looseBallMeetSeconds = looseMeetSeconds;
   }
 }
 
@@ -1968,6 +2003,302 @@ void MatchEngine::planOvertakeBinturong(std::size_t slot)
     runner.routeApexOffset = 0.0f;
     runner.routeOutwardRoom = clearance;
   }
+}
+
+void MatchEngine::planWayRoundBinturong(std::size_t slot)
+{
+  // A loose-ball chaser, or a player moving to hold shape, offer support
+  // or recover shape
+  // (way-round plan): the first player not chasing the ball he would come
+  // within the clearance of, before he gets where he is going and short of
+  // its last metres, is gone round by one waypoint beside where
+  // that player will be then: on the side that makes the shorter run, on
+  // the pitch, clear of everyone else (the man passed included, on the way
+  // back) and, chasing, still his ball. Neither side: he carries on (and may bump).
+  MatchPlayer& runner = players[slot];
+  const int previousOf = runner.wayRoundOf;
+  const int previousSide = runner.wayRoundSide;
+  // Who he gave way to, or had the right of way over, at the last plan.
+  const int previousGiveTo = runner.givingWayTo;
+  const int previousRightOver = runner.rightOfWayOver;
+  runner.wayRoundOf = -1;
+  runner.wayRoundSide = 0;
+  runner.wayRoundBlockedBy = -1;
+  runner.giveWaySpeed = -1.0f;
+  runner.givingWayTo = -1;
+  runner.rightOfWayOver = -1;
+  if (!active(runner) || !runner.steersRound || runner.fallen ||
+      !followsRoutes(runner) || runner.routeWaypoints > 0 || state != MatchState::PLAYING)
+    return;
+  // A chaser: open play only, with the ball loose. Getting into position
+  // (hold shape, support, recover): with the ball owned too, and in a set
+  // piece's phase everywhere but the box it attacks, until the ball has
+  // been in that box and come out.
+  if (runner.chasingLooseBall
+          ? setPiecePhaseRemaining > 0.0f || ball.possessedBy != nullptr
+          : setPiecePhaseRemaining > 0.0f && !setPieceBoxCleared &&
+                inPenaltyArea(runner.position, !setPieceHome))
+    return;
+  const auto lengthOf = [](Vector2F v) { return std::sqrt(v.x * v.x + v.y * v.y); };
+  const auto minus = [](Vector2F a, Vector2F b) { return Vector2F{a.x - b.x, a.y - b.y}; };
+  // The closest two straight runs come within `window` seconds, and when.
+  const auto closestApproach = [&](Vector2F a, Vector2F va, Vector2F b, Vector2F vb,
+                                   float window)
+  {
+    const Vector2F r = minus(b, a);
+    const Vector2F v = minus(vb, va);
+    const float vv = v.x * v.x + v.y * v.y;
+    const float t =
+        vv > 1e-6f ? std::clamp(-(r.x * v.x + r.y * v.y) / vv, 0.0f, window) : 0.0f;
+    return std::pair{lengthOf({r.x + v.x * t, r.y + v.y * t}), t};
+  };
+  const auto clearanceFor = [&](const MatchPlayer& other)
+  {
+    return other.isHomeTeam == runner.isHomeTeam ? OVERTAKE_TEAM_MATE_CLEARANCE_METRES
+                                                 : OVERTAKE_OPPONENT_CLEARANCE_METRES;
+  };
+  // Anyone not after the ball himself (a chaser of either side is a
+  // contest; an Aardvark brain's, by his intent) and on his feet (a fallen
+  // player is hurdled).
+  const auto inPlay = [&](const MatchPlayer& other)
+  {
+    return active(other) && &other != &runner && !other.fallen &&
+           !other.chasingLooseBall &&
+           !(brainOf(other.isHomeTeam) == BrainId::AARDVARK &&
+             other.intent == PlayerIntent::CLAIM_LOOSE_BALL);
+  };
+
+  const Vector2F position = toMetres(runner.position);
+  const Vector2F meet = toMetres(runner.tacticalTarget);
+  const Vector2F toMeet = minus(meet, position);
+  const float meetMetres = lengthOf(toMeet);
+  if (meetMetres <= WAY_ROUND_FINAL_METRES) return;
+  // His run as he means it: straight at where he is going (his meet with
+  // the ball, chasing; his spot): flat out, chasing; else at the speed he
+  // is going (a job's pace is only what he works up to).
+  const bool chasing = runner.chasingLooseBall;
+  const float speed = std::max(chasing ? currentTopSpeed(runner) : length(runner.velocity),
+                               OVERTAKE_MINIMUM_SPEED);
+  const float toBallSeconds = meetMetres / speed;
+  const Vector2F heading{toMeet.x / meetMetres, toMeet.y / meetMetres};
+  const Vector2F velocity{heading.x * speed, heading.y * speed};
+  const float window = std::min(WAY_ROUND_HORIZON_SECONDS, toBallSeconds);
+  // Within the last metres before his meet it is a challenge, not a run.
+  const auto nearBall = [&](Vector2F point)
+  { return lengthOf(minus(meet, point)) <= WAY_ROUND_FINAL_METRES; };
+
+  // The first he would come within the clearance of.
+  int first = -1;
+  float firstAt = 0.0f;
+  for (std::size_t other = 0; other < players.size(); ++other)
+  {
+    const MatchPlayer& man = players[other];
+    if (!inPlay(man)) continue;
+    const Vector2F at = toMetres(man.position);
+    if (nearBall(at)) continue;
+    const auto [closest, when] =
+        closestApproach(position, velocity, at, man.velocity, window);
+    if (closest >= clearanceFor(man)) continue;
+    if (nearBall({position.x + velocity.x * when, position.y + velocity.y * when}) ||
+        nearBall({at.x + man.velocity.x * when, at.y + man.velocity.y * when}))
+      continue;
+    if (first < 0 || when < firstAt)
+    {
+      first = static_cast<int>(other);
+      firstAt = when;
+    }
+  }
+  if (first < 0) return;
+  const MatchPlayer& man = players[static_cast<std::size_t>(first)];
+  const float room = clearanceFor(man) + WAY_ROUND_MARGIN_METRES;
+
+  // Both going round each other (giving way, decisions 1-2): only one of
+  // them moves for it. Who reaches the point their paths cross first has
+  // the right of way and holds his line; the other eases off to reach it
+  // only once he is past, or (head-on, the same way: no crossing to wait
+  // for) goes round alone. Judged on both men's actual runs, so each
+  // reckons it the same way.
+  // (Only with a man who can steer himself now: on his way, not in the last
+  // metres to his own spot.)
+  if (man.steersRound && !runner.chasingLooseBall && followsRoutes(man) &&
+      length(man.velocity) >= GIVE_WAY_MOVING_SPEED &&
+      distance(man.position, man.tacticalTarget) > WAY_ROUND_FINAL_METRES)
+  {
+    const Vector2F mine = length(runner.velocity) >= GIVE_WAY_MOVING_SPEED
+                              ? runner.velocity
+                              : velocity;
+    const Vector2F theirs = man.velocity;
+    const auto cross = [](Vector2F a, Vector2F b) { return a.x * b.y - a.y * b.x; };
+    const Vector2F gap = minus(toMetres(man.position), position);
+    const float turn = cross(mine, theirs);
+    const float cosine = (mine.x * theirs.x + mine.y * theirs.y) /
+                         std::max(lengthOf(mine) * lengthOf(theirs), 1e-6f);
+    // When each reaches where their paths cross (s), if ahead of both.
+    const float myTime = std::abs(turn) > 1e-6f ? cross(gap, theirs) / turn : -1.0f;
+    const float theirTime = std::abs(turn) > 1e-6f ? cross(gap, mine) / turn : -1.0f;
+    const bool crossing = cosine > -GIVE_WAY_CROSSING_COSINE &&
+                          cosine < GIVE_WAY_CROSSING_COSINE && myTime > 0.0f &&
+                          theirTime > 0.0f;
+    // The same two still meeting: as they were (a near tie read afresh
+    // each plan would swap them back and forth), the other man's record of
+    // it first, so the two always agree.
+    const auto me = static_cast<std::int8_t>(slot);
+    const bool wasLeading = man.givingWayTo == me ||
+                            (man.rightOfWayOver != me && previousRightOver == first);
+    const bool wasGiving = !wasLeading && (man.rightOfWayOver == me || previousGiveTo == first);
+    // Crossing: the first there. The same way: the one in front. Head-on:
+    // the lower slot (a fixed rule both read alike).
+    const bool lead = wasLeading ? true : wasGiving ? false :
+        crossing ? (myTime < theirTime ||
+                    (myTime == theirTime && slot < static_cast<std::size_t>(first)))
+        : cosine >= GIVE_WAY_CROSSING_COSINE
+            ? -(gap.x * mine.x + gap.y * mine.y) > 0.0f
+            : slot < static_cast<std::size_t>(first);
+    if (lead)
+    {
+      runner.rightOfWayOver = static_cast<std::int8_t>(first);
+      ++stats.giveWayHolds;
+      return;
+    }
+    runner.givingWayTo = static_cast<std::int8_t>(first);
+    if (crossing)
+    {
+      // To reach the crossing (short of it by the clearance) only once he
+      // is past it by the clearance; slower than a walk's start, a stop.
+      const float clearance = clearanceFor(man);
+      const float leaderPast = theirTime + clearance / std::max(lengthOf(theirs), 1e-3f);
+      const float myRoom = std::max(0.0f, lengthOf(mine) * myTime - clearance);
+      float allowed = myRoom / std::max(leaderPast, 1e-3f);
+      if (allowed < GIVE_WAY_MOVING_SPEED) allowed = 0.0f;
+      runner.giveWaySpeed = allowed;
+      ++stats.giveWaySlows;
+      return;
+    }
+    ++stats.giveWayRounds;
+  }
+  const Vector2F manAt = toMetres(man.position);
+  const Vector2F level{manAt.x + man.velocity.x * firstAt,
+                       manAt.y + man.velocity.y * firstAt};
+  const Vector2F across{-heading.y, heading.x};
+  // When the other side's chaser meets it: going round must not hand it
+  // to him (if he was going to be first).
+  float rival = std::numeric_limits<float>::max();
+  for (const MatchPlayer& other : players)
+    if (active(other) && other.isHomeTeam != runner.isHomeTeam && other.chasingLooseBall &&
+        other.looseBallMeetSeconds > 0.0f)
+      rival = std::min(rival, other.looseBallMeetSeconds);
+  const float minX = MatchTuning::Pitch::PLAYER_MIN_X * MatchTuning::Pitch::LENGTH_METRES;
+  const float maxX = MatchTuning::Pitch::PLAYER_MAX_X * MatchTuning::Pitch::LENGTH_METRES;
+  const float minY = MatchTuning::Pitch::PLAYER_MIN_Y * MatchTuning::Pitch::WIDTH_METRES;
+  const float maxY = MatchTuning::Pitch::PLAYER_MAX_Y * MatchTuning::Pitch::WIDTH_METRES;
+
+  struct Option
+  {
+    bool ok = false;
+    Vector2F waypoint{};
+    float metres = 0.0f;
+  };
+  std::array<Option, 2> options;
+  for (std::size_t index = 0; index < 2; ++index)
+  {
+    const float side = index == 0 ? 1.0f : -1.0f;
+    Option& option = options[index];
+    option.waypoint = {level.x + across.x * side * room, level.y + across.y * side * room};
+    // On the pitch.
+    if (option.waypoint.x < minX || option.waypoint.x > maxX ||
+        option.waypoint.y < minY || option.waypoint.y > maxY)
+      continue;
+    const Vector2F firstLeg = minus(option.waypoint, position);
+    const Vector2F secondLeg = minus(meet, option.waypoint);
+    const float firstMetres = lengthOf(firstLeg);
+    const float secondMetres = lengthOf(secondLeg);
+    option.metres = firstMetres + secondMetres;
+    const float firstTime = firstMetres / speed;
+    const float secondTime = std::max(secondMetres / speed, 1e-3f);
+    // Chasing, still his ball.
+    if (chasing && toBallSeconds < rival && firstTime + secondTime >= rival) continue;
+    const Vector2F firstVelocity{firstLeg.x / std::max(firstTime, 1e-3f),
+                                 firstLeg.y / std::max(firstTime, 1e-3f)};
+    const Vector2F secondVelocity{secondLeg.x / secondTime, secondLeg.y / secondTime};
+    // Clear of everyone else on the way there, and of everyone (the man
+    // passed too) on the way back to the ball, short of its last metres.
+    bool clear = true;
+    for (std::size_t other = 0; other < players.size() && clear; ++other)
+    {
+      const MatchPlayer& third = players[other];
+      if (!inPlay(third)) continue;
+      const Vector2F at = toMetres(third.position);
+      const float clearance = clearanceFor(third);
+      if (other != static_cast<std::size_t>(first))
+      {
+        const auto [gap, when] =
+            closestApproach(position, firstVelocity, at, third.velocity,
+                            std::min(firstTime, WAY_ROUND_HORIZON_SECONDS));
+        if (gap < clearance &&
+            !nearBall({position.x + firstVelocity.x * when,
+                       position.y + firstVelocity.y * when}))
+          clear = false;
+      }
+      if (!clear || firstTime >= WAY_ROUND_HORIZON_SECONDS) continue;
+      const Vector2F later{at.x + third.velocity.x * firstTime,
+                           at.y + third.velocity.y * firstTime};
+      const auto [gap, when] =
+          closestApproach(option.waypoint, secondVelocity, later, third.velocity,
+                          std::min(secondTime, WAY_ROUND_HORIZON_SECONDS - firstTime));
+      // The man passed is level with the waypoint as the leg back starts:
+      // only closing in on him again after it counts.
+      if (gap < clearance && when > 1e-3f &&
+          !nearBall({option.waypoint.x + secondVelocity.x * when,
+                     option.waypoint.y + secondVelocity.y * when}))
+        clear = false;
+    }
+    option.ok = clear;
+  }
+  // The shorter side that works; the one he chose before unless the other
+  // is clearly shorter.
+  int chosen = -1;
+  for (int index = 0; index < 2; ++index)
+    if (options[static_cast<std::size_t>(index)].ok &&
+        (chosen < 0 || options[static_cast<std::size_t>(index)].metres <
+                           options[static_cast<std::size_t>(chosen)].metres))
+      chosen = index;
+  if (chosen >= 0 && previousOf == first && previousSide != 0)
+  {
+    const int previous = previousSide > 0 ? 0 : 1;
+    if (previous != chosen && options[static_cast<std::size_t>(previous)].ok &&
+        options[static_cast<std::size_t>(previous)].metres <=
+            options[static_cast<std::size_t>(chosen)].metres + WAY_ROUND_STICKY_METRES)
+      chosen = previous;
+  }
+  if (chosen < 0)
+  {
+    runner.wayRoundBlockedBy = static_cast<std::int8_t>(first);
+    // Giving way with no way round: he eases off instead. The same way, to
+    // a little under the speed the other is going his way; head-on, a stop.
+    if (runner.givingWayTo == first)
+    {
+      const float along = man.velocity.x * heading.x + man.velocity.y * heading.y;
+      runner.giveWaySpeed =
+          std::max(0.0f, along - GIVE_WAY_UNDER_LEADER_SPEED);
+      if (runner.giveWaySpeed < GIVE_WAY_MOVING_SPEED) runner.giveWaySpeed = 0.0f;
+      ++stats.giveWaySlows;
+    }
+    return;
+  }
+  const int side = chosen == 0 ? 1 : -1;
+  runner.wayRoundOf = static_cast<std::int8_t>(first);
+  runner.wayRoundSide = static_cast<std::int8_t>(side);
+  runner.movementTarget = toPitch(options[static_cast<std::size_t>(chosen)].waypoint);
+  runner.nextTarget = runner.tacticalTarget;
+  runner.routeWaypoints = 1;
+  runner.routeApexOffset = 0.0f;
+  runner.routeOutwardRoom = room;
+  const std::size_t kind = chasing                                       ? 0
+                           : runner.intent == PlayerIntent::HOLD_SHAPE     ? 1
+                           : runner.intent == PlayerIntent::OFFER_SUPPORT ? 2
+                                                                           : 3;
+  ++stats.wayRoundRefreshes[kind];
+  if (previousOf != first || previousSide != side) ++stats.wayRoundsStarted[kind];
 }
 
 Vector2F MatchEngine::carryTargetBinturong(const MatchPlayer& player) const

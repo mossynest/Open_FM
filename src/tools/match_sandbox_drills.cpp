@@ -2475,12 +2475,30 @@ class LooseBallDrill final : public Drill
     std::vector<DrillParameter> list;
     list.push_back(setting("Ball speed (m/s)", &ballSpeedSetting, 2.0f, 25.0f, false));
     list.push_back(setting("Chaser behind it (m)", &chaserSetting, 0.0f, 20.0f, false));
+    list.push_back(setting("Chaser off its line (m)", &chaserOffsetSetting, -15.0f, 15.0f,
+                           false, "+ to the left of the ball's path."));
     list.push_back(setting("Team-mate along its path (m)", &mateSetting, 5.0f, 50.0f, false));
     list.push_back(setting("Team-mate off its line (m)", &mateOffsetSetting, -10.0f,
                            10.0f, false));
     DrillParameter rival = setting("Opponent", &rivalChoice, 0.0f, 2.0f, true);
     rival.choices = {"None", "Level with the team-mate", "Beside the chaser"};
     list.push_back(rival);
+    DrillParameter bystander = setting("Bystander", &bystanderChoice, 0.0f, 2.0f, true,
+                                       "A player not going for the ball, in the "
+                                       "chaser's way: he goes round him (way-round "
+                                       "plan).");
+    bystander.choices = {"None", "A team-mate", "An opponent"};
+    bystander.section = "Bystander";
+    list.push_back(bystander);
+    list.push_back(setting("Bystander along its path (m)", &bystanderAlongSetting, 2.0f,
+                           40.0f, false));
+    list.push_back(setting("Bystander off its line (m)", &bystanderOffsetSetting, -10.0f,
+                           10.0f, false,
+                           "+ to the left of the ball's path."));
+    DrillParameter moving = setting("Bystander moves", &bystanderMoveChoice, 0.0f, 2.0f,
+                                    true, "Across the ball's path, from his side of it.");
+    moving.choices = {"Stands", "Walks across", "Runs across"};
+    list.push_back(moving);
     return list;
   }
 
@@ -2489,6 +2507,8 @@ class LooseBallDrill final : public Drill
     std::vector<DrillPlayerSpec> list{{"Chaser", PlayerRole::CM, true},
                                       {"Team-mate", PlayerRole::CM, true}};
     if (rivalChoice >= 0.5f) list.push_back({"Opponent", PlayerRole::CM, false});
+    if (bystanderChoice >= 0.5f)
+      list.push_back({"Bystander", PlayerRole::CM, bystanderChoice < 1.5f});
     return list;
   }
 
@@ -2498,9 +2518,11 @@ class LooseBallDrill final : public Drill
     rival = static_cast<int>(rivalChoice + 0.5f);
     chaserId = ids[0];
     mateId = ids[1];
-    rivalId = ids.size() > 2 ? ids[2] : 0;
+    rivalId = rivalChoice >= 0.5f && ids.size() > 2 ? ids[2] : 0;
+    bystanderId = bystanderChoice >= 0.5f ? ids.back() : 0;
     const Vector2F ballAt{0.35f, 0.5f};
-    const Vector2F chaserAt = along(ballAt, {1.0f, 0.0f}, -chaserSetting);
+    const Vector2F chaserAt = along(along(ballAt, {1.0f, 0.0f}, -chaserSetting),
+                                    {0.0f, 1.0f}, chaserOffsetSetting);
     const Vector2F mateAt = along(along(ballAt, {1.0f, 0.0f}, mateSetting),
                                   {0.0f, 1.0f}, mateOffsetSetting);
     MatchScenario scenario;
@@ -2511,14 +2533,31 @@ class LooseBallDrill final : public Drill
           {rivalId, rival == 1 ? along(mateAt, {0.0f, 1.0f}, 8.0f)
                                : along(chaserAt, {0.0f, 1.0f}, 3.0f),
            false});
+    const Vector2F bystanderAt = along(along(ballAt, {1.0f, 0.0f}, bystanderAlongSetting),
+                                      {0.0f, 1.0f}, bystanderOffsetSetting);
+    if (bystanderId != 0) scenario.players.push_back({bystanderId, bystanderAt, false});
     scenario.ballPosition = ballAt;
     engine.startDrill(scenario);
     engine.feedBall(ballAt, {ballSpeed, 0.0f}, 0.0f, 0);
+    if (bystanderId != 0)
+    {
+      // He holds his spot, or crosses the ball's path from his side of it.
+      const int moves = static_cast<int>(bystanderMoveChoice + 0.5f);
+      const float across = bystanderOffsetSetting > 0.0f ? -1.0f : 1.0f;
+      engine.setDrillTarget(bystanderId,
+                            moves == 0 ? bystanderAt
+                                       : along(bystanderAt, {0.0f, across}, 30.0f),
+                            moves == 2);
+    }
+    closestBystander = std::numeric_limits<float>::max();
+    wentRound = 0;
+    roundAt.reset();
+    waypoint.reset();
     winner = 0;
     wonAt.reset();
     previous.clear();
     ran.clear();
-    for (const PlayerID id : {chaserId, mateId, rivalId})
+    for (const PlayerID id : {chaserId, mateId, rivalId, bystanderId})
       if (id != 0)
         if (const MatchPlayer* player = slotOf(engine, id))
           previous[id] = player->position;
@@ -2532,6 +2571,23 @@ class LooseBallDrill final : public Drill
         ran[id] += metresBetween(at, player->position);
         at = player->position;
       }
+    // The chaser and the bystander: how close, and any way round him.
+    waypoint.reset();
+    if (bystanderId != 0 && !wonAt)
+      if (const MatchPlayer* chaser = slotOf(engine, chaserId))
+        if (const MatchPlayer* bystander = slotOf(engine, bystanderId))
+        {
+          closestBystander = std::min(
+              closestBystander, metresBetween(chaser->position, bystander->position));
+          const auto& all = engine.getPlayers();
+          if (chaser->wayRoundOf >= 0 &&
+              &all[static_cast<std::size_t>(chaser->wayRoundOf)] == bystander)
+          {
+            waypoint = chaser->movementTarget;
+            wentRound = chaser->wayRoundSide;
+            if (!roundAt) roundAt = secondsOf(engine);
+          }
+        }
     const double now = secondsOf(engine);
     if (!wonAt)
     {
@@ -2554,6 +2610,13 @@ class LooseBallDrill final : public Drill
     return !(wonAt && now > *wonAt + 0.5) && now < 12.0;
   }
 
+  void drawOverlay(const IMatchRenderer& renderer, ImDrawList& draw) const override
+  {
+    // The chaser's way round the bystander, while he is on it.
+    if (waypoint)
+      DrillDraw::marker(renderer, draw, *waypoint, 0.15f, IM_COL32(120, 220, 255, 255));
+  }
+
   std::vector<std::string> report() const override
   {
     static constexpr std::array<const char*, 5> WHO{"nobody (out of play)",
@@ -2571,6 +2634,12 @@ class LooseBallDrill final : public Drill
                                 rivalId ? std::format(", opponent {:.1f} m",
                                                       metres(rivalId))
                                         : std::string()));
+    if (bystanderId != 0)
+      lines.push_back(std::format(
+          "Bystander: closest {:.2f} m{}", closestBystander,
+          wentRound == 0 ? std::string(", not gone round")
+                         : std::format(", gone round on his {} from {:.1f} s",
+                                       wentRound > 0 ? "left" : "right", *roundAt)));
     if (wonAt)
       lines.push_back(std::format("OUTCOME  won by {} at {:.1f} s", WHO[winner],
                                   *wonAt));
@@ -2587,15 +2656,30 @@ class LooseBallDrill final : public Drill
                                  {"Chaser ran (m)", metres(chaserId)},
                                  {"Team-mate ran (m)", metres(mateId)}};
     if (rivalId != 0) out.push_back({"Opponent ran (m)", metres(rivalId)});
+    if (bystanderId != 0)
+    {
+      out.push_back({"Closest to bystander (m)", closestBystander});
+      out.push_back({"Went round (+1 left, -1 right)", static_cast<double>(wentRound)});
+    }
     return out;
   }
 
  private:
   float ballSpeedSetting = 10.0f;
   float chaserSetting = 3.0f;
+  float chaserOffsetSetting = 0.0f;
   float mateSetting = 25.0f;
   float mateOffsetSetting = 2.0f;
   float rivalChoice = 0.0f;
+  float bystanderChoice = 0.0f;
+  float bystanderAlongSetting = 8.0f;
+  float bystanderOffsetSetting = 0.0f;
+  float bystanderMoveChoice = 0.0f;
+  PlayerID bystanderId = 0;
+  float closestBystander = 0.0f;
+  int wentRound = 0;
+  std::optional<double> roundAt;
+  std::optional<Vector2F> waypoint;
 
   float ballSpeed = 10.0f;
   int rival = 0;

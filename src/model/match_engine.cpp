@@ -1304,6 +1304,13 @@ void MatchEngine::simulateStepBody(float dt)
     }
     updatePendingAdvantage(dt);
     setPiecePhaseRemaining = std::max(0.0f, setPiecePhaseRemaining - dt);
+    if (setPiecePhaseRemaining > 0.0f)
+    {
+      if (inPenaltyArea(ball.position, !setPieceHome))
+        setPieceBallInBox = true;
+      else if (setPieceBallInBox)
+        setPieceBoxCleared = true;
+    }
     injuryCheckTimer += dt / MatchTuning::Timing::SECONDS_PER_MINUTE;
     if (injuryCheckTimer >= MatchTuning::Injury::CHECK_INTERVAL_MINUTES)
     {
@@ -1803,6 +1810,9 @@ void MatchEngine::updateMovement(float dt)
     // slot order (a plan reads the routes of those planned before it).
     for (std::size_t slot = 0; slot < players.size(); ++slot)
       planOvertake(slot);
+    // Then a loose-ball chaser's way round anyone in his way.
+    for (std::size_t slot = 0; slot < players.size(); ++slot)
+      planWayRound(slot);
     // Where the owner of a claimed ball means to take it: the chase below
     // overrides his movement, his touches aim here.
     if (ball.inTouch)

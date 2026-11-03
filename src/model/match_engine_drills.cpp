@@ -350,5 +350,8 @@ void MatchEngine::applyDrillTargets()
         player->intent = PlayerIntent::CLAIM_LOOSE_BALL;
       player->isPressing = false;
       player->isMakingRun = false;
+      // His target is the drill's: not the brain's loose-ball chaser.
+      player->chasingLooseBall = false;
+      player->steersRound = false;
     }
 }

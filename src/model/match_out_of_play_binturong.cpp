@@ -510,6 +510,8 @@ void MatchEngine::completeRestartBinturong()
   {
     setPiecePhaseRemaining = MatchTuning::SetPiece::SET_PIECE_PHASE_SECONDS;
     setPieceHome = taker->isHomeTeam;
+    setPieceBallInBox = false;
+    setPieceBoxCleared = false;
   }
   if (linedUp ? linedUp->userAction != MatchInputAction::NONE : userPass)
   {

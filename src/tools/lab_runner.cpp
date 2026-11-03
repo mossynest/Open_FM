@@ -219,6 +219,17 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
   sample.collision_ball_off_fallen = stats.collisionBallOffFallen;
   sample.collision_knocks_by_situation = stats.collisionKnocksBySituation;
   sample.collision_knocks_by_intent = stats.collisionKnocksByIntent;
+  sample.collision_knocks_by_intent_pair = stats.collisionKnocksByIntentPair;
+  sample.positioning_knocks_by_reason = stats.positioningKnocksByReason;
+  sample.positioning_knocks_by_speed = stats.positioningKnocksBySpeed;
+  sample.positioning_knocks_by_motion = stats.positioningKnocksByMotion;
+  sample.give_way_slows = stats.giveWaySlows;
+  sample.give_way_rounds = stats.giveWayRounds;
+  sample.give_way_holds = stats.giveWayHolds;
+  sample.collision_chase_knocks_with = stats.collisionChaseKnocksWith;
+  sample.collision_chase_knocks_on_chaser = stats.collisionChaseKnocksOnChaser;
+  sample.way_rounds_started = stats.wayRoundsStarted;
+  sample.way_round_refreshes = stats.wayRoundRefreshes;
   sample.tackle_duels_won = {stats.homeTackleDuelsWon,
                              stats.awayTackleDuelsWon};
   sample.free_ball_tackles = {stats.homeFreeBallTackles,
@@ -832,11 +843,44 @@ std::map<std::string, Estimate> matchMetrics(
   perMatch("collision_get_ups_fixed_per_match", &MatchSample::collision_get_ups_fixed);
   perMatch("collision_downs_fifteen_per_match", &MatchSample::collision_downs_fifteen);
   perMatch("collision_ball_off_fallen_per_match", &MatchSample::collision_ball_off_fallen);
+  perMatch("give_way_slows_per_match", &MatchSample::give_way_slows);
+  perMatch("give_way_rounds_per_match", &MatchSample::give_way_rounds);
+  perMatch("give_way_holds_per_match", &MatchSample::give_way_holds);
+  for (std::size_t kind = 0; kind < 4; ++kind)
+  {
+    static constexpr std::array<const char*, 4> KINDS{"chase", "hold", "support", "recover"};
+    metrics[std::format("way_rounds_started_{}_per_match", KINDS[kind])] = meanEstimate(
+        column([kind](const MatchSample& s) { return static_cast<double>(s.way_rounds_started[kind]); }));
+    metrics[std::format("way_round_refreshes_{}_per_match", KINDS[kind])] = meanEstimate(
+        column([kind](const MatchSample& s) { return static_cast<double>(s.way_round_refreshes[kind]); }));
+  }
   for (std::size_t index = 0; index < 8; ++index)
     metrics[std::format("collision_knocks_situation_{}_share", index)] = ratioEstimate(
         column([index](const MatchSample& s)
                { return static_cast<double>(s.collision_knocks_by_situation[index]); }),
         knocks);
+  {
+    // Knocks with a loose-ball chaser in them: what the other was doing.
+    const std::vector<double> chaseKnocks = column([](const MatchSample& s)
+    {
+      double total = 0.0;
+      for (const int count : s.collision_chase_knocks_with) total += count;
+      return total;
+    });
+    metrics["collision_chase_knocks_share"] = ratioEstimate(chaseKnocks, knocks);
+    metrics["collision_chase_knocks_on_chaser_share"] = ratioEstimate(
+        column([](const MatchSample& s)
+               { return static_cast<double>(s.collision_chase_knocks_on_chaser); }),
+        chaseKnocks);
+    for (std::size_t index = 0; index <= PLAYER_INTENT_COUNT; ++index)
+      metrics[std::format("collision_chase_knocks_with_{}_share",
+                          index == PLAYER_INTENT_COUNT
+                              ? std::string_view("team_mate_chasing")
+                              : MatchEngineInternal::intentName(static_cast<PlayerIntent>(index)))] =
+          ratioEstimate(column([index](const MatchSample& s)
+                               { return static_cast<double>(s.collision_chase_knocks_with[index]); }),
+                        chaseKnocks);
+  }
   for (std::size_t index = 0; index < PLAYER_INTENT_COUNT; ++index)
     metrics[std::format("collision_knocks_intent_{}_share",
                         MatchEngineInternal::intentName(static_cast<PlayerIntent>(index)))] =
@@ -1250,6 +1294,105 @@ std::vector<TextTable> matchTables(std::span<const MatchSample> samples)
                                    : 0.0)});
   }
   tables.push_back(std::move(byIntent));
+
+  // Stumbles and falls by what each player was doing: the knocked player's
+  // intent down the side, the other's across (per match).
+  {
+    static constexpr std::array<const char*, PLAYER_INTENT_COUNT> SHORT{
+        "hold", "carry", "support", "receive", "behind", "box", "overlap",
+        "press", "cover", "lane", "mark", "claim", "recover", "keeper"};
+    std::array<std::array<double, PLAYER_INTENT_COUNT>, PLAYER_INTENT_COUNT> grid{};
+    for (const MatchSample* sample : valid)
+      for (std::size_t knocked = 0; knocked < PLAYER_INTENT_COUNT; ++knocked)
+        for (std::size_t other = 0; other < PLAYER_INTENT_COUNT; ++other)
+          grid[knocked][other] += sample->collision_knocks_by_intent_pair[knocked][other];
+    const double matches = std::max<double>(1.0, static_cast<double>(valid.size()));
+    std::array<bool, PLAYER_INTENT_COUNT> rowUsed{};
+    std::array<bool, PLAYER_INTENT_COUNT> columnUsed{};
+    for (std::size_t knocked = 0; knocked < PLAYER_INTENT_COUNT; ++knocked)
+      for (std::size_t other = 0; other < PLAYER_INTENT_COUNT; ++other)
+        if (grid[knocked][other] > 0.0)
+        {
+          rowUsed[knocked] = true;
+          columnUsed[other] = true;
+        }
+    std::vector<std::string> header{"Knocked \\ other"};
+    for (std::size_t other = 0; other < PLAYER_INTENT_COUNT; ++other)
+      if (columnUsed[other]) header.emplace_back(SHORT[other]);
+    header.emplace_back("all");
+    TextTable pairs{"Stumbles and falls per match: what the knocked player (down) and "
+                    "the other (across) were doing",
+                    header,
+                    {}};
+    for (std::size_t knocked = 0; knocked < PLAYER_INTENT_COUNT; ++knocked)
+    {
+      if (!rowUsed[knocked]) continue;
+      std::vector<std::string> row{SHORT[knocked]};
+      double total = 0.0;
+      for (std::size_t other = 0; other < PLAYER_INTENT_COUNT; ++other)
+      {
+        if (!columnUsed[other]) continue;
+        const double perMatch = grid[knocked][other] / matches;
+        total += perMatch;
+        row.push_back(perMatch >= 0.05 ? std::format("{:.1f}", perMatch) : std::string("."));
+      }
+      row.push_back(std::format("{:.1f}", total));
+      pairs.rows.push_back(std::move(row));
+    }
+    tables.push_back(std::move(pairs));
+  }
+
+  // Two players getting into position (holding shape, offering support,
+  // recovering shape) knocking one over: why the way round did not stop it,
+  // how fast each was going, and how they were moving (per match).
+  {
+    std::array<std::array<double, 2>, 6> reasons{};
+    std::array<std::array<double, 4>, 4> speeds{};
+    std::array<double, 4> motions{};
+    for (const MatchSample* sample : valid)
+    {
+      for (std::size_t reason = 0; reason < 6; ++reason)
+        for (std::size_t team = 0; team < 2; ++team)
+          reasons[reason][team] += sample->positioning_knocks_by_reason[reason][team];
+      for (std::size_t mine = 0; mine < 4; ++mine)
+        for (std::size_t theirs = 0; theirs < 4; ++theirs)
+          speeds[mine][theirs] += sample->positioning_knocks_by_speed[mine][theirs];
+      for (std::size_t motion = 0; motion < 4; ++motion)
+        motions[motion] += sample->positioning_knocks_by_motion[motion];
+    }
+    const double matches = std::max<double>(1.0, static_cast<double>(valid.size()));
+    const auto perMatch = [&](double count) { return std::format("{:.1f}", count / matches); };
+    static constexpr std::array<const char*, 6> REASONS{
+        "one within 2 m of his spot", "one going round the other",
+        "one saw the other, no clear side", "one going round someone else",
+        "neither saw it coming", "one giving way to the other"};
+    TextTable why{"Positioning knocks per match: why the way round did not stop them",
+                  {"Why", "Team-mates", "Opponents", "All"},
+                  {}};
+    for (std::size_t reason = 0; reason < 6; ++reason)
+      why.rows.push_back({REASONS[reason], perMatch(reasons[reason][0]),
+                          perMatch(reasons[reason][1]),
+                          perMatch(reasons[reason][0] + reasons[reason][1])});
+    tables.push_back(std::move(why));
+    static constexpr std::array<const char*, 4> BANDS{"under 1 m/s", "1-3 m/s", "3-5 m/s",
+                                                      "over 5 m/s"};
+    TextTable fast{"Positioning knocks per match: the knocked player's speed (down) and "
+                   "the other's (across), just before",
+                   {"Knocked \\ other", BANDS[0], BANDS[1], BANDS[2], BANDS[3]},
+                   {}};
+    for (std::size_t mine = 0; mine < 4; ++mine)
+      fast.rows.push_back({BANDS[mine], perMatch(speeds[mine][0]), perMatch(speeds[mine][1]),
+                           perMatch(speeds[mine][2]), perMatch(speeds[mine][3])});
+    tables.push_back(std::move(fast));
+    static constexpr std::array<const char*, 4> MOTIONS{
+        "one standing (under 0.5 m/s)", "the same way (within 45 deg)", "crossing",
+        "head-on (over 135 deg)"};
+    TextTable how{"Positioning knocks per match: how they were moving", {"Moving", "Knocks"},
+                  {}};
+    for (std::size_t motion = 0; motion < 4; ++motion)
+      how.rows.push_back({MOTIONS[motion], perMatch(motions[motion])});
+    tables.push_back(std::move(how));
+  }
 
   // Derived stats over every player who took part: do the recipes give the
   // intended spread?

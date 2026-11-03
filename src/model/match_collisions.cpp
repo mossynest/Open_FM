@@ -392,6 +392,68 @@ void MatchEngine::collidePlayers(float dt)
               indices[side], indices[otherSide], before, otherBefore,
               scaled(add(oneAt, twoAt), 0.5f), getSimulatedSeconds() + now)];
           ++stats.collisionKnocksByIntent[static_cast<std::size_t>(player.intent)];
+          // A chase for a loose ball in it: what the other was doing.
+          const MatchPlayer& other = players[indices[otherSide]];
+          ++stats.collisionKnocksByIntentPair[static_cast<std::size_t>(player.intent)]
+                                             [static_cast<std::size_t>(other.intent)];
+          // Two players getting into position: why the way round did not stop it.
+          const auto positioning = [](const MatchPlayer& man)
+          {
+            return man.intent == PlayerIntent::HOLD_SHAPE ||
+                   man.intent == PlayerIntent::OFFER_SUPPORT ||
+                   man.intent == PlayerIntent::RECOVER_SHAPE;
+          };
+          if (positioning(player) && positioning(other))
+          {
+            const std::size_t mine = indices[side];
+            const std::size_t theirs = indices[otherSide];
+            constexpr float AT_SPOT_METRES = 2.0f;
+            const auto atSpot = [](const MatchPlayer& man)
+            { return distance(man.position, man.tacticalTarget) <= AT_SPOT_METRES; };
+            const bool givingWay =
+                player.givingWayTo == static_cast<std::int8_t>(theirs) ||
+                other.givingWayTo == static_cast<std::int8_t>(mine) ||
+                player.rightOfWayOver == static_cast<std::int8_t>(theirs) ||
+                other.rightOfWayOver == static_cast<std::int8_t>(mine);
+            const std::size_t reason =
+                atSpot(player) || atSpot(other) ? 0
+                : givingWay                     ? 5
+                : player.wayRoundOf == static_cast<std::int8_t>(theirs) ||
+                        other.wayRoundOf == static_cast<std::int8_t>(mine)
+                    ? 1
+                : player.wayRoundBlockedBy == static_cast<std::int8_t>(theirs) ||
+                        other.wayRoundBlockedBy == static_cast<std::int8_t>(mine)
+                    ? 2
+                : player.wayRoundOf >= 0 || other.wayRoundOf >= 0 ? 3
+                                                                   : 4;
+            ++stats.positioningKnocksByReason[reason]
+                                             [player.isHomeTeam == other.isHomeTeam ? 0 : 1];
+            const auto band = [](float speed)
+            { return speed < 1.0f ? 0U : speed < 3.0f ? 1U : speed < 5.0f ? 2U : 3U; };
+            ++stats.positioningKnocksBySpeed[band(length(before))][band(length(otherBefore))];
+            const float speedA = length(before);
+            const float speedB = length(otherBefore);
+            const float cosine = speedA > EPSILON && speedB > EPSILON
+                                     ? dot(before, otherBefore) / (speedA * speedB)
+                                     : 1.0f;
+            ++stats.positioningKnocksByMotion[speedA < 0.5f || speedB < 0.5f ? 0
+                                              : cosine >= 0.7071f            ? 1
+                                              : cosine > -0.7071f            ? 2
+                                                                             : 3];
+          }
+          const bool chasing = player.intent == PlayerIntent::CLAIM_LOOSE_BALL;
+          const bool otherChasing = other.intent == PlayerIntent::CLAIM_LOOSE_BALL;
+          if (chasing || otherChasing)
+          {
+            const std::size_t with =
+                chasing && otherChasing
+                    ? (player.isHomeTeam == other.isHomeTeam ? PLAYER_INTENT_COUNT
+                                                             : static_cast<std::size_t>(
+                                                                   PlayerIntent::CLAIM_LOOSE_BALL))
+                    : static_cast<std::size_t>(chasing ? other.intent : player.intent);
+            ++stats.collisionChaseKnocksWith[with];
+            if (chasing) ++stats.collisionChaseKnocksOnChaser;
+          }
         }
       }
       // Who ran into whom, and when: a re-hit is read against it.

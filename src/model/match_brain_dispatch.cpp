@@ -442,3 +442,18 @@ float MatchEngine::chooseGetUp(const MatchPlayer& player)
   }
   return chooseGetUpAardvark(player);
 }
+
+void MatchEngine::planWayRound(std::size_t slot)
+{
+  switch (brainOf(players[slot].isHomeTeam))
+  {
+    case BrainId::AARDVARK:
+      // No way round: he runs at it.
+      players[slot].wayRoundOf = -1;
+      players[slot].giveWaySpeed = -1.0f;
+      return;
+    case BrainId::BINTURONG:
+      planWayRoundBinturong(slot);
+      return;
+  }
+}

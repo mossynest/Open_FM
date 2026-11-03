@@ -90,6 +90,9 @@ int main(int argc, char* argv[])
   std::optional<int> checkMatches;
   bool kickOff = false;
   std::optional<double> traceLapsSeconds;
+  std::optional<double> traceMatchSeconds;
+  int traceMatchCases = 12;
+  std::string traceMatchKind = "neither";
   std::string traceLapsFollow;
   std::string drill;
   int drillView = 0;
@@ -231,6 +234,13 @@ int main(int argc, char* argv[])
       while (++index < argc) measureArguments.emplace_back(argv[index]);
       break;
     }
+    else if (argument == "--trace-match" && index + 1 < argc)
+    {
+      traceMatchSeconds = std::stod(argv[++index]);
+      if (index + 1 < argc && argv[index + 1][0] != '-') traceMatchCases = std::stoi(argv[++index]);
+      if (index + 1 < argc && argv[index + 1][0] != '-') traceMatchKind = argv[++index];
+      continue;
+    }
     else if (argument == "--trace-laps" && index + 1 < argc)
     {
       traceLapsSeconds = std::stod(argv[++index]);
@@ -265,7 +275,8 @@ int main(int argc, char* argv[])
            " [--handshake H] [--referee R] [--managers HOME,AWAY] [--ball B]"
            " [--out-of-play O]"
            " [--home-advantage X] [--kick-off] [--drill NAME]"
-           " [--check [MATCHES]] [--trace-laps SECONDS [PLAYER]]\n"
+           " [--check [MATCHES]] [--trace-laps SECONDS [PLAYER]]"
+           " [--trace-match SECONDS [CASES [neither|giveway|spot|all]]]\n"
            "  (--brains, --bodies, --managers: aardvark or binturong per side, "
            "one name for both; before --measure or --shot-map)\n"
            "  (--referee: aardvark (default) or binturong; --ball: "
@@ -303,6 +314,8 @@ int main(int argc, char* argv[])
     Logger::info("Match sandbox: generating world " + std::to_string(worldSeed));
     controller.newGame(SANDBOX_SAVE_SLOT, worldSeed);
     if (checkMatches) return runSandboxChecks(controller, *checkMatches);
+    if (traceMatchSeconds)
+      return runMatchTrace(controller, *traceMatchSeconds, traceMatchCases, traceMatchKind);
     if (shotMapArguments)
       return runShotMapCommand(controller.getStatsConfig(), *shotMapArguments);
     if (benchArguments)

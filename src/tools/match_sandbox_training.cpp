@@ -1258,25 +1258,70 @@ int runLapsTrace(const std::vector<TrainingPlayer>& squad, const StatsConfig& co
   std::vector<bool> slow(players.size(), false);
   const double step = MatchTuning::Timing::FIXED_STEP_SECONDS;
   double now = 0.0;
+  // How far bodies face off their line of travel, running (over 3 m/s).
+  std::array<int, 4> offCounts{};
+  int movingCount = 0;
+  float worstOff = 0.0f;
   while (now < seconds && run->step())
   {
     now += step;
     for (const MatchEngine::CollisionHit& hit : engine.getLastCollisions())
     {
       std::string who[2];
+      std::string detail[2];
       for (std::size_t side = 0; side < 2; ++side)
         for (const MatchPlayer& player : players)
           if (player.player && player.player->getId() == hit.sides[side].player)
+          {
             who[side] = nameOf(player);
+            // His speed before and after, how far his body faced off his
+            // line of travel before it, and how the knock was judged.
+            const MatchEngine::CollisionSide& entry = hit.sides[side];
+            const Vector2F before{entry.after.x - entry.jolt.x, entry.after.y - entry.jolt.y};
+            const Vector2F facing{
+                std::cos(player.facingAngle) * MatchTuning::Pitch::LENGTH_METRES,
+                std::sin(player.facingAngle) * MatchTuning::Pitch::WIDTH_METRES};
+            const float off =
+                std::acos(std::clamp((before.x * facing.x + before.y * facing.y) /
+                                         std::max(length(before) * length(facing), 1e-6f),
+                                     -1.0f, 1.0f)) *
+                180.0f / std::numbers::pi_v<float>;
+            detail[side] = std::format(
+                "{} {:.1f}->{:.1f} m/s, facing {:.0f} deg off, ends up {:.0f}% sudden {:.0f}% "
+                "score {:.0f}% (lines {:.0f}/{:.0f})",
+                who[side], length(before), length(entry.after), off, entry.endsUp * 100.0f,
+                entry.sudden * 100.0f, entry.score * 100.0f, entry.stumbleLine * 100.0f,
+                entry.fallLine * 100.0f);
+          }
       std::printf("%6.1f  RUN-IN %s / %s  jolt %.2f / %.2f  outcome %d / %d\n", now,
                   who[0].c_str(), who[1].c_str(), length(hit.sides[0].jolt),
                   length(hit.sides[1].jolt), hit.sides[0].outcome, hit.sides[1].outcome);
+      for (std::size_t side = 0; side < 2; ++side)
+        if (hit.sides[side].outcome > 0)
+          std::printf("          knocked: %s\n", detail[side].c_str());
     }
     for (std::size_t index = 0; index < players.size(); ++index)
     {
       const MatchPlayer& player = players[index];
       if (!MatchEngineInternal::active(player)) continue;
       const float speed = length(player.velocity);
+      if (speed > 3.0f)
+      {
+        const Vector2F facing{
+            std::cos(player.facingAngle) * MatchTuning::Pitch::LENGTH_METRES,
+            std::sin(player.facingAngle) * MatchTuning::Pitch::WIDTH_METRES};
+        const float off =
+            std::acos(std::clamp((player.velocity.x * facing.x + player.velocity.y * facing.y) /
+                                     std::max(speed * length(facing), 1e-6f),
+                                 -1.0f, 1.0f)) *
+            180.0f / std::numbers::pi_v<float>;
+        ++movingCount;
+        worstOff = std::max(worstOff, off);
+        if (off > 10.0f) ++offCounts[0];
+        if (off > 20.0f) ++offCounts[1];
+        if (off > 45.0f) ++offCounts[2];
+        if (off > 90.0f) ++offCounts[3];
+      }
       const auto describe = [&]()
       {
         const Vector2F at = player.position;
@@ -1331,5 +1376,11 @@ int runLapsTrace(const std::vector<TrainingPlayer>& squad, const StatsConfig& co
       }
     }
   }
+  if (movingCount > 0)
+    std::printf("Running over 3 m/s: facing off his line >10 deg %.1f%%, >20 %.1f%%, >45 %.1f%%, "
+                ">90 %.1f%%; worst %.0f deg\n",
+                100.0 * offCounts[0] / movingCount, 100.0 * offCounts[1] / movingCount,
+                100.0 * offCounts[2] / movingCount, 100.0 * offCounts[3] / movingCount,
+                worstOff);
   return 0;
 }

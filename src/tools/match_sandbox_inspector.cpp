@@ -497,6 +497,16 @@ void DebugInspector::renderPlayer(const SandboxRecorder& recorder,
         downText += std::format(", getting up ({:.1f} s)", slot->getUpSeconds);
     }
     flag(slot->fallen, downText.c_str());
+    std::string roundText;
+    if (slot->wayRoundOf >= 0 &&
+        static_cast<std::size_t>(slot->wayRoundOf) < engine.getPlayers().size())
+    {
+      const MatchPlayer& other = engine.getPlayers()[static_cast<std::size_t>(slot->wayRoundOf)];
+      roundText = std::format("going round {} ({})",
+                              other.player ? other.player->getName() : std::string("?"),
+                              slot->wayRoundSide > 0 ? "left" : "right");
+    }
+    flag(slot->wayRoundOf >= 0, roundText.c_str());
     flag(engine.getControlledPlayer() == inspected, "human-controlled");
     property("State", flagsText.empty() ? std::string("-") : flagsText);
     property("Engine attributes",

@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <string>
+
 class GameController;
 
 /**
@@ -19,3 +21,9 @@ class GameController;
  * Prints a report to stdout. Returns 0 when every match was identical.
  */
 int runSandboxChecks(GameController& controller, int matches);
+
+/** Diagnostic (match_sandbox --trace-match SECONDS [CASES]): a match between
+ * the first two clubs of the first league; each stumble or fall between two
+ * players getting into position, with both players' last 1.2 s. */
+int runMatchTrace(GameController& controller, double seconds, int cases,
+                  const std::string& kind = "neither");
