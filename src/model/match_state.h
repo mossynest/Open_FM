@@ -90,5 +90,16 @@ enum class TouchlineRole : std::uint8_t
   ASSISTANT,
   GOALKEEPER_COACH,
   PHYSIO,
-  MANAGER
+  MANAGER,
+  /** The match officials (stage 3). */
+  REFEREE,
+  ASSISTANT_REFEREE,
+  FOURTH_OFFICIAL
 };
+
+/** Whether a touchline role is one of the match officials. */
+constexpr bool isOfficial(TouchlineRole role)
+{
+  return role == TouchlineRole::REFEREE || role == TouchlineRole::ASSISTANT_REFEREE ||
+         role == TouchlineRole::FOURTH_OFFICIAL;
+}

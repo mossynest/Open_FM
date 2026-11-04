@@ -101,6 +101,9 @@ struct MatchRender2DTuning final
   {
     static constexpr float RADIUS_METRES = 0.3f;
     static constexpr float MANAGER_RADIUS_METRES = 0.36f;
+    /** The referee and his assistants: nearer the players' token size,
+     * to be seen among them. */
+    static constexpr float OFFICIAL_RADIUS_METRES = 0.75f;
     static constexpr float MIN_RADIUS_PIXELS = 2.5f;
     static constexpr float SUB_SHADE = 0.8f;
     static constexpr ImU32 STAFF_COLOR = IM_COL32(34, 38, 48, 255);

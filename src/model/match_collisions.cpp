@@ -285,12 +285,14 @@ void MatchEngine::collidePlayers(float dt)
     for (std::size_t index = 0; index < touchlineBodies.size() && count < MOST; ++index)
     {
       const MatchPlayer& body = touchlineBodies[index];
-      if (body.fallen || index >= touchlineStepStart.size()) continue;
+      if (body.fallen || index >= touchlineStepStart.size() || deepInTunnel(body.position))
+        continue;
       bool near = false;
       for (std::size_t slot = 0; slot < playerCount && !near; ++slot)
       {
         const MatchPlayer& player = players[slot];
         near = active(player) && bodyOf(player.isHomeTeam) == BodyId::BINTURONG &&
+               !deepInTunnel(player.position) &&
                length(toMetres({player.position.x - body.position.x,
                                 player.position.y - body.position.y})) <=
                    MatchTuning::TouchlinePeople::COLLISION_RANGE_METRES;
@@ -326,7 +328,7 @@ void MatchEngine::collidePlayers(float dt)
       // and a fallen player: others hurdle him.
       path.takesPart =
           player.player && bodyOf(player.isHomeTeam) == BodyId::BINTURONG &&
-          !player.fallen &&
+          !player.fallen && !deepInTunnel(player.position) &&
           !(player.onPitch && player.isGoalkeeper &&
             keepers[player.isHomeTeam ? 0 : 1].state == GoalkeeperState::DIVE);
       if (!path.takesPart) continue;

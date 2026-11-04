@@ -1121,11 +1121,25 @@ void MatchRenderer2D::State::drawTouchline(const MatchRenderSnapshot& snapshot,
                                            float alpha)
 {
   using T = Tuning::Touchline;
+  const ImU32 officials = officialsShirtColor(kits);
   for (const MatchRenderTouchlinePerson& person : snapshot.touchline)
   {
+    if (person.hidden) continue;
     const Vector2F at =
         lerpRenderPosition(person.previousPosition, person.currentPosition, alpha);
     const ImVec2 centre = atMetres(at.x * LENGTH, at.y * WIDTH);
+    if (isOfficial(person.role))
+    {
+      // In the officials' colours; the referee and assistants larger.
+      const float radius = std::max(
+          px(T::MIN_RADIUS_PIXELS),
+          (person.role == TouchlineRole::FOURTH_OFFICIAL ? T::RADIUS_METRES
+                                                         : T::OFFICIAL_RADIUS_METRES) *
+              ppm);
+      drawList->AddCircleFilled(centre, radius + std::max(1.0f, px(1.0f)), T::OUTLINE_COLOR);
+      drawList->AddCircleFilled(centre, radius, officials);
+      continue;
+    }
     const bool manager = person.role == TouchlineRole::MANAGER;
     const float radius =
         std::max(px(T::MIN_RADIUS_PIXELS),
@@ -1420,6 +1434,7 @@ void MatchRenderer2D::State::drawTokens(const MatchRenderSnapshot& snapshot,
   tokens.clear();
   for (const MatchRenderPlayer& player : snapshot.players)
   {
+    if (player.hidden) continue;
     const Vector2F interpolated = lerpRenderPosition(
         player.previousPosition, player.currentPosition, alpha);
     // Facing is measured in normalised pitch space: scale it to metres.

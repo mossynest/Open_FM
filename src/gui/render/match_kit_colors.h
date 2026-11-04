@@ -85,6 +85,10 @@ ImU32 kitNumberColor(const KitColors& kit);
 /** Goalkeeper gloves: the stock colour that stands out most on the shirt. */
 ImU32 goalkeeperGloveColor(const KitColors& kit);
 
+/** The match officials' shirts: black unless it clashes with a strip, else
+ * the stock colour that stands out most from all four (shorts black). */
+ImU32 officialsShirtColor(const MatchKits& kits);
+
 /** Scales the RGB channels of a packed colour, keeping its alpha. */
 inline ImU32 shadeColor(ImU32 color, float factor)
 {

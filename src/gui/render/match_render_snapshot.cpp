@@ -11,6 +11,16 @@
 #include <cmath>
 
 #include "model/match_engine.h"
+#include "model/match_ground.h"
+
+namespace
+{
+/** Deep in the tunnel, out of sight (as the engine's deepInTunnel). */
+bool inTunnel(Vector2F at)
+{
+  return at.y * MatchGround::WIDTH > MatchGround::STAND_Y + MatchTuning::WalkOut::IN_METRES;
+}
+}  // namespace
 
 void fillMatchRenderSnapshot(const MatchEngine& engine,
                              MatchRenderSnapshot& snapshot)
@@ -35,6 +45,7 @@ void fillMatchRenderSnapshot(const MatchEngine& engine,
     renderPlayer.possessesBall = source.player != nullptr &&
                                  engine.getBall().possessedBy == source.player;
     renderPlayer.onPitch = source.onPitch;
+    renderPlayer.hidden = inTunnel(source.position);
     renderPlayer.isGoalkeeper = source.isGoalkeeper;
     renderPlayer.isDiving = source.isDiving;
     renderPlayer.isInjured = source.isInjured;
@@ -74,6 +85,7 @@ void fillMatchRenderSnapshot(const MatchEngine& engine,
     person.isHomeTeam = body.isHomeTeam;
     person.role = people[index].role;
     person.seated = people[index].seated;
+    person.hidden = inTunnel(body.position);
     person.currentPosition = body.position;
     person.previousPosition =
         index < previousTouchline.size() ? previousTouchline[index] : body.position;

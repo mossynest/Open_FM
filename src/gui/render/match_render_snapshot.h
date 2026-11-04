@@ -58,6 +58,8 @@ struct MatchRenderPlayer
   bool possessesBall = false;
   /** False once sent off or forced off; such players wait by the bench. */
   bool onPitch = true;
+  /** Deep in the tunnel (walk-outs and walk-offs): not drawn. */
+  bool hidden = false;
   bool isGoalkeeper = false;
   bool isDiving = false;
   bool isInjured = false;
@@ -91,6 +93,8 @@ struct MatchRenderTouchlinePerson
   bool isHomeTeam = false;
   TouchlineRole role = TouchlineRole::SUBSTITUTE;
   bool seated = false;
+  /** Deep in the tunnel (walk-outs and walk-offs): not drawn. */
+  bool hidden = false;
   Vector2F previousPosition{};
   Vector2F currentPosition{};
   float previousFacingAngle = 0.0f;

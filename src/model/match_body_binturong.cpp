@@ -1380,8 +1380,9 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
       if (wasAirborne || player.feetHeight > 0.0f) continue;
     }
     // In play he means to stay on the pitch; going to a restart position
-    // (fetching the ball that went out) he can go as far as the boards.
-    Vector2F target = walking ? clampToBoards(player.movementTarget)
+    // (fetching the ball that went out) he can go as far as the boards, and
+    // walking out or off, through the tunnel.
+    Vector2F target = walking ? clampToReach(player.movementTarget)
                               : clampToPitch(player.tacticalTarget);
     // The end of a route: his target; dribbling it, where he is taking the
     // ball (his target is then his next meet with it, beside his waypoint).
@@ -1390,7 +1391,7 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
                                 ball.meetFor == player.player
                             ? ball.dribbleGoal
                             : target;
-    routeEnd = walking ? clampToBoards(routeEnd) : clampToPitch(routeEnd);
+    routeEnd = walking ? clampToReach(routeEnd) : clampToPitch(routeEnd);
     // A brain with a target lag has its players absorb a new target
     // gradually (a side unfamiliar with its tactics more slowly); without one
     // they head straight for it.

@@ -207,6 +207,7 @@ set(FM_CORE_SOURCES
     model/match_engine_drills.cpp
     model/match_collisions.cpp
     model/match_touchline_people.cpp
+    model/match_walk_out.cpp
     model/match_engine_jitter.cpp
     model/match_engine_play.cpp
     model/match_events.h

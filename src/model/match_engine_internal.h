@@ -285,6 +285,52 @@ inline Vector2F keepOffGround(Vector2F from, Vector2F to)
           end.y != wanted.y ? end.y / G::WIDTH : to.y};
 }
 
+/** Deep in the tunnel (touchline plan stage 4): out of sight and out of
+ * play. */
+inline bool deepInTunnel(Vector2F at)
+{
+  return at.y * MatchGround::WIDTH >
+         MatchGround::STAND_Y + MatchTuning::WalkOut::IN_METRES;
+}
+
+/** Where a walker may mean to go: inside the boards, or the tunnel and
+ * its walkway. */
+inline Vector2F clampToReach(Vector2F at)
+{
+  namespace G = MatchGround;
+  const float x = at.x * G::LENGTH;
+  const float y = at.y * G::WIDTH;
+  if (x >= G::TUNNEL.x0 && x <= G::TUNNEL.x1 && y >= G::BOARDS_Y - 1.0f && y <= G::TUNNEL.y1)
+    return at;
+  return clampToBoards(at);
+}
+
+/**
+ * The next point on a body's way from `at` to `target` (metres) through
+ * the tunnel: out along it and through the gap in the boards before
+ * crossing the pitch, or to the gap and straight in. Otherwise the target.
+ */
+inline Vector2F routeViaTunnel(Vector2F at, Vector2F target)
+{
+  namespace G = MatchGround;
+  constexpr float MARGIN = 0.6f;
+  const auto inLane = [](Vector2F p)
+  { return p.x > G::TUNNEL.x0 && p.x < G::TUNNEL.x1 && p.y > G::BOARDS_Y - 0.5f; };
+  const auto inTunnel = [](Vector2F p) { return p.y > G::STAND_Y - 0.2f; };
+  const float laneX = std::clamp(at.x, G::TUNNEL.x0 + MARGIN, G::TUNNEL.x1 - MARGIN);
+  // Coming out: up the tunnel, then through the gap.
+  if (inTunnel(at) && !inTunnel(target)) return {laneX, G::STAND_Y - 1.0f};
+  if (inLane(at) && target.y < G::BOARDS_Y - 0.5f) return {laneX, G::BOARDS_Y - 1.5f};
+  // Going in: to the gap first, unless already lined up with it.
+  if (inTunnel(target) && !inLane(at))
+  {
+    const float x = std::clamp(target.x, G::TUNNEL.x0 + MARGIN, G::TUNNEL.x1 - MARGIN);
+    const bool lined = std::abs(at.x - x) < 0.5f && at.y > G::BOARDS_Y - 3.0f;
+    if (!lined) return {x, G::BOARDS_Y - 1.5f};
+  }
+  return target;
+}
+
 /** A body's step from `from` to `to`, where it can physically go: round
  * the pitch (keepOffGround) and out of the goal frames. */
 inline Vector2F moveBody(Vector2F from, Vector2F to)

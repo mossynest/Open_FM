@@ -431,6 +431,50 @@ struct MatchPlayer
   std::size_t statsIndex = 0;
 };
 
+/** Where a walk-out or walk-off is (touchline plan stage 4). */
+enum class WalkPhase : std::uint8_t
+{
+  NONE,
+  /** Half-time: everyone walking into the tunnel. */
+  OFF,
+  /** Half-time: everyone in; the break runs. */
+  IN,
+  /** Out of the tunnel to the line-up (first half) or the kick-off. */
+  OUT,
+  /** Lined up before the handshake. */
+  LINED_UP,
+  HANDSHAKE
+};
+
+/** A walk-out or walk-off in progress (touchline plan stage 4). */
+struct WalkState
+{
+  WalkPhase phase = WalkPhase::NONE;
+  /** Seconds in this phase. */
+  float seconds = 0.0f;
+  /** The first step has been taken (the first walk-out set up, or not). */
+  bool started = false;
+  /** This walk-out lines up for the handshake (the match's first). */
+  bool lineUp = false;
+  bool homeKicksOff = true;
+  /** When each sets off out of the tunnel (seconds into OUT): players by
+   * slot, the touchline's bodies by index. */
+  std::vector<float> playerRelease;
+  std::vector<float> touchlineRelease;
+  /** Line-up spots (metres, MatchGround's frame) by slot / index. */
+  std::vector<Vector2F> playerSpot;
+  std::vector<Vector2F> touchlineSpot;
+  /** The handshake: who walks (away slots in order) and when each sets
+   * off; along the line, the x of each hand to shake (officials then the
+   * home players, the walkers' way); each walker's next hand, his pause
+   * there, and whether he is through. */
+  std::vector<std::size_t> walkers;
+  std::vector<float> hands;
+  std::vector<std::size_t> nextHand;
+  std::vector<float> handPause;
+  std::vector<bool> through;
+};
+
 /** Who a touchline body is and where he belongs (touchline plan stage 2);
  * his body is a MatchPlayer, so it moves and collides like a player's. */
 struct TouchlinePerson
@@ -441,6 +485,8 @@ struct TouchlinePerson
   Vector2F seat{};
   /** Sitting on it (else on his feet). */
   bool seated = false;
+  /** An assistant referee on the top touchline (else the bottom one). */
+  bool topLine = false;
 };
 
 /** What a first touch tries to do (first-touch plan): send the ball to
@@ -2385,6 +2431,13 @@ class MatchEngine
    * the carrier is unknown.
    */
   bool startDrill(const MatchScenario& scenario);
+  /** A drill's referee (touchline plan stage 3): stood on `spot`
+   * (normalised pitch) facing `facing` and kept there, or (none) back to
+   * his own positioning. False when there is no referee (no Binturong
+   * body). */
+  bool setDrillReferee(std::optional<Vector2F> spot, float facing = 0.0f);
+  /** The referee's body, if there is one. */
+  const MatchPlayer* getRefereeBody() const;
 
   /**
    * Drills: holds a player's tactical target (normalised pitch), which then
@@ -2598,6 +2651,11 @@ class MatchEngine
   std::vector<float> previousTouchlineFacingAngles;
   std::vector<Vector2F> touchlineStepStart;
   bool touchlineSetUp = false;
+  /** Touchline plan stage 4: the walk-out or walk-off in progress. */
+  WalkState walk;
+  /** A drill holding the referee on a spot (metres) facing a way. */
+  std::optional<Vector2F> drillRefereeSpot;
+  float drillRefereeFacing = 0.0f;
   MatchBall ball;
   const StatsConfig& statsConfig;
   Strategy homeStrategy;
@@ -3577,6 +3635,35 @@ class MatchEngine
   void updateTouchline(float dt);
   /** A sub has gone on: off the touchline. */
   void leaveTouchline(const Player* player);
+  /** Touchline plan stage 4: whether halves start with a walk-out and
+   * half-time with a walk-off (Binturong out of play, both sides on the
+   * Binturong body). */
+  [[nodiscard]] bool walksOut() const;
+  /** Everyone out of the tunnel to the line-up (`lineUp`) or straight to
+   * the kick-off; nobody is placed (but at the match's start everyone is
+   * put in the tunnel first). */
+  void beginWalkOut(bool homeKickingOff, bool lineUp);
+  /** Half-time: everyone into the tunnel; the break runs once all are in. */
+  void beginWalkOff();
+  /** The match's start: everyone waiting in the tunnel (their files), then
+   * the first walk-out, with the line-up and the handshake. */
+  void startInTunnel();
+  /** A step of the walk-out or walk-off. */
+  void updateWalk(float dt);
+  /** The walk-out is done: on to the kick-off as after a goal. */
+  void finishWalkOut();
+  /** For a touchline body during a walk: whether he waits where he is
+   * (in the tunnel), else where he walks to (metres; none: his usual
+   * place). */
+  [[nodiscard]] std::pair<bool, std::optional<Vector2F>> touchlineWalk(std::size_t index) const;
+  /** Touchline plan stage 3: where an official means to be now (metres,
+   * MatchGround's frame), by the play or the restart. */
+  [[nodiscard]] Vector2F officialSpot(const MatchPlayer& body,
+                                      const TouchlinePerson& person);
+  /** An official runs (or walks) to his spot, the referee steering round
+   * players in his way; stopped, he faces the play. */
+  void moveOfficial(MatchPlayer& body, const TouchlinePerson& person, Vector2F spot,
+                    float dt);
   /** Whether this body is one of the touchline's (not a player's). */
   [[nodiscard]] bool onTouchline(const MatchPlayer& body) const;
   /** How long a touchline body takes to get up once it has stopped. */

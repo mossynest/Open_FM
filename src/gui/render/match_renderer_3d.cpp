@@ -1190,6 +1190,7 @@ void MatchRenderer3D::State::drawShadows(const MatchRenderSnapshot& snapshot,
   for (const MatchRenderPlayer& player : snapshot.players)
   {
     if (hideFigures) break;
+    if (player.hidden) continue;
     const Vec3 root = RenderMath::worldFromPitch(lerpRenderPosition(
         player.previousPosition, player.currentPosition, alpha));
     ScreenPoint screen;
@@ -3463,6 +3464,7 @@ void MatchRenderer3D::State::addTouchlinePerson(const MatchRenderTouchlinePerson
 {
   using P = Tuning::Player;
   using T = Tuning::TouchlineFigure;
+  if (person.hidden) return;
   const Vec3 root = RenderMath::worldFromPitch(
       lerpRenderPosition(person.previousPosition, person.currentPosition, alpha));
   ScreenPoint anchor;
@@ -3492,6 +3494,11 @@ void MatchRenderer3D::State::addTouchlinePerson(const MatchRenderTouchlinePerson
     top = shadeColor(kit.shirt, T::SUB_TOP_SHADE);
   else if (person.role == TouchlineRole::MANAGER)
     top = legs = T::SUIT_COLOR;
+  else if (isOfficial(person.role))
+  {
+    top = officialsShirtColor(kits);
+    legs = T::OFFICIAL_SHORTS_COLOR;
+  }
 
   const float yaw =
       person.fallen
@@ -3537,11 +3544,15 @@ void MatchRenderer3D::State::addTouchlinePerson(const MatchRenderTouchlinePerson
   const bool seated = person.seated;
   const float hipHeight = (seated ? T::SEAT_HEIGHT : P::HIP_HEIGHT) * scale;
   const Vec3 pelvis = root + UP * hipHeight;
+  // Faster legs and a longer stride as he runs.
+  const float speed = person.speedMetresPerSecond;
   const float stride =
       seated ? 0.0f
-             : std::sin(elapsedSeconds * T::STRIDE_RATE) *
-                   std::min(person.speedMetresPerSecond / T::FULL_STRIDE_SPEED, 1.0f) *
-                   T::STRIDE_REACH * scale;
+             : std::sin(elapsedSeconds * (T::STRIDE_RATE + T::STRIDE_RATE_PER_SPEED * speed)) *
+                   (std::min(speed / T::FULL_STRIDE_SPEED, 1.0f) * T::STRIDE_REACH +
+                    std::min(std::max(speed - T::FULL_STRIDE_SPEED, 0.0f) * T::RUN_REACH_PER_SPEED,
+                             T::RUN_REACH_MOST)) *
+                   scale;
   for (const float which : {-1.0f, 1.0f})
   {
     const Vec3 hip = pelvis + side * (which * P::HIP_SPREAD * scale);
@@ -4233,7 +4244,8 @@ void MatchRenderer3D::render(const MatchRenderSnapshot& snapshot,
   s.playersOnScreen.clear();
   if (!s.hideFigures)
     for (std::size_t index = 0; index < snapshot.players.size(); ++index)
-      s.addPlayer(snapshot.players[index], s.slots[index], alpha);
+      if (!snapshot.players[index].hidden)
+        s.addPlayer(snapshot.players[index], s.slots[index], alpha);
   s.addGoals();
   s.addCornerFlags();
   s.addBoards();

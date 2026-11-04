@@ -2467,6 +2467,94 @@ struct MatchTuning final
     static constexpr float COLLISION_RANGE_METRES = 5.0f;
   };
 
+  /** The match officials (touchline plan stage 3): bodies only; how the
+   * game is refereed is unchanged. Stand-ins as the touchline's (every stat
+   * 50, 75 kg), the referee and his assistants reaching 7 m/s (agreed). */
+  struct Officials final
+  {
+    static constexpr float TOP_SPEED = 7.0f;
+    /** Easing in to their spot: the speed they run at this far from it is
+     * what stops them on it braking at this (m/s²); within the dead band
+     * they stay put (the spot moves with play all the time). */
+    static constexpr float ARRIVE_BRAKING = 2.5f;
+    static constexpr float DEAD_BAND_METRES = 0.5f;
+    /** The referee in play: on his diagonal (from beside the left penalty
+     * area near the bottom touchline to beside the right one near the top,
+     * so play is between him and the assistant on that half), this far
+     * from the ball. */
+    static constexpr float DIAGONAL_END_X_METRES = 16.5f;
+    static constexpr float DIAGONAL_END_Y_METRES = 12.0f;
+    static constexpr float NEAREST_TO_BALL_METRES = 15.0f;
+    static constexpr float FURTHEST_FROM_BALL_METRES = 25.0f;
+    /** He stays this far inside the lines. */
+    static constexpr float INSIDE_LINES_METRES = 1.0f;
+    /** Going round players: anyone his line would bring within this in the
+     * next look-ahead, he steers this far (radians) away from. */
+    static constexpr float CLEARANCE_METRES = 1.0f;
+    static constexpr float LOOK_AHEAD_SECONDS = 2.0f;
+    static constexpr float STEER_RADIANS = 0.9f;
+    /** At restarts: kick-off, this far into the half of the side not
+     * kicking off and this far below the centre; goal kick, this far from
+     * halfway into the kicking side's half; corner, this far out from the
+     * goal line (by the edge of the box) and this far past the far post;
+     * free kick, this far from the ball at this angle off the line to the
+     * goal it is taken toward; penalty (user), outside the area: this far
+     * beyond its edge and this far beyond the end of the arc. */
+    static constexpr float KICK_OFF_INTO_HALF_METRES = 8.0f;
+    static constexpr float KICK_OFF_BELOW_CENTRE_METRES = 12.0f;
+    static constexpr float GOAL_KICK_FROM_HALFWAY_METRES = 5.0f;
+    static constexpr float CORNER_OUT_METRES = 15.0f;
+    static constexpr float CORNER_PAST_FAR_POST_METRES = 2.0f;
+    static constexpr float FREE_KICK_METRES = 12.0f;
+    static constexpr float FREE_KICK_ANGLE_RADIANS = 1.05f;
+    static constexpr float PENALTY_BEYOND_AREA_METRES = 1.5f;
+    static constexpr float PENALTY_BEYOND_ARC_METRES = 1.0f;
+    /** After a goal: back toward the centre, this far below it. */
+    static constexpr float GOAL_BELOW_CENTRE_METRES = 8.0f;
+    /** The assistants run this far outside the touchline (clear of the
+     * technical areas, 1 m out), each along half of it: the top one the
+     * left half, the bottom one (the dugouts' side) the right. */
+    static constexpr float ASSISTANT_OUT_METRES = 0.5f;
+  };
+
+  /** Walk-outs and walk-offs (touchline plan stage 4, Binturong out of play
+   * with both sides on the Binturong body): everyone comes out of the
+   * tunnel at the start of each half and goes back in at half-time. */
+  struct WalkOut final
+  {
+    /** Deeper than this into the tunnel (past its mouth) he is in: out of
+     * sight and out of play. They wait this deep, in two files this far
+     * either side of the tunnel's middle (home on the left). */
+    static constexpr float IN_METRES = 2.0f;
+    static constexpr float WAIT_METRES = 3.0f;
+    static constexpr float FILE_METRES = 1.0f;
+    /** Out of the tunnel one after another, this far apart: the officials,
+     * then the teams side by side (captains first, then teamsheet order),
+     * then the staff (user). */
+    static constexpr float RELEASE_SECONDS = 1.0f;
+    /** The line-up before the first half (agreed): on the halfway line,
+     * this far in from the bottom touchline, facing that stand; the
+     * officials in the middle this far apart, each team's line this far
+     * from them and its players this far apart. */
+    static constexpr float LINE_IN_METRES = 3.0f;
+    static constexpr float OFFICIAL_SPACING_METRES = 0.8f;
+    static constexpr float TEAM_FROM_OFFICIALS_METRES = 1.0f;
+    static constexpr float PLAYER_SPACING_METRES = 1.0f;
+    /** Lined up, a moment before the handshake. */
+    static constexpr float LINED_UP_SECONDS = 3.0f;
+    /** The handshake (agreed): the home team stands; the away team files
+     * along in front of the officials and the home line, this far in front
+     * of them, setting off this far apart and pausing this long at each
+     * hand. */
+    static constexpr float HANDSHAKE_LANE_METRES = 0.9f;
+    static constexpr float HANDSHAKE_START_SECONDS = 2.0f;
+    static constexpr float HANDSHAKE_PAUSE_SECONDS = 0.4f;
+    /** On his line-up spot, or at a hand to shake. */
+    static constexpr float ARRIVED_METRES = 0.3f;
+    /** Safety net: a walking phase moves on after this long anyway. */
+    static constexpr float PHASE_LIMIT_SECONDS = 120.0f;
+  };
+
   struct Touchline final
   {
     static constexpr float SHOUT_DURATION_SECONDS = 600.0f;

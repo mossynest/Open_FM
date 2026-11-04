@@ -107,7 +107,7 @@ struct MatchRender3DTuning final
     static constexpr float GOALMOUTH_WIDTH = 3.4f;
     /** Assistant referees' paths along the touchlines. */
     static constexpr int LINESMAN_SCUFFS = 5;
-    static constexpr float LINESMAN_OFFSET = 1.4f;
+    static constexpr float LINESMAN_OFFSET = MatchTuning::Officials::ASSISTANT_OUT_METRES;
     static constexpr float LINESMAN_HALF_WIDTH = 0.55f;
     static constexpr std::uint8_t LINESMAN_ALPHA = 46;
     static constexpr float VIGNETTE_LENGTH = 0.16f;
@@ -212,9 +212,15 @@ struct MatchRender3DTuning final
     static constexpr float LYING_HEIGHT = 0.15f;
     /** A walking stride: how fast the legs swing (rad/s), how far, and the
      * speed (m/s) at which it is full. */
-    static constexpr float STRIDE_RATE = 7.0f;
+    static constexpr float STRIDE_RATE = 5.0f;
+    static constexpr float STRIDE_RATE_PER_SPEED = 1.4f;
     static constexpr float STRIDE_REACH = 0.25f;
     static constexpr float FULL_STRIDE_SPEED = 1.5f;
+    /** Running (the officials): the stride grows past a walk by this per
+     * m/s, up to this much more. */
+    static constexpr float RUN_REACH_PER_SPEED = 0.05f;
+    static constexpr float RUN_REACH_MOST = 0.25f;
+    static constexpr ImU32 OFFICIAL_SHORTS_COLOR = IM_COL32(18, 18, 20, 255);
     static constexpr float SUB_TOP_SHADE = 0.85f;
     static constexpr std::uint32_t STAFF_LOOK_SEED = 900000U;
     static constexpr ImU32 TRACKSUIT_COLOR = IM_COL32(36, 40, 52, 255);

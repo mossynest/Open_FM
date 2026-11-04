@@ -1147,8 +1147,14 @@ void MatchEngine::simulateStepBody(float dt)
   // consumption, even if each individual stage still looks correct.
   // Replayed touchline changes happen between the same two steps as live.
   if (commandCursor < commandLog.size()) applyDueCommands();
-  // The bodies are chosen before the first step: then the touchline fills.
+  // The bodies are chosen before the first step: then the touchline fills,
+  // and a match that starts at its kick-off starts in the tunnel.
   if (!touchlineSetUp) setUpTouchline();
+  if (!walk.started)
+  {
+    walk.started = true;
+    if (walksOut() && state == MatchState::KICK_OFF && period == 1) startInTunnel();
+  }
   captureInterpolationFrame();
   if (headerRun > 0) trackHeaderRun();
   stepCounter += stepTicks;
@@ -1233,6 +1239,12 @@ void MatchEngine::simulateStepBody(float dt)
   {
     runAiSubstitutions();
     if (state == MatchState::FULL_TIME) return;
+    // Walking in (touchline plan stage 4): the break runs once all are in.
+    if (walk.phase == WalkPhase::OFF)
+    {
+      updateWalk(dt);
+      return;
+    }
     if (playHalfMinutes > 0)
       setPieceTimer =
           std::min(setPieceTimer, MatchTuning::Timing::PLAY_STOPPAGE_SECONDS);
@@ -1242,8 +1254,11 @@ void MatchEngine::simulateStepBody(float dt)
       ++period;
       matchTimeMinutes = MatchRules::periodStartMinute(period);
       // The home side kicks off the first half of each game, the away side
-      // the second.
-      setupKickOff(period % 2 == 1);
+      // the second. Out of the tunnel, or placed.
+      if (walk.phase == WalkPhase::IN)
+        beginWalkOut(period % 2 == 1, false);
+      else
+        setupKickOff(period % 2 == 1);
       logEvent(MatchEventType::SECOND_HALF);
     }
     return;
@@ -1253,6 +1268,12 @@ void MatchEngine::simulateStepBody(float dt)
   {
     runAiSubstitutions();
     if (state == MatchState::FULL_TIME) return;
+    // Walking out (touchline plan stage 4): the kick-off waits for it.
+    if (walk.phase != WalkPhase::NONE)
+    {
+      updateWalk(dt);
+      return;
+    }
     if (state != MatchState::KICK_OFF || kickOffWalkIn)
     {
       updateDeadBall(dt);
@@ -1428,14 +1449,18 @@ void MatchEngine::beginBreak(float seconds, float recovery)
   state = MatchState::HALF_TIME;
   setPieceTimer = seconds;
   beginStoppage();
+  // Into the tunnel on foot (touchline plan stage 4), else stopped where
+  // they are.
+  const bool walkingOff = walksOut();
   for (auto& player : players)
   {
     if (!active(player)) continue;
     player.stamina = std::min(1.0f, player.stamina + recovery);
     player.sprintReserve = 1.0f;
     player.fastBurstDebt = 0.0f;
-    player.velocity = {0.0f, 0.0f};
+    if (!walkingOff) player.velocity = {0.0f, 0.0f};
   }
+  if (walkingOff) beginWalkOff();
   updateTeamPhases();
   logEvent(MatchEventType::HALF_TIME);
 }

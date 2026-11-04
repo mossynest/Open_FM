@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstddef>
 #include <initializer_list>
+#include <limits>
 #include <optional>
 #include <unordered_map>
 
@@ -152,6 +153,32 @@ ImU32 goalkeeperGloveColor(const KitColors& kit)
     {
       bestDistance = distance;
       best = glove;
+    }
+  }
+  return best;
+}
+
+ImU32 officialsShirtColor(const MatchKits& kits)
+{
+  // Black first; then the usual change colours.
+  constexpr std::array<ImU32, 5> SHIRTS{
+      IM_COL32(22, 22, 26, 255), IM_COL32(240, 214, 40, 255),
+      IM_COL32(40, 170, 90, 255), IM_COL32(210, 44, 60, 255),
+      IM_COL32(90, 170, 230, 255)};
+  ImU32 best = SHIRTS[0];
+  float bestDistance = -1.0f;
+  for (const ImU32 shirt : SHIRTS)
+  {
+    float distance = std::numeric_limits<float>::max();
+    for (const KitColors* kit : {&kits.home, &kits.away, &kits.homeGoalkeeper,
+                                 &kits.awayGoalkeeper})
+      distance = std::min(distance, kitColorDistance(shirt, kit->shirt));
+    // Black whenever it stands clear of every strip.
+    if (shirt == SHIRTS[0] && distance >= KIT_CLASH_DISTANCE) return shirt;
+    if (distance > bestDistance)
+    {
+      bestDistance = distance;
+      best = shirt;
     }
   }
   return best;
