@@ -1539,10 +1539,7 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
               meet = {ball.position.x + ahead.x, ball.position.y + ahead.y};
             }
           }
-          target = {std::clamp(meet.x, MatchTuning::Pitch::PLAYER_MIN_X,
-                               MatchTuning::Pitch::PLAYER_MAX_X),
-                    std::clamp(meet.y, MatchTuning::Pitch::PLAYER_MIN_Y,
-                               MatchTuning::Pitch::PLAYER_MAX_Y)};
+          target = clampToPitch(meet);
         }
         else
         {
@@ -1579,10 +1576,7 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
         const auto [meetSeconds, meet] = interception(player);
         looseChase = pressers[0] == &player;
         looseMeetSeconds = meetSeconds;
-        target = {std::clamp(meet.x, MatchTuning::Pitch::PLAYER_MIN_X,
-                             MatchTuning::Pitch::PLAYER_MAX_X),
-                  std::clamp(meet.y, MatchTuning::Pitch::PLAYER_MIN_Y,
-                             MatchTuning::Pitch::PLAYER_MAX_Y)};
+        target = clampToPitch(meet);
         if (pressers[1] == &player)
         {
           target.x -=
@@ -1667,10 +1661,7 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
     {
       if (role.player != &player) continue;
       challenging = true;
-      target = {std::clamp(role.meet.x, MatchTuning::Pitch::PLAYER_MIN_X,
-                           MatchTuning::Pitch::PLAYER_MAX_X),
-                std::clamp(role.meet.y, MatchTuning::Pitch::PLAYER_MIN_Y,
-                           MatchTuning::Pitch::PLAYER_MAX_Y)};
+      target = clampToPitch(role.meet);
       targetVelocity = {0.0f, 0.0f};
       pinned = true;
       player.intent =
@@ -2428,8 +2419,7 @@ bool MatchEngine::cutsInsideBinturong(const MatchPlayer& player) const
   anchor.y +=
       tactic.possessionOffset.y +
       flank * tactic.profile.possessionWidthMetres / Pitch::WIDTH_METRES;
-  return {std::clamp(anchor.x, Pitch::PLAYER_MIN_X, Pitch::PLAYER_MAX_X),
-          std::clamp(anchor.y, Pitch::PLAYER_MIN_Y, Pitch::PLAYER_MAX_Y)};
+  return clampToPitch(anchor);
 }
 
 [[gnu::always_inline]] inline float MatchEngine::defensiveRoleShiftBinturong(
@@ -2570,15 +2560,10 @@ std::optional<Vector2F> MatchEngine::doubleUpPointBinturong(
                                                                     : 1.0f;
   const float direction = helper.isHomeTeam ? 1.0f : -1.0f;
   const float reach = TacticsTuning::DOUBLE_UP_SUPPORT_METRES;
-  return Vector2F{
-      std::clamp(carrier.position.x - direction * reach * 0.5f /
-                                          MatchTuning::Pitch::LENGTH_METRES,
-                 MatchTuning::Pitch::PLAYER_MIN_X,
-                 MatchTuning::Pitch::PLAYER_MAX_X),
-      std::clamp(carrier.position.y +
-                     lateral * reach / MatchTuning::Pitch::WIDTH_METRES,
-                 MatchTuning::Pitch::PLAYER_MIN_Y,
-                 MatchTuning::Pitch::PLAYER_MAX_Y)};
+  return clampToPitch(
+      {carrier.position.x -
+           direction * reach * 0.5f / MatchTuning::Pitch::LENGTH_METRES,
+       carrier.position.y + lateral * reach / MatchTuning::Pitch::WIDTH_METRES});
 }
 
 void MatchEngine::assignMarksBinturong(bool home)
@@ -2685,23 +2670,20 @@ void MatchEngine::updateRestartSupportBinturong(MatchPlayer& player,
   player.movementTarget = player.basePosition;
   if (taker && player.isHomeTeam == taker->isHomeTeam)
   {
-    const float gap = distance(player.position, ball.position);
+    const float gap = distance(player.position, restartSpot());
     if (gap < MatchTuning::Timing::RESTART_SUPPORT_DISTANCE_METRES)
     {
       // Offer a lane inside the pitch, with teammates spread along it.
-      player.movementTarget.x = std::clamp(
-          ball.position.x + (player.basePosition.x - ball.position.x) *
-                                MatchTuning::Timing::RESTART_SUPPORT_BLEND,
-          MatchTuning::Pitch::PLAYER_MIN_X, MatchTuning::Pitch::PLAYER_MAX_X);
-      player.movementTarget.y = std::clamp(
-          ball.position.y + (player.basePosition.y - ball.position.y) *
-                                MatchTuning::Timing::RESTART_SUPPORT_BLEND,
-          MatchTuning::Pitch::PLAYER_MIN_Y, MatchTuning::Pitch::PLAYER_MAX_Y);
+      player.movementTarget = clampToPitch(
+          {restartSpot().x + (player.basePosition.x - restartSpot().x) *
+                                 MatchTuning::Timing::RESTART_SUPPORT_BLEND,
+           restartSpot().y + (player.basePosition.y - restartSpot().y) *
+                                 MatchTuning::Timing::RESTART_SUPPORT_BLEND});
     }
   }
   else if (taker)
   {
-    const float gap = distance(player.movementTarget, ball.position);
+    const float gap = distance(player.movementTarget, restartSpot());
     const float minimum =
         state == MatchState::THROW_IN
             ? MatchTuning::Timing::THROW_OPPONENT_DISTANCE_METRES
@@ -2709,11 +2691,11 @@ void MatchEngine::updateRestartSupportBinturong(MatchPlayer& player,
     if (gap < minimum)
     {
       const Vector2F direction =
-          metricDirection(ball.position, player.movementTarget);
+          metricDirection(restartSpot(), player.movementTarget);
       const Vector2F offset =
           toPitch({direction.x * minimum, direction.y * minimum});
-      player.movementTarget = {ball.position.x + offset.x,
-                               ball.position.y + offset.y};
+      player.movementTarget = {restartSpot().x + offset.x,
+                               restartSpot().y + offset.y};
     }
   }
 }
@@ -2882,13 +2864,6 @@ TouchIntent MatchEngine::chooseFirstTouchBinturong(
 {
   using K = TouchKnob;
   const FirstTouchKnobs& knob = touchKnobs;
-  using Pitch = MatchTuning::Pitch;
-  const auto onPitch = [](Vector2F spot)
-  {
-    return Vector2F{
-        std::clamp(spot.x, Pitch::PLAYER_MIN_X, Pitch::PLAYER_MAX_X),
-        std::clamp(spot.y, Pitch::PLAYER_MIN_Y, Pitch::PLAYER_MAX_Y)};
-  };
   const float attackDirection = player.isHomeTeam ? 1.0f : -1.0f;
   const float speed = length(player.velocity);
   TouchIntent intent;
@@ -2908,7 +2883,7 @@ TouchIntent MatchEngine::chooseFirstTouchBinturong(
     const float lead = speed * knob[K::STRIDE_LEAD] + knob[K::STRIDE_EXTRA];
     const Vector2F ahead = toPitch({run.x * lead, run.y * lead});
     const Vector2F spot =
-        onPitch({player.position.x + ahead.x, player.position.y + ahead.y});
+        clampToPitch({player.position.x + ahead.x, player.position.y + ahead.y});
     bool clear = true;
     for (const MatchPlayer& opponent : players)
       if (active(opponent) && opponent.isHomeTeam != player.isHomeTeam &&
@@ -2962,7 +2937,7 @@ TouchIntent MatchEngine::chooseFirstTouchBinturong(
       {player.velocity.x * knob[K::SET_LEAD] + aim.x * knob[K::SET_OFFSET],
        player.velocity.y * knob[K::SET_LEAD] + aim.y * knob[K::SET_OFFSET]});
   intent.targetSpot =
-      onPitch({player.position.x + offset.x, player.position.y + offset.y});
+      clampToPitch({player.position.x + offset.x, player.position.y + offset.y});
   return intent;
 }
 
@@ -3753,10 +3728,7 @@ MatchEngine::PassOption MatchEngine::evaluatePassOptionBinturong(
     target.y += (receiver.tacticalTarget.y - target.y) *
                 MatchTuning::Passing::THROUGH_BALL_TARGET_BLEND;
     target.x += direction * MatchTuning::Passing::THROUGH_BALL_FORWARD_LEAD;
-    target.x = std::clamp(target.x, MatchTuning::Pitch::PLAYER_MIN_X,
-                          MatchTuning::Pitch::PLAYER_MAX_X);
-    target.y = std::clamp(target.y, MatchTuning::Pitch::PLAYER_MIN_Y,
-                          MatchTuning::Pitch::PLAYER_MAX_Y);
+    target = clampToPitch(target);
   }
   else if (intent == PassIntent::CROSS)
   {

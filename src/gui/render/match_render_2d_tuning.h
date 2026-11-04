@@ -62,13 +62,18 @@ struct MatchRender2DTuning final
     static constexpr ImU32 SHADOW_COLOR = IM_COL32(0, 0, 0, 60);
   };
 
-  /** Stands, boards and run-off around the pitch (shares of the scene's
-   * apron, MatchSceneTuning::Stadium::APRON_WIDTH). */
+  /** Stands, boards and run-off around the pitch, at the engine's distances
+   * (MatchTuning::Pitch: the boards, the stand's front wall and the rows of
+   * crowd shown), so players and the ball off the pitch are drawn where the
+   * engine has them. */
   struct Stadium final
   {
-    static constexpr float RUN_OFF_SHARE = 0.34f;
-    static constexpr float BOARD_SHARE = 0.12f;
-    static constexpr float CROWD_STEP_PIXELS = 6.0f;
+    /** The boards' thickness seen from above. */
+    static constexpr float BOARD_DEPTH_METRES = 0.3f;
+    /** One row of seats: the crowd is drawn a dot a row. */
+    static constexpr float ROW_METRES = 0.8f;
+    /** Between the boards and the stand: the track behind the boards. */
+    static constexpr ImU32 GAP_COLOR = IM_COL32(52, 58, 56, 255);
     static constexpr float CROWD_SIZE_SHARE = 0.62f;
     static constexpr float EMPTY_SEAT_SHARE = 0.1f;
     /** Supporters in club colours: behind each goal, then elsewhere. */

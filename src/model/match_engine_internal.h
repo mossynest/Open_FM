@@ -74,6 +74,114 @@ inline float directionValue(const Table& table, DirectionMix mix)
              mix.onward;
 }
 
+/** A spot kept on the pitch: where a player means to be, receive or put
+ * the ball. */
+inline float clampToPitchX(float x)
+{
+  return std::clamp(x, MatchTuning::Pitch::PLAYER_MIN_X, MatchTuning::Pitch::PLAYER_MAX_X);
+}
+inline float clampToPitchY(float y)
+{
+  return std::clamp(y, MatchTuning::Pitch::PLAYER_MIN_Y, MatchTuning::Pitch::PLAYER_MAX_Y);
+}
+inline Vector2F clampToPitch(Vector2F at)
+{
+  return {clampToPitchX(at.x), clampToPitchY(at.y)};
+}
+
+/** A body kept where it can physically be: inside the advertising boards. */
+inline float clampToBoardsX(float x)
+{
+  return std::clamp(x, MatchTuning::Pitch::BODY_MIN_X, MatchTuning::Pitch::BODY_MAX_X);
+}
+inline float clampToBoardsY(float y)
+{
+  return std::clamp(y, MatchTuning::Pitch::BODY_MIN_Y, MatchTuning::Pitch::BODY_MAX_Y);
+}
+inline Vector2F clampToBoards(Vector2F at)
+{
+  return {clampToBoardsX(at.x), clampToBoardsY(at.y)};
+}
+
+/**
+ * A body moving from `from` to `to` kept out of the goal frames: the posts,
+ * side nets and back net are thin walls he cannot cross (the goal is open
+ * at the front, under the bar), and he stays on the side of each he started
+ * on, his footprint clear of it. An axis left alone is returned exactly.
+ */
+inline Vector2F keepOutOfGoalFrames(Vector2F from, Vector2F to)
+{
+  using P = MatchTuning::Pitch;
+  constexpr float R = P::BODY_RADIUS_METRES;
+  constexpr float W =
+      MatchTuning::Shooting::GOAL_HALF_WIDTH_METRES + 0.5f * P::GOAL_POST_METRES;
+  constexpr float D = P::GOAL_NET_DEPTH_METRES;
+  // Local metres at the nearer goal: u behind its line, v across from its
+  // centre.
+  const bool right = to.x > P::CENTRE;
+  const float lineX = right ? P::LENGTH_METRES : 0.0f;
+  const float behind = right ? 1.0f : -1.0f;
+  const float u0 = (from.x * P::LENGTH_METRES - lineX) * behind;
+  const float v0 = (from.y - P::CENTRE) * P::WIDTH_METRES;
+  float u = (to.x * P::LENGTH_METRES - lineX) * behind;
+  float v = (to.y - P::CENTRE) * P::WIDTH_METRES;
+  // Nowhere near this frame, before or after: nothing to meet.
+  if (std::max(u0, u) < -R || std::min(u0, u) > D + R ||
+      std::min(v0, v) > W + R || std::max(v0, v) < -(W + R))
+    return to;
+  bool movedU = false;
+  bool movedV = false;
+  // The side nets, post to back net.
+  for (const float side : {-W, W})
+  {
+    if (u < 0.0f || u > D) continue;
+    const float keep = v0 > side || (v0 == side && side > 0.0f) ? 1.0f : -1.0f;
+    if ((v - side) * keep < R)
+    {
+      v = side + keep * R;
+      movedV = true;
+    }
+  }
+  // The back net.
+  if (std::abs(v) <= W)
+  {
+    const float keep = u0 >= D ? 1.0f : -1.0f;
+    if ((u - D) * keep < R)
+    {
+      u = D + keep * R;
+      movedU = true;
+    }
+  }
+  // The posts and the back corners: round them.
+  for (const float cornerU : {0.0f, D})
+    for (const float cornerV : {-W, W})
+    {
+      const float du = u - cornerU;
+      const float dv = v - cornerV;
+      const float gap = std::sqrt(du * du + dv * dv);
+      if (gap >= R) continue;
+      const float fromU = u0 - cornerU;
+      const float fromV = v0 - cornerV;
+      const float fromGap = std::sqrt(fromU * fromU + fromV * fromV);
+      // On it: back out the way he came (or out of the goal).
+      const float awayU = gap > 1e-4f ? du / gap : fromGap > 1e-4f ? fromU / fromGap : -1.0f;
+      const float awayV = gap > 1e-4f ? dv / gap : fromGap > 1e-4f ? fromV / fromGap : 0.0f;
+      u = cornerU + awayU * R;
+      v = cornerV + awayV * R;
+      movedU = true;
+      movedV = true;
+    }
+  return {movedU ? (lineX + u * behind) / P::LENGTH_METRES : to.x,
+          movedV ? P::CENTRE + v / P::WIDTH_METRES : to.y};
+}
+
+/** A body's step from `from` to `to`, where it can physically go: inside
+ * the boards and out of the goal frames. */
+inline Vector2F moveBody(Vector2F from, Vector2F to)
+{
+  return keepOutOfGoalFrames(from, clampToBoards(to));
+}
+
 inline float length(Vector2F vector)
 {
   return std::sqrt(vector.x * vector.x + vector.y * vector.y);

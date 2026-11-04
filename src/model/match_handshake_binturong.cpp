@@ -203,8 +203,7 @@ void MatchEngine::placeFormationBinturong(bool homeTeam)
       continue;
     const Vector2F spot =
         formation[static_cast<std::size_t>(player.formationSlot)];
-    const float x = std::clamp(spot.x - drop, MatchTuning::Pitch::PLAYER_MIN_X,
-                               MatchTuning::Pitch::PLAYER_MAX_X);
+    const float x = clampToPitchX(spot.x - drop);
     player.basePosition = {homeTeam ? x : 1.0f - x, spot.y};
   }
 }

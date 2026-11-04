@@ -27,6 +27,18 @@ void MatchEngine::checkOutOfBounds()
   checkOutOfBoundsAardvark();
 }
 
+bool MatchEngine::ballInPlayAt(Vector2F at) const
+{
+  switch (outOfPlayId)
+  {
+    case OutOfPlayId::AARDVARK:
+      break;
+    case OutOfPlayId::BINTURONG:
+      return ballInPlayAtBinturong(at);
+  }
+  return ballInPlayAtAardvark(at);
+}
+
 void MatchEngine::scoreGoal(bool homeTeam)
 {
   switch (outOfPlayId)
@@ -38,6 +50,70 @@ void MatchEngine::scoreGoal(bool homeTeam)
       return;
   }
   scoreGoalAardvark(homeTeam);
+}
+
+void MatchEngine::kickOffAfterGoal(bool homeKickingOff)
+{
+  switch (outOfPlayId)
+  {
+    case OutOfPlayId::AARDVARK:
+      break;
+    case OutOfPlayId::BINTURONG:
+      kickOffAfterGoalBinturong(homeKickingOff);
+      return;
+  }
+  setupKickOff(homeKickingOff);
+}
+
+void MatchEngine::updateDeadBall(float dt)
+{
+  switch (outOfPlayId)
+  {
+    case OutOfPlayId::AARDVARK:
+      // The ball is put on the spot at once: nothing to bring back.
+      return;
+    case OutOfPlayId::BINTURONG:
+      updateDeadBallBinturong(dt);
+      return;
+  }
+}
+
+std::optional<float> MatchEngine::frameInPath(float seconds) const
+{
+  switch (outOfPlayId)
+  {
+    case OutOfPlayId::AARDVARK:
+      // The woodwork is met at the goal line (checkOutOfBounds).
+      return std::nullopt;
+    case OutOfPlayId::BINTURONG:
+      return frameInPathBinturong(seconds);
+  }
+  return std::nullopt;
+}
+
+void MatchEngine::bounceOffFrame()
+{
+  switch (outOfPlayId)
+  {
+    case OutOfPlayId::AARDVARK:
+      return;
+    case OutOfPlayId::BINTURONG:
+      bounceOffFrameBinturong();
+      return;
+  }
+}
+
+void MatchEngine::keepRestartDistance(MatchPlayer& player)
+{
+  switch (outOfPlayId)
+  {
+    case OutOfPlayId::AARDVARK:
+      // The restart goes on its countdown, wherever anyone is.
+      return;
+    case OutOfPlayId::BINTURONG:
+      keepRestartDistanceBinturong(player);
+      return;
+  }
 }
 
 void MatchEngine::updateBallInNet(float dt)

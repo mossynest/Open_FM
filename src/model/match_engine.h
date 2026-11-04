@@ -1015,6 +1015,79 @@ struct MatchBall
   bool isAerialDelivery = false;
   /** Thrown in and untouched since: it cannot score directly. */
   bool fromThrowIn = false;
+  /** Thrown in from behind the touchline (by this side) and not yet on the
+   * pitch: in play once any of it is over the line, taken again if it never
+   * gets there (Binturong out of play). */
+  bool throwEntering = false;
+  bool throwByHome = false;
+  /** A shot that hit the woodwork (Binturong out of play): a goal from it,
+   * untouched since, is still the shot's (a penalty, a header, its xG). The
+   * path it went on from the woodwork, and who had touched it then. */
+  bool shotOffWoodwork = false;
+  double woodworkPathSince = 0.0;
+  const Player* woodworkLastPossessor = nullptr;
+  const Player* woodworkDeflectedBy = nullptr;
+  /** Its centre went over a goal line inside the frame (1 the right goal,
+   * -1 the left) and has not come back out: a goal once the whole ball is
+   * over (Binturong out of play). */
+  std::int8_t inGoalMouth = 0;
+};
+
+/** Binturong out of play: the ball after it has gone out (a throw-in, goal
+ * kick or corner), until the restart taker has it on the spot. */
+struct DeadBallReturn
+{
+  enum class Phase : std::uint8_t
+  {
+    /** Moving (or resting) under physics: off the boards, the walls, the
+     * nets, a throw back. */
+    LOOSE,
+    /** Caught by a fan in the rows the views show; thrown back soon. */
+    CAUGHT,
+    /** Gone beyond the rows shown; a replacement comes back after a pause. */
+    OUT_OF_SIGHT,
+    /** In the taker's hands, on its way to the spot. */
+    CARRIED,
+    /** A throw-in: on his spot, he lifts it over his head. */
+    LIFTED,
+  };
+  bool active = false;
+  Phase phase = Phase::LOOSE;
+  /** Where the restart is taken from. */
+  Vector2F spot{};
+  /** Seconds in this phase, behind the boards, and in all. */
+  float seconds = 0.0f;
+  float gapSeconds = 0.0f;
+  float totalSeconds = 0.0f;
+  /** Out of sight: the front-row spot a replacement is thrown from. */
+  Vector2F returnFrom{};
+  /** A free kick or penalty: the fouled side's player nearest the ball
+   * goes to it and plays it to stop on the spot (slot index), then goes
+   * back to his restart position. */
+  std::optional<std::size_t> fetcherIndex;
+  Vector2F fetcherTarget{};
+  /** Played towards the spot: the taker lets it roll, sets it on the spot
+   * if it stops near enough, and fetches it if it drifts. */
+  bool passedToSpot = false;
+  /** After a goal: the fetcher (the conceding keeper) picks it out of the
+   * net, carries it out and drop-kicks it at the spot (the centre). */
+  bool dropKick = false;
+};
+
+/** Whether everyone is ready for a restart, the ball back on its spot
+ * (Binturong out of play). */
+struct RestartReadiness
+{
+  /** Per slot: his last distance from his restart position, and how long
+   * he has been no closer to it. */
+  std::array<float, 32> lastGap{};
+  std::array<float, 32> stalledSeconds{};
+  /** Since the ball was back on the spot; since everyone was ready. */
+  float waitSeconds = 0.0f;
+  float readySeconds = 0.0f;
+  /** Everyone ready, and the taker's look up before he goes. */
+  bool ready = false;
+  float pauseSeconds = 0.0f;
 };
 
 struct MatchStats
@@ -2186,6 +2259,12 @@ class MatchEngine
   }
   Vector2F getPreviousBallPosition() const { return previousBallPosition; }
   float getPreviousBallZ() const { return previousBallZ; }
+  /** The ball has gone beyond the crowd the views show (not drawn). */
+  bool ballOutOfSight() const
+  {
+    return deadBall.active &&
+           deadBall.phase == DeadBallReturn::Phase::OUT_OF_SIGHT;
+  }
 
   /** Machine-readable state for headless tests and external debug tooling. */
   std::string getDebugSnapshotJson() const;
@@ -2627,6 +2706,12 @@ class MatchEngine
   /** Slot index of the restart taker (an index keeps the engine copyable). */
   std::optional<std::size_t> restartTakerIndex;
   float setPieceTimer = 0.0f;
+  /** A kick-off after a goal that everyone walks to (Binturong out of
+   * play): everyone moves during it, and it waits for them. */
+  bool kickOffWalkIn = false;
+  /** The ball on its way back after going out (Binturong out of play). */
+  DeadBallReturn deadBall;
+  RestartReadiness restartReadiness;
   bool goalScoredByHome = false;
   float goalCelebrationRemaining = 0.0f;
   float accumulator = 0.0f;
@@ -3982,8 +4067,29 @@ class MatchEngine
   /** The ball over a line this sub-step: a goal, the woodwork, a corner,
    * goal kick or throw-in. */
   void checkOutOfBounds();
+  /** Whether a ball at `at` is still in play (not over a line), by the
+   * match's out-of-play version. */
+  bool ballInPlayAt(Vector2F at) const;
   /** A goal for the home side (`homeTeam`) or the away side. */
   void scoreGoal(bool homeTeam);
+  /** The kick-off once the goal celebration is over. */
+  void kickOffAfterGoal(bool homeKickingOff);
+  /** During a restart: the ball on its way back to the spot. */
+  void updateDeadBall(float dt);
+  /** During a restart: his restart position kept where the laws allow
+   * him (not the taker's). */
+  void keepRestartDistance(MatchPlayer& player);
+  /** The woodwork in the free ball's way over the next `seconds`: the share
+   * of the way it gets before it meets it (none, by Aardvark). */
+  std::optional<float> frameInPath(float seconds) const;
+  /** The free ball off the woodwork where it meets it. */
+  void bounceOffFrame();
+  /** Where the restart is taken from: the spot the ball is on its way back
+   * to, or the ball. */
+  Vector2F restartSpot() const
+  {
+    return deadBall.active ? deadBall.spot : ball.position;
+  }
   /** The ball settling in the net during the celebration. */
   void updateBallInNet(float dt);
   void setupThrowIn(bool homeTeam);

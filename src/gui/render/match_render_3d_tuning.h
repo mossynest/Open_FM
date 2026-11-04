@@ -12,6 +12,8 @@
 
 #include <cstdint>
 
+#include "model/match_tuning.h"
+
 /**
  * Named tuning values for the 3D broadcast match view. Distances are metres,
  * angles radians, rates per real second.
@@ -119,10 +121,10 @@ struct MatchRender3DTuning final
   {
     static constexpr float WIDTH = 7.32f;
     static constexpr float HEIGHT = 2.44f;
-    static constexpr float POST_SIZE = 0.12f;
+    static constexpr float POST_SIZE = MatchTuning::Pitch::GOAL_POST_METRES;
     static constexpr float ROOF_DEPTH = 1.0f;
     static constexpr float ROOF_DROP = 0.25f;
-    static constexpr float BASE_DEPTH = 2.0f;
+    static constexpr float BASE_DEPTH = MatchTuning::Pitch::GOAL_NET_DEPTH_METRES;
     static constexpr int NET_ROOF_ROWS = 3;
     static constexpr int NET_BACK_ROWS = 7;
     static constexpr int NET_COLUMNS = 16;
@@ -147,9 +149,9 @@ struct MatchRender3DTuning final
 
   struct Boards final
   {
-    static constexpr float SIDE_OFFSET = 4.0f;
-    static constexpr float END_OFFSET = 5.0f;
-    static constexpr float HEIGHT = 0.9f;
+    static constexpr float SIDE_OFFSET = MatchTuning::Pitch::BOARDS_SIDE_METRES;
+    static constexpr float END_OFFSET = MatchTuning::Pitch::BOARDS_END_METRES;
+    static constexpr float HEIGHT = MatchTuning::Pitch::BOARDS_HEIGHT_METRES;
     static constexpr float LENGTH = 8.0f;
     static constexpr float GAP = 0.15f;
     static constexpr float TEXT_HEIGHT_RATIO = 0.62f;
@@ -172,13 +174,13 @@ struct MatchRender3DTuning final
 
   struct Stands final
   {
-    static constexpr float SIDE_FRONT = 7.0f;
-    static constexpr float END_FRONT = 9.0f;
+    static constexpr float SIDE_FRONT = MatchTuning::Pitch::STAND_SIDE_METRES;
+    static constexpr float END_FRONT = MatchTuning::Pitch::STAND_END_METRES;
     static constexpr int SIDE_SECTIONS = 9;
     static constexpr int END_SECTIONS = 6;
-    static constexpr float FRONT_WALL_HEIGHT = 1.3f;
-    static constexpr float LOWER_DEPTH = 20.0f;
-    static constexpr float LOWER_TOP = 11.0f;
+    static constexpr float FRONT_WALL_HEIGHT = MatchTuning::Pitch::STAND_WALL_HEIGHT_METRES;
+    static constexpr float LOWER_DEPTH = MatchTuning::Pitch::LOWER_TIER_DEPTH_METRES;
+    static constexpr float LOWER_TOP = MatchTuning::Pitch::LOWER_TIER_TOP_METRES;
     static constexpr float CONCOURSE_TOP = 14.5f;
     static constexpr float UPPER_DEPTH = 38.0f;
     static constexpr float UPPER_TOP = 30.0f;

@@ -476,11 +476,7 @@ void MatchEngine::collidePlayers(float dt)
       if (!paths[index].hit) continue;
       MatchPlayer& player = players[index];
       const Vector2F end = toPitch(at(index, dt));
-      player.position = {
-          std::clamp(end.x, MatchTuning::Pitch::PLAYER_MIN_X,
-                     MatchTuning::Pitch::PLAYER_MAX_X),
-          std::clamp(end.y, MatchTuning::Pitch::PLAYER_MIN_Y,
-                     MatchTuning::Pitch::PLAYER_MAX_Y)};
+      player.position = moveBody(player.position, end);
       player.velocity = paths[index].velocity;
     }
 

@@ -13,6 +13,7 @@
 // clang-format off
   // --- Aardvark out of play --------------------------------------------------
   void checkOutOfBoundsAardvark();
+  bool ballInPlayAtAardvark(Vector2F at) const;
   void scoreGoalAardvark(bool homeTeam);
   void updateBallInNetAardvark(float dt);
   void setupThrowInAardvark(bool homeTeam);

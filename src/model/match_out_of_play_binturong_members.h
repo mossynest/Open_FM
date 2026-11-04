@@ -13,7 +13,25 @@
 // clang-format off
   // --- Binturong out of play -------------------------------------------------
   void checkOutOfBoundsBinturong();
+  bool ballInPlayAtBinturong(Vector2F at) const;
   void scoreGoalBinturong(bool homeTeam);
+  void kickOffAfterGoalBinturong(bool homeKickingOff);
+  bool kickOffReadyBinturong();
+  void startDeadBallBinturong(Vector2F spot);
+  void updateDeadBallBinturong(float dt);
+  void moveDeadBallBinturong(float dt);
+  void throwDeadBallBinturong(float releaseMetres);
+  void placeDeadBallBinturong(MatchPlayer* taker);
+  void chooseDeadBallFetcherBinturong(bool homeTeam);
+  void dropKickDeadBallBinturong(MatchPlayer& keeper);
+  bool keptOutBinturong(const MatchPlayer& player, const MatchPlayer& taker,
+                        Vector2F at, float slack) const;
+  void keepRestartDistanceBinturong(MatchPlayer& player);
+  void updateRestartReadinessBinturong(float dt);
+  bool restartReadyBinturong() const;
+  std::optional<float> frameInPathBinturong(float seconds) const;
+  void bounceOffFrameBinturong();
+  bool shotOffWoodworkStandsBinturong() const;
   void updateBallInNetBinturong(float dt);
   void setupThrowInBinturong(bool homeTeam);
   void setupGoalKickBinturong(bool homeTeam);

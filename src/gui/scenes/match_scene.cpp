@@ -1905,17 +1905,11 @@ void MatchScene::renderPitch(ImVec2 size)
   }
   else
   {
-    // The 2D pitch is inset by an apron so the stadium band and goal nets
-    // stay visible.
-    const float apron = scaled(MatchSceneTuning::Stadium::APRON_WIDTH);
-    viewport = computeMatchViewport(viewOrigin.x + apron, viewOrigin.y + apron,
-                                    std::max(1.0f, size.x - 2.0f * apron),
-                                    std::max(1.0f, size.y - 2.0f * apron));
-    // Centred in the view area when the aspect ratios differ.
-    viewport.x =
-        viewOrigin.x + std::max(apron, (size.x - viewport.width) * 0.5f);
-    viewport.y =
-        viewOrigin.y + std::max(apron, (size.y - viewport.height) * 0.5f);
+    // The 2D pitch with its stadium round it (run-off, boards, the gap to
+    // the stand and the rows of crowd shown), fitted and centred.
+    viewport = computeMatchViewportWithStadium(viewOrigin.x, viewOrigin.y,
+                                               std::max(1.0f, size.x),
+                                               std::max(1.0f, size.y));
     // Playing: a zoomed view that follows the active footballer.
     if (play.isActive())
       viewport =

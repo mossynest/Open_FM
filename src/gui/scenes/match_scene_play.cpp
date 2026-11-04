@@ -211,8 +211,8 @@ MatchViewport MatchScene::playViewport2D(const MatchViewport& fitted,
   zoomed.height = fitted.height * PLAY_ZOOM_2D;
   const float centreX = (viewMin.x + viewMax.x) * 0.5f;
   const float centreY = (viewMin.y + viewMax.y) * 0.5f;
-  // Never further than the pitch's own surround (the apron) past an edge.
-  const float apron = scaled(MatchSceneTuning::Stadium::APRON_WIDTH);
+  // Never further than the pitch's own stadium past an edge.
+  const ImVec2 apron = stadiumApron2D(zoomed);
   const auto place = [](float centre, float span, float follow, float low,
                         float high, float margin)
   {
@@ -223,9 +223,9 @@ MatchViewport MatchScene::playViewport2D(const MatchViewport& fitted,
                             : std::clamp(origin, lowest, highest);
   };
   zoomed.x =
-      place(centreX, zoomed.width, play_follow.x, viewMin.x, viewMax.x, apron);
+      place(centreX, zoomed.width, play_follow.x, viewMin.x, viewMax.x, apron.x);
   zoomed.y =
-      place(centreY, zoomed.height, play_follow.y, viewMin.y, viewMax.y, apron);
+      place(centreY, zoomed.height, play_follow.y, viewMin.y, viewMax.y, apron.y);
   return zoomed;
 }
 

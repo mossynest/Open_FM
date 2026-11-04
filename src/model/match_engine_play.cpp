@@ -207,10 +207,8 @@ void MatchEngine::integrateControlled(MatchPlayer& player, float dt)
       toPitch({player.velocity.x * C::RELEASE_MOMENTUM_SECONDS,
                player.velocity.y * C::RELEASE_MOMENTUM_SECONDS});
   player.movementTarget = {
-      std::clamp(player.position.x + carry.x, MatchTuning::Pitch::PLAYER_MIN_X,
-                 MatchTuning::Pitch::PLAYER_MAX_X),
-      std::clamp(player.position.y + carry.y, MatchTuning::Pitch::PLAYER_MIN_Y,
-                 MatchTuning::Pitch::PLAYER_MAX_Y)};
+      clampToPitchX(player.position.x + carry.x),
+      clampToPitchY(player.position.y + carry.y)};
 }
 
 std::optional<Vector2F> MatchEngine::controlledAssistTarget(
@@ -236,10 +234,8 @@ std::optional<Vector2F> MatchEngine::controlledAssistTarget(
     const Vector2F ahead =
         toPitch({ball.velocity.x * seconds, ball.velocity.y * seconds});
     return Vector2F{
-        std::clamp(ball.position.x + ahead.x, MatchTuning::Pitch::PLAYER_MIN_X,
-                   MatchTuning::Pitch::PLAYER_MAX_X),
-        std::clamp(ball.position.y + ahead.y, MatchTuning::Pitch::PLAYER_MIN_Y,
-                   MatchTuning::Pitch::PLAYER_MAX_Y)};
+        clampToPitchX(ball.position.x + ahead.x),
+        clampToPitchY(ball.position.y + ahead.y)};
   }
   if (!controlInput.jockey || !ball.possessedBy) return std::nullopt;
   for (const MatchPlayer& carrier : players)
@@ -387,10 +383,8 @@ void MatchEngine::playControlledPass(MatchPlayer& carrier,
           (C::THROUGH_LEAD_MAX_METRES - C::THROUGH_LEAD_MIN_METRES) * power;
       const Vector2F reach = toPitch({run.x * lead, run.y * lead});
       option.targetPoint = {
-          std::clamp(receiver->position.x + reach.x, Pitch::PLAYER_MIN_X,
-                     Pitch::PLAYER_MAX_X),
-          std::clamp(receiver->position.y + reach.y, Pitch::PLAYER_MIN_Y,
-                     Pitch::PLAYER_MAX_Y)};
+          clampToPitchX(receiver->position.x + reach.x),
+          clampToPitchY(receiver->position.y + reach.y)};
       option.passDistance = distance(carrier.position, option.targetPoint);
       option.intent = PassIntent::THROUGH_BALL;
       option.lofted = false;
@@ -408,10 +402,8 @@ void MatchEngine::playControlledPass(MatchPlayer& carrier,
           : C::SPACE_PASS_MIN_METRES +
                 (C::SPACE_PASS_MAX_METRES - C::SPACE_PASS_MIN_METRES) * power;
   const Vector2F reach = toPitch({aim.x * metres, aim.y * metres});
-  const Vector2F target{std::clamp(carrier.position.x + reach.x,
-                                   Pitch::PLAYER_MIN_X, Pitch::PLAYER_MAX_X),
-                        std::clamp(carrier.position.y + reach.y,
-                                   Pitch::PLAYER_MIN_Y, Pitch::PLAYER_MAX_Y)};
+  const Vector2F target{clampToPitchX(carrier.position.x + reach.x),
+                        clampToPitchY(carrier.position.y + reach.y)};
   MatchPlayer* chaser = nullptr;
   float nearest = std::numeric_limits<float>::infinity();
   for (auto& candidate : players)

@@ -211,7 +211,6 @@ struct MatchRenderer2D::State
   std::vector<ImDrawVert> standQuads;
   float standWidth = 0.0f;
   float standHeight = 0.0f;
-  float standApron = 0.0f;
 
   std::vector<TokenOnScreen> tokens;
 
@@ -238,7 +237,7 @@ struct MatchRenderer2D::State
 
   void prepareMatch(const MatchRenderSnapshot& snapshot);
   void buildGrassColors();
-  void buildStands(float apron);
+  void buildStands();
   void updateBall(const MatchRenderSnapshot& snapshot, float alpha);
   void updateEvents(const MatchRenderSnapshot& snapshot);
   void detectKick(const MatchRenderSnapshot& snapshot);
@@ -247,7 +246,7 @@ struct MatchRenderer2D::State
   float defendingLine(const MatchRenderSnapshot& snapshot, bool attackersHome,
                       float ballX) const;
 
-  void drawStadium(float apron);
+  void drawStadium();
   void drawGrass();
   void drawWear();
   void drawPressure();
@@ -425,21 +424,24 @@ void MatchRenderer2D::State::buildGrassColors()
   }
 }
 
-void MatchRenderer2D::State::buildStands(float apron)
+void MatchRenderer2D::State::buildStands()
 {
   // Rebuilt only when the view size, UI scale or fixture changes: the crowd
-  // and boards are stored relative to the viewport origin.
+  // and boards are stored relative to the viewport origin. Distances are
+  // the engine's (MatchTuning::Pitch), in metres.
   using S = Tuning::Stadium;
+  using P = MatchTuning::Pitch;
   standQuads.clear();
   standWidth = viewport.width;
   standHeight = viewport.height;
-  standApron = apron;
   const float width = viewport.width;
   const float height = viewport.height;
-  const float runOff = apron * S::RUN_OFF_SHARE;
-  const float board = std::max(1.0f, apron * S::BOARD_SHARE);
-  const float goalClear = PitchMetres::GOAL_DEPTH * ppm + px(3.0f);
-  const float endRunOff = std::max(runOff, goalClear);
+  const ImVec2 apron = stadiumApron2D(viewport);
+  const float sideBoard = P::BOARDS_SIDE_METRES * ppm;
+  const float endBoard = P::BOARDS_END_METRES * ppm;
+  const float board = std::max(1.0f, S::BOARD_DEPTH_METRES * ppm);
+  const float sideWall = P::STAND_SIDE_METRES * ppm;
+  const float endWall = P::STAND_END_METRES * ppm;
   const auto quad = [&](float x0, float y0, float x1, float y1, ImU32 color)
   {
     for (const ImVec2 corner :
@@ -452,7 +454,7 @@ void MatchRenderer2D::State::buildStands(float apron)
     }
   };
 
-  // Advertising boards between the run-off and the stands.
+  // Advertising boards, their pitch side on the engine's boards line.
   const float boardPixels = S::BOARD_LENGTH_METRES * ppm;
   const auto boards =
       [&](float from, float to, float fixed, bool alongX, std::uint32_t side)
@@ -470,19 +472,14 @@ void MatchRenderer2D::State::buildStands(float apron)
         quad(fixed, start, fixed + board, end, color);
     }
   };
-  if (apron >= runOff + board)
-  {
-    boards(0.0f, width, -runOff - board, true, 0U);
-    boards(0.0f, width, height + runOff, true, 1U);
-    if (apron >= endRunOff + board)
-    {
-      boards(0.0f, height, -endRunOff - board, false, 2U);
-      boards(0.0f, height, width + endRunOff, false, 3U);
-    }
-  }
+  boards(-endBoard, width + endBoard, -sideBoard - board, true, 0U);
+  boards(-endBoard, width + endBoard, height + sideBoard, true, 1U);
+  boards(-sideBoard, height + sideBoard, -endBoard - board, false, 2U);
+  boards(-sideBoard, height + sideBoard, width + endBoard, false, 3U);
 
-  // Spectators: a jittered seat grid with club colours behind the goals.
-  const float step = std::max(2.0f, px(S::CROWD_STEP_PIXELS));
+  // Spectators: a jittered seat grid (a dot a row) with club colours behind
+  // the goals.
+  const float step = std::max(2.0f, S::ROW_METRES * ppm);
   const float dot = step * S::CROWD_SIZE_SHARE;
   constexpr std::array<ImU32, 8> CLOTHES{
       IM_COL32(46, 50, 60, 255),    IM_COL32(68, 72, 82, 255),
@@ -528,16 +525,14 @@ void MatchRenderer2D::State::buildStands(float apron)
       }
     }
   };
-  const float sideInner = runOff + board;
-  const float endInner = endRunOff + board;
-  crowd(-apron, -apron, width + apron, -sideInner, 0U, S::SIDE_FAN_SHARE,
+  crowd(-apron.x, -apron.y, width + apron.x, -sideWall, 0U, S::SIDE_FAN_SHARE,
         &kits.home);
-  crowd(-apron, height + sideInner, width + apron, height + apron, 1U,
+  crowd(-apron.x, height + sideWall, width + apron.x, height + apron.y, 1U,
         S::SIDE_FAN_SHARE, &kits.home);
   // The home end sits behind the left goal, the away fans behind the right.
-  crowd(-apron, -sideInner, -endInner, height + sideInner, 2U, S::END_FAN_SHARE,
+  crowd(-apron.x, -sideWall, -endWall, height + sideWall, 2U, S::END_FAN_SHARE,
         &kits.home);
-  crowd(width + endInner, -sideInner, width + apron, height + sideInner, 3U,
+  crowd(width + endWall, -sideWall, width + apron.x, height + sideWall, 3U,
         S::END_FAN_SHARE, &kits.away);
 }
 
@@ -809,51 +804,49 @@ void MatchRenderer2D::State::updatePressure(const MatchRenderSnapshot& snapshot,
   pressureValid = true;
 }
 
-void MatchRenderer2D::State::drawStadium(float apron)
+void MatchRenderer2D::State::drawStadium()
 {
   using S = Tuning::Stadium;
-  const float x0 = viewport.x - apron;
-  const float y0 = viewport.y - apron;
-  const float x1 = viewport.x + viewport.width + apron;
-  const float y1 = viewport.y + viewport.height + apron;
-  const float runOff = apron * S::RUN_OFF_SHARE;
-  const float board = std::max(1.0f, apron * S::BOARD_SHARE);
-  const float endRunOff =
-      std::max(runOff, PitchMetres::GOAL_DEPTH * ppm + px(3.0f));
-  const float sideInner = runOff + board;
-  const float endInner = endRunOff + board;
-  // Stands: lit at the front, fading into the dark back rows.
+  using P = MatchTuning::Pitch;
+  const ImVec2 apron = stadiumApron2D(viewport);
+  const float x0 = viewport.x - apron.x;
+  const float y0 = viewport.y - apron.y;
+  const float x1 = viewport.x + viewport.width + apron.x;
+  const float y1 = viewport.y + viewport.height + apron.y;
+  const float sideBoard = P::BOARDS_SIDE_METRES * ppm;
+  const float endBoard = P::BOARDS_END_METRES * ppm;
+  const float sideWall = P::STAND_SIDE_METRES * ppm;
+  const float endWall = P::STAND_END_METRES * ppm;
+  // Stands from their front wall: lit at the front, fading into the back.
   const ImU32 front = S::STAND_FRONT_COLOR;
   const ImU32 back = S::STAND_BACK_COLOR;
-  drawList->AddRectFilledMultiColor({x0, y0}, {x1, viewport.y - sideInner},
+  drawList->AddRectFilledMultiColor({x0, y0}, {x1, viewport.y - sideWall},
                                     back, back, front, front);
   drawList->AddRectFilledMultiColor(
-      {x0, viewport.y + viewport.height + sideInner}, {x1, y1}, front, front,
+      {x0, viewport.y + viewport.height + sideWall}, {x1, y1}, front, front,
       back, back);
   drawList->AddRectFilledMultiColor(
-      {x0, viewport.y - sideInner},
-      {viewport.x - endInner, viewport.y + viewport.height + sideInner}, back,
+      {x0, viewport.y - sideWall},
+      {viewport.x - endWall, viewport.y + viewport.height + sideWall}, back,
       front, front, back);
   drawList->AddRectFilledMultiColor(
-      {viewport.x + viewport.width + endInner, viewport.y - sideInner},
-      {x1, viewport.y + viewport.height + sideInner}, front, back, back, front);
+      {viewport.x + viewport.width + endWall, viewport.y - sideWall},
+      {x1, viewport.y + viewport.height + sideWall}, front, back, back, front);
+  // The track behind the boards, up to the stand's front wall.
+  drawList->AddRectFilled(
+      {viewport.x - endWall, viewport.y - sideWall},
+      {viewport.x + viewport.width + endWall,
+       viewport.y + viewport.height + sideWall},
+      S::GAP_COLOR);
   // Run-off grass up to the boards.
   drawList->AddRectFilled(
-      {viewport.x - std::min(apron, endInner),
-       viewport.y - std::min(apron, sideInner)},
-      {viewport.x + viewport.width + std::min(apron, endInner),
-       viewport.y + viewport.height + std::min(apron, sideInner)},
-      S::BOARD_COLOR);
-  drawList->AddRectFilled(
-      {viewport.x - std::min(apron, endRunOff),
-       viewport.y - std::min(apron, runOff)},
-      {viewport.x + viewport.width + std::min(apron, endRunOff),
-       viewport.y + viewport.height + std::min(apron, runOff)},
+      {viewport.x - endBoard, viewport.y - sideBoard},
+      {viewport.x + viewport.width + endBoard,
+       viewport.y + viewport.height + sideBoard},
       Tuning::Grass::RUN_OFF_COLOR);
 
-  if (standWidth != viewport.width || standHeight != viewport.height ||
-      standApron != apron)
-    buildStands(apron);
+  if (standWidth != viewport.width || standHeight != viewport.height)
+    buildStands();
   const int total = static_cast<int>(standQuads.size());
   for (int first = 0; first < total; first += 4)
   {
@@ -1551,6 +1544,39 @@ MatchViewport computeMatchViewport(float topLeftX, float topLeftY,
   viewport.height = WIDTH * pixelsPerMetreFit;
   return viewport;
 }
+
+namespace
+{
+/** The stadium shown round the pitch, past the goal lines and touchlines:
+ * up to the stand's front wall and the rows of crowd shown. */
+constexpr float STADIUM_END_METRES =
+    MatchTuning::Pitch::STAND_END_METRES + MatchTuning::Pitch::VISIBLE_CROWD_METRES;
+constexpr float STADIUM_SIDE_METRES =
+    MatchTuning::Pitch::STAND_SIDE_METRES + MatchTuning::Pitch::VISIBLE_CROWD_METRES;
+}  // namespace
+
+ImVec2 stadiumApron2D(const MatchViewport& viewport)
+{
+  const float ppm = viewport.width / LENGTH;
+  return {STADIUM_END_METRES * ppm, STADIUM_SIDE_METRES * ppm};
+}
+
+MatchViewport computeMatchViewportWithStadium(float topLeftX, float topLeftY,
+                                              float availableWidth,
+                                              float availableHeight)
+{
+  constexpr float MIN_PIXELS_PER_METRE = 2.0f;
+  const float ppm = std::max(
+      MIN_PIXELS_PER_METRE,
+      std::min(availableWidth / (LENGTH + 2.0f * STADIUM_END_METRES),
+               availableHeight / (WIDTH + 2.0f * STADIUM_SIDE_METRES)));
+  MatchViewport viewport;
+  viewport.width = LENGTH * ppm;
+  viewport.height = WIDTH * ppm;
+  viewport.x = topLeftX + (availableWidth - viewport.width) * 0.5f;
+  viewport.y = topLeftY + (availableHeight - viewport.height) * 0.5f;
+  return viewport;
+}
 void drawGoalCelebration(ImDrawList& drawList, const MatchViewport& viewport,
                          int homeScore, int awayScore,
                          float celebrationRemaining, float celebrationDuration)
@@ -1647,9 +1673,7 @@ void MatchRenderer2D::render(const MatchRenderSnapshot& snapshot,
   else
     s.pressureValid = false;
 
-  // The scene insets the pitch by this apron (scaled) around the view.
-  const float apron = s.px(MatchSceneTuning::Stadium::APRON_WIDTH);
-  s.drawStadium(apron);
+  s.drawStadium();
   s.drawGrass();
   s.drawWear();
   if (options.pressureOverlay) s.drawPressure();
@@ -1681,7 +1705,7 @@ void MatchRenderer2D::render(const MatchRenderSnapshot& snapshot,
   s.drawFlights();
   s.drawTokens(snapshot, options, alpha);
   s.drawTrail();
-  s.drawBall();
+  if (!snapshot.ball.outOfSight) s.drawBall();
 
   if (snapshot.state == MatchState::GOAL)
   {

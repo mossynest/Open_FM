@@ -107,7 +107,6 @@ struct MatchSceneTuning final
 
   struct Stadium final
   {
-    static constexpr float APRON_WIDTH = 30.0f;
     static constexpr float STAND_HEIGHT = 22.0f;
     static constexpr float ROOF_HEIGHT = 8.0f;
     static constexpr int CROWD_SEED = 20260816;

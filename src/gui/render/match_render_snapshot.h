@@ -91,6 +91,8 @@ struct MatchRenderBall
   float previousZ = 0.0f;
   float currentZ = 0.0f;
   const Player* possessedBy = nullptr;
+  /** Gone beyond the crowd the views show: not drawn. */
+  bool outOfSight = false;
   float previousHeightMetres = 0.0f;
   float currentHeightMetres = 0.0f;
   bool isShot = false;

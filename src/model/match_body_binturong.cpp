@@ -1125,11 +1125,9 @@ void MatchEngine::coastBinturong(MatchPlayer& player, float dt)
   // The mean of the step's velocities: exact for a steady slowing.
   const Vector2F moved = toPitch({0.5f * (before.x + player.velocity.x) * dt,
                                   0.5f * (before.y + player.velocity.y) * dt});
-  player.position = {
-      std::clamp(player.position.x + moved.x, MatchTuning::Pitch::PLAYER_MIN_X,
-                 MatchTuning::Pitch::PLAYER_MAX_X),
-      std::clamp(player.position.y + moved.y, MatchTuning::Pitch::PLAYER_MIN_Y,
-                 MatchTuning::Pitch::PLAYER_MAX_Y)};
+  player.position =
+      moveBody(player.position,
+               {player.position.x + moved.x, player.position.y + moved.y});
   player.collisionPause = std::max(0.0f, player.collisionPause - dt);
 }
 
@@ -1146,11 +1144,9 @@ void MatchEngine::stumbleBinturong(MatchPlayer& player, float dt)
   player.velocity = {before.x * scale, before.y * scale};
   const Vector2F moved = toPitch({0.5f * (before.x + player.velocity.x) * dt,
                                   0.5f * (before.y + player.velocity.y) * dt});
-  player.position = {
-      std::clamp(player.position.x + moved.x, MatchTuning::Pitch::PLAYER_MIN_X,
-                 MatchTuning::Pitch::PLAYER_MAX_X),
-      std::clamp(player.position.y + moved.y, MatchTuning::Pitch::PLAYER_MIN_Y,
-                 MatchTuning::Pitch::PLAYER_MAX_Y)};
+  player.position =
+      moveBody(player.position,
+               {player.position.x + moved.x, player.position.y + moved.y});
   // His body turns to face the way he is carried (forward is where he
   // copes best), at his normal rate.
   if (speed > EPSILON)
@@ -1181,9 +1177,9 @@ void MatchEngine::fallenBinturong(MatchPlayer& player, float dt)
   const auto moveBy = [&player](Vector2F metres)
   {
     const Vector2F moved = toPitch(metres);
-    player.position = {
-        std::clamp(player.position.x + moved.x, Pitch::PLAYER_MIN_X, Pitch::PLAYER_MAX_X),
-        std::clamp(player.position.y + moved.y, Pitch::PLAYER_MIN_Y, Pitch::PLAYER_MAX_Y)};
+    player.position =
+        moveBody(player.position,
+               {player.position.x + moved.x, player.position.y + moved.y});
   };
   // Sliding or tumbling on: the grass slows him to a stop.
   const float speed = length(player.velocity);
@@ -1383,9 +1379,10 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
       stepJumpBinturong(player, dt, jumpPath);
       if (wasAirborne || player.feetHeight > 0.0f) continue;
     }
-    Vector2F target = walking ? player.movementTarget : player.tacticalTarget;
-    target.x = std::clamp(target.x, Pitch::PLAYER_MIN_X, Pitch::PLAYER_MAX_X);
-    target.y = std::clamp(target.y, Pitch::PLAYER_MIN_Y, Pitch::PLAYER_MAX_Y);
+    // In play he means to stay on the pitch; going to a restart position
+    // (fetching the ball that went out) he can go as far as the boards.
+    Vector2F target = walking ? clampToBoards(player.movementTarget)
+                              : clampToPitch(player.tacticalTarget);
     // The end of a route: his target; dribbling it, where he is taking the
     // ball (his target is then his next meet with it, beside his waypoint).
     Vector2F routeEnd = !walking && ball.inTouch &&
@@ -1393,8 +1390,7 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
                                 ball.meetFor == player.player
                             ? ball.dribbleGoal
                             : target;
-    routeEnd.x = std::clamp(routeEnd.x, Pitch::PLAYER_MIN_X, Pitch::PLAYER_MAX_X);
-    routeEnd.y = std::clamp(routeEnd.y, Pitch::PLAYER_MIN_Y, Pitch::PLAYER_MAX_Y);
+    routeEnd = walking ? clampToBoards(routeEnd) : clampToPitch(routeEnd);
     // A brain with a target lag has its players absorb a new target
     // gradually (a side unfamiliar with its tactics more slowly); without one
     // they head straight for it.
@@ -1852,9 +1848,18 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
         speedBandFrom(MovementMode::RUN, transition[lane], critical, topSpeed)
             .high,
         topSpeed};
+    // Going to a restart position: he walks, or jogs while walking the rest
+    // would take more than a few seconds.
+    const auto restartMode =
+        remaining > tops[static_cast<std::size_t>(MovementMode::WALK)] *
+                        P::RESTART_JOG_AFTER_SECONDS
+            ? MovementMode::JOG
+            : MovementMode::WALK;
     const float modeShare =
         !moded                    ? 0.0f
         : meetPaceShare[lane] > 0 ? meetPaceShare[lane]
+        : walking ? tops[static_cast<std::size_t>(restartMode)] /
+                        std::max(maxSpeed[lane], EPSILON)
                                   : modeTargetSpeed(
                                         static_cast<MovementMode>(modeOf[lane]),
                                         remaining, styleOf[lane]->jogRampMetres,
@@ -2104,10 +2109,10 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
 
     const float nextX = positionX[lane] + nextVelocityX * dt * INVERSE_LENGTH;
     const float nextY = positionY[lane] + nextVelocityY * dt * INVERSE_WIDTH;
-    const float clampedX =
-        std::clamp(nextX, Pitch::PLAYER_MIN_X, Pitch::PLAYER_MAX_X);
-    const float clampedY =
-        std::clamp(nextY, Pitch::PLAYER_MIN_Y, Pitch::PLAYER_MAX_Y);
+    const Vector2F clamped =
+        moveBody({positionX[lane], positionY[lane]}, {nextX, nextY});
+    const float clampedX = clamped.x;
+    const float clampedY = clamped.y;
     nextVelocityX = clampedX != nextX ? 0.0f : nextVelocityX;
     nextVelocityY = clampedY != nextY ? 0.0f : nextVelocityY;
     positionX[lane] = clampedX;
@@ -2245,10 +2250,7 @@ FM_KERNEL_CLONES void MatchEngine::integrateMovementsBinturong(
   const Vector2F step = toPitch({velocity.x * dt, velocity.y * dt});
   const float nextX = player.position.x + step.x;
   const float nextY = player.position.y + step.y;
-  player.position.x = std::clamp(nextX, MatchTuning::Pitch::PLAYER_MIN_X,
-                                 MatchTuning::Pitch::PLAYER_MAX_X);
-  player.position.y = std::clamp(nextY, MatchTuning::Pitch::PLAYER_MIN_Y,
-                                 MatchTuning::Pitch::PLAYER_MAX_Y);
+  player.position = moveBody(player.position, {nextX, nextY});
   if (player.position.x != nextX) player.velocity.x = 0.0f;
   if (player.position.y != nextY) player.velocity.y = 0.0f;
 
@@ -4317,8 +4319,7 @@ void MatchEngine::diveGoalkeeperBinturong(MatchPlayer& keeper, float dt)
     control.lateralVelocity = 0.0f;
   }
   keeper.position.y =
-      std::clamp(keeper.position.y + step, MatchTuning::Pitch::PLAYER_MIN_Y,
-                 MatchTuning::Pitch::PLAYER_MAX_Y);
+      moveBody(keeper.position, {keeper.position.x, keeper.position.y + step}).y;
   keeper.velocity = {
       0.0f, step * MatchTuning::Pitch::WIDTH_METRES / std::max(dt, EPSILON)};
   keeper.movementTarget = keeper.position;
@@ -4928,11 +4929,9 @@ void MatchEngine::stepJumpBinturong(MatchPlayer& player, float dt,
   const auto carry = [&]
   {
     const Vector2F moved = toPitch({player.velocity.x * dt, player.velocity.y * dt});
-    player.position = {
-        std::clamp(player.position.x + moved.x, MatchTuning::Pitch::PLAYER_MIN_X,
-                   MatchTuning::Pitch::PLAYER_MAX_X),
-        std::clamp(player.position.y + moved.y, MatchTuning::Pitch::PLAYER_MIN_Y,
-                   MatchTuning::Pitch::PLAYER_MAX_Y)};
+    player.position =
+        moveBody(player.position,
+               {player.position.x + moved.x, player.position.y + moved.y});
   };
   if (player.airborne())
   {

@@ -1303,7 +1303,7 @@ void MatchRenderer3D::State::drawShadows(const MatchRenderSnapshot& snapshot,
   }
 
   // A ball held in the hands sits in the holder's own shadow.
-  if (heldBy)
+  if (heldBy || snapshot.ball.outOfSight)
   {
     releaseBatch();
     return;
@@ -4075,7 +4075,7 @@ void MatchRenderer3D::render(const MatchRenderSnapshot& snapshot,
   s.addGoals();
   s.addCornerFlags();
   s.addBoards();
-  s.addBall(snapshot, alpha);
+  if (!snapshot.ball.outOfSight) s.addBall(snapshot, alpha);
   s.flushSorted();
 
   s.drawVignette();

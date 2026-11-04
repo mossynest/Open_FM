@@ -28,6 +28,12 @@
 
 using namespace MatchEngineInternal;
 
+bool MatchEngine::ballInPlayAtAardvark(Vector2F at) const
+{
+  // Out once its centre is over a line.
+  return at.x > 0.0f && at.x < 1.0f && at.y > 0.0f && at.y < 1.0f;
+}
+
 void MatchEngine::checkOutOfBoundsAardvark()
 {
   if (ball.position.x <= 0.0f || ball.position.x >= 1.0f)

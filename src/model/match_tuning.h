@@ -55,10 +55,137 @@ struct MatchTuning final
     static constexpr float AWAY_KICKOFF_X = 0.51f;
     static constexpr float KICKOFF_FORMATION_INSET = 0.02f;
     static constexpr float KICKOFF_FORMATION_SCALE = 0.56f;
+    /** The pitch edge as a player reads it: where he means to be, receive
+     * or put the ball (MatchEngineInternal::clampToPitch). */
     static constexpr float PLAYER_MIN_X = 0.005f;
     static constexpr float PLAYER_MAX_X = 0.995f;
     static constexpr float PLAYER_MIN_Y = 0.01f;
     static constexpr float PLAYER_MAX_Y = 0.99f;
+    /** The advertising boards (a hard wall), out from the touchlines and
+     * the goal lines; the 3D view draws them here too. */
+    static constexpr float BOARDS_SIDE_METRES = 4.0f;
+    static constexpr float BOARDS_END_METRES = 5.0f;
+    static constexpr float BOARDS_HEIGHT_METRES = 0.9f;
+    /** The stand's front wall (out from the touchlines and the goal lines)
+     * and the lower tier's seating rising behind it. The 3D view draws
+     * them here too. */
+    static constexpr float STAND_SIDE_METRES = 7.0f;
+    static constexpr float STAND_END_METRES = 9.0f;
+    static constexpr float STAND_WALL_HEIGHT_METRES = 1.3f;
+    static constexpr float LOWER_TIER_DEPTH_METRES = 20.0f;
+    static constexpr float LOWER_TIER_TOP_METRES = 11.0f;
+    /** The rows of crowd the match views show: this deep into the stand.
+     * A ball that goes further has gone out of sight. */
+    static constexpr float VISIBLE_CROWD_METRES = 4.0f;
+    /** The goal frame as a body meets it: posts (square, this thick, the
+     * goal's width inside them), side nets and the back net this far
+     * behind the line at the ground. The 3D view draws them here too. */
+    static constexpr float GOAL_POST_METRES = 0.12f;
+    static constexpr float GOAL_NET_DEPTH_METRES = 2.0f;
+    /** A body's footprint: a circle this wide round his position. */
+    static constexpr float BODY_RADIUS_METRES = 0.4f;
+    /** How far a body can physically go (MatchEngineInternal::
+     * clampToBoards): up to the boards, his footprint touching them. */
+    static constexpr float BODY_MIN_X =
+        -(BOARDS_END_METRES - BODY_RADIUS_METRES) / LENGTH_METRES;
+    static constexpr float BODY_MAX_X = 1.0f - BODY_MIN_X;
+    static constexpr float BODY_MIN_Y =
+        -(BOARDS_SIDE_METRES - BODY_RADIUS_METRES) / WIDTH_METRES;
+    static constexpr float BODY_MAX_Y = 1.0f - BODY_MIN_Y;
+  };
+
+  /** Binturong out of play: the ball after it has gone out, until the
+   * restart taker has it on the spot. */
+  struct DeadBall final
+  {
+    /** Share of its speed into them a ball keeps off: the padded
+     * advertising boards (a hard wall keeps 60-70%, padding 30-40%), the
+     * stand's concrete front wall, the goal's nets and its posts. */
+    static constexpr float BOARD_RESTITUTION = 0.5f;
+    static constexpr float WALL_RESTITUTION = 0.65f;
+    static constexpr float NET_RESTITUTION = 0.1f;
+    static constexpr float POST_RESTITUTION = 0.7f;
+    /** A fan catches a ball up to this far above the seating he stands on. */
+    static constexpr float FAN_REACH_METRES = 2.0f;
+    /** A throw back (a fan, a steward): this fast (an adult's two-handed
+     * throw leaves the hand at 12-18 m/s), from this high above where he
+     * stands, landing up to this far from the spot it is aimed at. */
+    static constexpr float THROW_SPEED = 15.0f;
+    static constexpr float THROW_RELEASE_METRES = 1.8f;
+    static constexpr float THROW_ERROR_METRES = 3.0f;
+    /** A fan throws it back this long after catching it. */
+    static constexpr float CATCH_THROW_SECONDS = 2.0f;
+    /** Out of sight: a replacement comes back from the front row after this
+     * (a replacement ball usually reaches the pitch in 5-10 s). */
+    static constexpr float OUT_OF_SIGHT_SECONDS = 8.0f;
+    /** Behind the boards, out of the players' reach, a steward (standing in
+     * for ball boys) throws it back once it settles, or after this. */
+    static constexpr float STEWARD_SECONDS = 3.0f;
+    /** Settled: slower than this on the ground. */
+    static constexpr float SETTLED_SPEED = 0.3f;
+    /** The taker picks it up (or catches it) within this reach, this low and
+     * this slow, and carries it at this height. */
+    static constexpr float PICKUP_REACH_METRES = 0.6f;
+    static constexpr float PICKUP_MAX_HEIGHT_METRES = 2.0f;
+    static constexpr float PICKUP_MAX_SPEED = 8.0f;
+    static constexpr float CARRY_HEIGHT_METRES = 1.0f;
+    /** A free kick or penalty: the player fetching it plays it along the
+     * ground to the spot once it is within his reach this low and this
+     * slow; stopping within this of the spot, the taker sets it there. */
+    static constexpr float FOOT_PASS_MAX_HEIGHT_METRES = 0.5f;
+    static constexpr float FOOT_PASS_MAX_SPEED = 4.0f;
+    static constexpr float SPOT_TOLERANCE_METRES = 1.0f;
+    /** After a goal: the conceding keeper goes for the ball in the net this
+     * long after it went in, carries it out to his six-yard line (this far
+     * out) and drop-kicks it at the centre spot: out of his hands from this
+     * high, at this angle, landing up to this far from the spot (a keeper's
+     * drop-kick carries 50-60 m). */
+    static constexpr float GOAL_FETCH_DELAY_SECONDS = 3.0f;
+    static constexpr float GOAL_AREA_DEPTH_METRES = 5.5f;
+    static constexpr float DROP_KICK_RELEASE_METRES = 1.0f;
+    static constexpr float DROP_KICK_ANGLE_DEGREES = 45.0f;
+    static constexpr float DROP_KICK_ERROR_METRES = 8.0f;
+    /** A throw-in (a Binturong body): the thrower stands this far behind the
+     * touchline (his feet on or behind it) and holds it over his head, this
+     * far above it and this far in front of him, so it leaves his hands
+     * still behind the line. */
+    static constexpr float THROW_IN_STAND_BEHIND_METRES = 0.4f;
+    static constexpr float THROW_IN_ABOVE_HEAD_METRES = 0.25f;
+    static constexpr float THROW_IN_FORWARD_METRES = 0.1f;
+    /** He throws once within this of his spot (or once the throw is this
+     * long overdue). */
+    static constexpr float THROW_IN_SET_METRES = 0.15f;
+    static constexpr float THROW_IN_SET_LIMIT_SECONDS = 5.0f;
+    /** He lifts it from carrying height to over his head in this long. */
+    static constexpr float THROW_IN_LIFT_SECONDS = 0.5f;
+    /** Ready for the restart (Binturong): everyone within this of his
+     * restart position, or no closer to it for this long (blocked, or
+     * marking); the laws' distances kept, to within this. */
+    static constexpr float READY_METRES = 1.0f;
+    static constexpr float READY_STALLED_SECONDS = 2.0f;
+    static constexpr float READY_SLACK_METRES = 0.3f;
+    /** Pushed back from the ball (or out of the area) this far past the
+     * laws' line, so that walking up to it keeps it. */
+    static constexpr float KEEP_OUT_MARGIN_METRES = 0.5f;
+    /** Once everyone is ready, the taker looks up for between these (not
+     * in a short match). */
+    static constexpr float THROW_IN_PAUSE_MIN_SECONDS = 1.0f;
+    static constexpr float THROW_IN_PAUSE_MAX_SECONDS = 2.0f;
+    static constexpr float KICK_PAUSE_MIN_SECONDS = 2.0f;
+    static constexpr float KICK_PAUSE_MAX_SECONDS = 4.0f;
+    static constexpr float CORNER_PAUSE_MIN_SECONDS = 3.0f;
+    static constexpr float CORNER_PAUSE_MAX_SECONDS = 5.0f;
+    static constexpr float PENALTY_PAUSE_MIN_SECONDS = 2.0f;
+    static constexpr float PENALTY_PAUSE_MAX_SECONDS = 3.0f;
+    /** A safety net: a restart not ready this long after the ball is back
+     * on the spot is taken anyway. */
+    static constexpr float READY_LIMIT_SECONDS = 30.0f;
+    /** Goal to kick-off: the celebration (the walk back and the ball's
+     * return then wait for readiness). */
+    static constexpr float CELEBRATION_SECONDS = 25.0f;
+    /** A safety net: a ball still not back on the spot after this is put
+     * there, so it never stops the match. */
+    static constexpr float GIVE_UP_SECONDS = 90.0f;
   };
 
   struct Timing final
@@ -114,6 +241,11 @@ struct MatchTuning final
     // throw-in ~18 s, goal kick ~30 s, corner ~37 s), slightly longer here
     // because fewer balls go out of play than in a real match.
     static constexpr float KICKOFF_DELAY_SECONDS = 4.0f;
+    /** A kick-off after a goal waits for everyone to be in his own half
+     * (opponents outside the centre circle), but no longer than this past
+     * its delay: a safety net, so a player who cannot get there never
+     * stops the match. */
+    static constexpr float KICKOFF_WALK_IN_LIMIT_SECONDS = 30.0f;
     static constexpr float THROW_IN_DELAY_SECONDS = 21.0f;
     static constexpr float GOAL_KICK_DELAY_SECONDS = 33.0f;
     static constexpr float CORNER_DELAY_SECONDS = 40.0f;
@@ -301,6 +433,13 @@ struct MatchTuning final
     static constexpr float RECOVERY_SPEED_SCALE = 0.58f;
     static constexpr float GOALKEEPER_MOVEMENT_SPEED_SCALE = 0.7f;
     static constexpr float RESTART_WALK_SPEED_SCALE = 0.22f;
+    /** Binturong body, going to a restart position: he walks (the top of
+     * his walk band), or jogs (the top of his jog band) while walking the
+     * rest would take longer than this (the user's call). */
+    static constexpr float RESTART_JOG_AFTER_SECONDS = 3.0f;
+    /** A restart taker who does not line the ball up (a throw-in, a keeper)
+     * is at it within this: his arrival dead zone, and a little. */
+    static constexpr float RESTART_ARRIVED_METRES = 0.5f;
     /** Distance from the target at which a player runs at the urgency cap. */
     static constexpr float URGENCY_DISTANCE_METRES = 25.0f;
     static constexpr float MAX_URGENCY_SPEED_SCALE = 0.56f;

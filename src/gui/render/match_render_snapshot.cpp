@@ -67,6 +67,7 @@ void fillMatchRenderSnapshot(const MatchEngine& engine,
   snapshot.ball.currentZ = ball.z;
   snapshot.ball.previousZ = engine.getPreviousBallZ();
   snapshot.ball.possessedBy = ball.possessedBy;
+  snapshot.ball.outOfSight = engine.ballOutOfSight();
   snapshot.ball.currentHeightMetres =
       ball.z * MatchTuning::Units::BALL_Z_METRES;
   snapshot.ball.previousHeightMetres =
