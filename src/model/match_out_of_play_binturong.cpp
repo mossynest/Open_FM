@@ -836,7 +836,8 @@ void MatchEngine::moveDeadBallBinturong(float dt)
     const float height = ball.z * Z;
     Vector2F velocity = ball.velocity;
 
-    // The advertising boards and the stand's front wall, from either side.
+    // The advertising boards and the stand's front wall, from either side
+    // (along the bottom, open at the technical areas and the tunnel).
     for (const bool alongX : {true, false})
     {
       const float extent = alongX ? G::LENGTH : G::WIDTH;
@@ -846,13 +847,87 @@ void MatchEngine::moveDeadBallBinturong(float dt)
       const float wallOut = alongX ? G::WALL_X : G::WALL_Y;
       const float wallSpan = alongX ? G::WALL_Y : G::WALL_X;
       for (const float plane : {-boardOut, extent + boardOut})
+      {
+        if (!alongX && plane > 0.0f)
+        {
+          for (const MatchGround::Span& span : MatchGround::BOTTOM_BOARDS)
+            bounceOffFace(false, plane, span.from, span.to,
+                          P::BOARDS_HEIGHT_METRES, D::BOARD_RESTITUTION, from,
+                          to, fromHeight, height, velocity);
+          continue;
+        }
         bounceOffFace(alongX, plane, -boardSpan, otherExtent + boardSpan,
                       P::BOARDS_HEIGHT_METRES, D::BOARD_RESTITUTION, from, to,
                       fromHeight, height, velocity);
+      }
       for (const float plane : {-wallOut, extent + wallOut})
+      {
+        if (!alongX && plane > 0.0f)
+        {
+          for (const MatchGround::Span& span : MatchGround::BOTTOM_STAND_WALL)
+            bounceOffFace(false, plane, span.from, span.to,
+                          P::STAND_WALL_HEIGHT_METRES, D::WALL_RESTITUTION,
+                          from, to, fromHeight, height, velocity);
+          continue;
+        }
         bounceOffFace(alongX, plane, -wallSpan, otherExtent + wallSpan,
                       P::STAND_WALL_HEIGHT_METRES, D::WALL_RESTITUTION, from,
                       to, fromHeight, height, velocity);
+      }
+    }
+
+    // The dugouts: to the ball, a closed box under the roof (the front's
+    // perspex, the people inside and the open ends between them). Off the
+    // front and the ends; onto the roof from above, rolling down it and off
+    // the front.
+    for (const MatchGround::Rect& dugout : MatchGround::DUGOUTS)
+    {
+      bounceOffFace(false, dugout.y0, dugout.x0, dugout.x1,
+                    P::DUGOUT_ROOF_FRONT_METRES, D::DUGOUT_RESTITUTION, from,
+                    to, fromHeight, height, velocity);
+      for (const float end : {dugout.x0, dugout.x1})
+        bounceOffFace(true, end, dugout.y0, dugout.y1,
+                      MatchGround::dugoutRoofHeight(dugout, to.y),
+                      D::DUGOUT_RESTITUTION, from, to, fromHeight, height,
+                      velocity);
+      constexpr float RADIUS = MatchTuning::Units::BALL_RADIUS_METRES;
+      if (!dugout.contains(to.x, to.y)) continue;
+      const float surface = MatchGround::dugoutRoofHeight(dugout, to.y) + RADIUS;
+      if (height >= surface) continue;
+      constexpr float GRAVITY = 9.81f;
+      constexpr float SLOPE =
+          (P::DUGOUT_ROOF_BACK_METRES - P::DUGOUT_ROOF_FRONT_METRES) /
+          P::DUGOUT_DEPTH_METRES;
+      // On the roof: off it as it lands, resting on it once it is slow,
+      // and pulled down the slope towards the pitch.
+      ball.velocityZ = ball.velocityZ < -D::SETTLED_SPEED
+                           ? -ball.velocityZ * D::DUGOUT_RESTITUTION
+                           : 0.0f;
+      ball.z = (surface + (surface - height) * D::DUGOUT_RESTITUTION) / Z;
+      velocity.y -= GRAVITY * SLOPE / std::sqrt(1.0f + SLOPE * SLOPE) * seconds;
+    }
+
+    // The tunnel: its sides and far end, and its ceiling from below.
+    const bool inTunnel = MatchGround::TUNNEL.contains(to.x, to.y) &&
+                          height < P::TUNNEL_HEIGHT_METRES;
+    if (inTunnel || MatchGround::TUNNEL.contains(from.x, from.y))
+    {
+      constexpr float RADIUS = MatchTuning::Units::BALL_RADIUS_METRES;
+      const MatchGround::Rect& tunnel = MatchGround::TUNNEL;
+      for (const float side : {tunnel.x0, tunnel.x1})
+        bounceOffFace(true, side, tunnel.y0, tunnel.y1, P::TUNNEL_HEIGHT_METRES,
+                      D::TUNNEL_RESTITUTION, from, to, fromHeight, height,
+                      velocity);
+      bounceOffFace(false, tunnel.y1, tunnel.x0, tunnel.x1,
+                    P::TUNNEL_HEIGHT_METRES, D::TUNNEL_RESTITUTION, from, to,
+                    fromHeight, height, velocity);
+      const float ceiling = P::TUNNEL_HEIGHT_METRES - RADIUS;
+      if (fromHeight < P::TUNNEL_HEIGHT_METRES && height > ceiling &&
+          ball.velocityZ > 0.0f)
+      {
+        ball.z = (ceiling - (height - ceiling) * D::TUNNEL_RESTITUTION) / Z;
+        ball.velocityZ = -ball.velocityZ * D::TUNNEL_RESTITUTION;
+      }
     }
 
     // The goal frames from outside: a side net (its post at the front), and
@@ -927,9 +1002,12 @@ void MatchEngine::moveDeadBallBinturong(float dt)
     ball.velocity = velocity;
 
     // Into the stand: a fan in the rows shown catches it within his reach;
-    // beyond those rows it has gone out of sight.
+    // beyond those rows it has gone out of sight. Not down the tunnel,
+    // under the seats: a steward fetches it from there.
     const float depth = G::beyond(to, G::WALL_X, G::WALL_Y);
-    if (depth <= 0.0f) continue;
+    if (depth <= 0.0f || MatchGround::TUNNEL.contains(to.x, to.y) &&
+                             ball.z * Z < P::TUNNEL_HEIGHT_METRES)
+      continue;
     if (depth > P::VISIBLE_CROWD_METRES)
     {
       // A replacement will come back from the front row where it went.
@@ -1163,7 +1241,15 @@ void MatchEngine::updateDeadBallBinturong(float dt)
         deadBall.gapSeconds += dt;
         const bool settled = speed < D::SETTLED_SPEED && height < 0.05f;
         if (settled || deadBall.gapSeconds >= D::STEWARD_SECONDS)
-          throwDeadBallBinturong(D::THROW_RELEASE_METRES);
+        {
+          // Off a dugout's roof, from where it lies on it.
+          float release = D::THROW_RELEASE_METRES;
+          for (const MatchGround::Rect& dugout : MatchGround::DUGOUTS)
+            if (dugout.contains(at.x, at.y))
+              release = std::max(release, MatchGround::dugoutRoofHeight(dugout, at.y) +
+                                              MatchTuning::Units::BALL_RADIUS_METRES);
+          throwDeadBallBinturong(release);
+        }
         break;
       }
       deadBall.gapSeconds = 0.0f;
@@ -1540,7 +1626,8 @@ void MatchEngine::placeTakerBinturong(MatchPlayer& taker, Vector2F spot)
                                         : Vector2F{0.0f, towardCentre};
     const float push =
         MatchTuning::Player::MINIMUM_BODY_SEPARATION_METRES - gap;
-    other.position = clampToBoards(
+    other.position = moveBody(
+        other.position,
         {other.position.x + away.x * push / MatchTuning::Pitch::LENGTH_METRES,
          other.position.y + away.y * push / MatchTuning::Pitch::WIDTH_METRES});
   }

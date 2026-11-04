@@ -700,6 +700,7 @@ struct MatchRenderer3D::State
   void addGoals();
   void addCornerFlags();
   void addBoards();
+  void addFixtures();
   void addBall(const MatchRenderSnapshot& snapshot, float alpha);
   void flushSorted();
   void drawHead(const Primitive& primitive);
@@ -3443,6 +3444,16 @@ void MatchRenderer3D::State::addCornerFlags()
   }
 }
 
+void MatchRenderer3D::State::addFixtures()
+{
+  for (const Stadium3D::Box& part : geometry.fixtures)
+  {
+    const float depth =
+        projection.depth((part.corners[0] + part.corners[7]) * 0.5f);
+    addBox(part.corners, part.color, depth);
+  }
+}
+
 void MatchRenderer3D::State::addBoards()
 {
   using B = Tuning::Boards;
@@ -3451,8 +3462,8 @@ void MatchRenderer3D::State::addBoards()
   {
     const Stadium3D::AdBoard& board = geometry.boards[index];
     const std::array<Vec3, 4> corners{
-        board.origin, board.origin + board.right * B::LENGTH,
-        board.origin + board.right * B::LENGTH + UP * B::HEIGHT,
+        board.origin, board.origin + board.right * board.length,
+        board.origin + board.right * board.length + UP * B::HEIGHT,
         board.origin + UP * B::HEIGHT};
     std::array<ScreenPoint, 4> screen{};
     bool visible = true;
@@ -3554,14 +3565,14 @@ void MatchRenderer3D::State::drawBoard(const Primitive& primitive)
   if (unitSize.x <= 0.0f || unitSize.y <= 0.0f) return;
   float textHeight = B::HEIGHT * B::TEXT_HEIGHT_RATIO;
   float textWidth = textHeight * unitSize.x / unitSize.y;
-  const float maximumWidth = B::LENGTH * B::TEXT_WIDTH_RATIO;
+  const float maximumWidth = board.length * B::TEXT_WIDTH_RATIO;
   if (textWidth > maximumWidth)
   {
     textHeight *= maximumWidth / textWidth;
     textWidth = maximumWidth;
   }
   const Vec3 textOrigin = board.origin +
-                          board.right * ((B::LENGTH - textWidth) * 0.5f) +
+                          board.right * ((board.length - textWidth) * 0.5f) +
                           UP * ((B::HEIGHT - textHeight) * 0.5f);
   const Vec3 textCentre =
       textOrigin + board.right * (textWidth * 0.5f) + UP * (textHeight * 0.5f);
@@ -4075,6 +4086,7 @@ void MatchRenderer3D::render(const MatchRenderSnapshot& snapshot,
   s.addGoals();
   s.addCornerFlags();
   s.addBoards();
+  s.addFixtures();
   if (!snapshot.ball.outOfSight) s.addBall(snapshot, alpha);
   s.flushSorted();
 

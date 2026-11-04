@@ -84,6 +84,14 @@ struct MatchRender2DTuning final
     static constexpr ImU32 STAND_BACK_COLOR = IM_COL32(18, 22, 32, 255);
     static constexpr ImU32 BOARD_COLOR = IM_COL32(22, 26, 34, 255);
     static constexpr std::uint32_t SEED = 20260929U;
+    /** The touchline furniture (MatchGround): the dugouts' perspex roofs
+     * seen from above, the tunnel, and the technical areas' dashed lines. */
+    static constexpr ImU32 DUGOUT_ROOF_COLOR = IM_COL32(120, 138, 152, 255);
+    static constexpr ImU32 DUGOUT_EDGE_COLOR = IM_COL32(200, 210, 218, 255);
+    static constexpr ImU32 TUNNEL_COLOR = IM_COL32(8, 10, 14, 255);
+    static constexpr ImU32 TECHNICAL_LINE_COLOR = IM_COL32(236, 240, 236, 210);
+    static constexpr float TECHNICAL_DASH_METRES = 0.6f;
+    static constexpr float TECHNICAL_LINE_METRES = 0.1f;
   };
 
   /** Top-down kit tokens. */

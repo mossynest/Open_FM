@@ -199,6 +199,7 @@ set(FM_CORE_SOURCES
     model/match_out_of_play_aardvark_members.h
     model/match_contact_binturong.h
     model/match_body_shape_binturong.h
+    model/match_ground.h
     model/match_engine.h
     model/match_engine_internal.h
     model/match_engine.cpp

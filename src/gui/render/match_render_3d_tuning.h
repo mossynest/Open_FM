@@ -172,6 +172,25 @@ struct MatchRender3DTuning final
     static constexpr ImU32 BACK_COLOR = IM_COL32(34, 36, 42, 255);
   };
 
+  /** The touchline furniture's look (its shapes are MatchGround's). */
+  struct Fixtures final
+  {
+    static constexpr float PANEL = 0.05f;
+    static constexpr float POST = 0.08f;
+    static constexpr float PORTAL = 0.4f;
+    static constexpr float BENCH_INSET = 0.3f;
+    static constexpr float BENCH_DEPTH = 0.5f;
+    static constexpr float BENCH_HEIGHT = 0.45f;
+    /** The technical areas' dashed line: dash and gap, metres. */
+    static constexpr float DASH = 0.6f;
+    static constexpr ImU32 PERSPEX_COLOR = IM_COL32(170, 196, 214, 110);
+    static constexpr ImU32 DUGOUT_BACK_COLOR = IM_COL32(52, 58, 70, 255);
+    static constexpr ImU32 BENCH_COLOR = IM_COL32(30, 34, 44, 255);
+    static constexpr ImU32 POST_COLOR = IM_COL32(200, 204, 210, 255);
+    static constexpr ImU32 TUNNEL_COLOR = IM_COL32(6, 8, 12, 255);
+    static constexpr ImU32 PORTAL_COLOR = IM_COL32(88, 92, 102, 255);
+  };
+
   struct Stands final
   {
     static constexpr float SIDE_FRONT = MatchTuning::Pitch::STAND_SIDE_METRES;

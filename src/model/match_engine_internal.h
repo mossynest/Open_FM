@@ -21,6 +21,7 @@
 #include <string_view>
 
 #include "model/match_engine.h"
+#include "model/match_ground.h"
 
 // The kinematics kernel runs 8 players at a time where the processor
 // supports it; every variant does the same IEEE arithmetic.
@@ -175,11 +176,120 @@ inline Vector2F keepOutOfGoalFrames(Vector2F from, Vector2F to)
           movedV ? P::CENTRE + v / P::WIDTH_METRES : to.y};
 }
 
-/** A body's step from `from` to `to`, where it can physically go: inside
- * the boards and out of the goal frames. */
+/**
+ * A body's step from `from` to `to` (metres) kept off one thin upright wall
+ * at `plane` across one axis (a wall along x when `alongX`), standing from
+ * `low` to `high` along it: he stays on the side he started on, his
+ * footprint clear of it, unless he passes beyond an end. Returns whether
+ * it moved him.
+ */
+inline bool keepOffWall(bool alongX, float plane, float low, float high,
+                        Vector2F from, Vector2F& to)
+{
+  constexpr float R = MatchTuning::Pitch::BODY_RADIUS_METRES;
+  const float across0 = alongX ? from.y : from.x;
+  float& across1 = alongX ? to.y : to.x;
+  const float along0 = alongX ? from.x : from.y;
+  const float along1 = alongX ? to.x : to.y;
+  const float keep = across0 < plane ? -1.0f : 1.0f;
+  const float face = plane + keep * R;
+  if ((across1 - face) * keep >= 0.0f) return false;
+  // Where along the wall his path reaches its face (where he starts, if he
+  // is already over it).
+  const float span = across1 - across0;
+  const float t = (across0 - face) * keep > 0.0f && std::abs(span) > 1e-6f
+                      ? (face - across0) / span
+                      : 0.0f;
+  const float along = along0 + (along1 - along0) * t;
+  if (along < low || along > high) return false;
+  across1 = face;
+  return true;
+}
+
+/** A body's step to `to` (metres) kept off a wall's free end at `end`:
+ * round it, his footprint clear. Returns whether it moved him. */
+inline bool keepOffWallEnd(Vector2F end, Vector2F from, Vector2F& to)
+{
+  constexpr float R = MatchTuning::Pitch::BODY_RADIUS_METRES;
+  const float dx = to.x - end.x;
+  const float dy = to.y - end.y;
+  const float gap = std::sqrt(dx * dx + dy * dy);
+  if (gap >= R) return false;
+  const float fromX = from.x - end.x;
+  const float fromY = from.y - end.y;
+  const float fromGap = std::sqrt(fromX * fromX + fromY * fromY);
+  // On it: back out the way he came.
+  const float awayX = gap > 1e-4f ? dx / gap : fromGap > 1e-4f ? fromX / fromGap : 0.0f;
+  const float awayY = gap > 1e-4f ? dy / gap : fromGap > 1e-4f ? fromY / fromGap : -1.0f;
+  to = {end.x + awayX * R, end.y + awayY * R};
+  return true;
+}
+
+/**
+ * A body moving from `from` to `to` (pitch units) kept where it can
+ * physically be round the pitch (MatchGround): inside the stands' front
+ * walls, off the boards, the dugout fronts and the tunnel walls. The gaps
+ * in the boards let him through to the technical areas, the dugouts (at
+ * their open ends) and down the tunnel. An axis left alone is returned
+ * exactly.
+ */
+inline Vector2F keepOffGround(Vector2F from, Vector2F to)
+{
+  using P = MatchTuning::Pitch;
+  namespace G = MatchGround;
+  constexpr float R = P::BODY_RADIUS_METRES;
+  // Inside the boards, before and after: nothing to meet.
+  const auto insideBoards = [](Vector2F at)
+  {
+    return at.x >= P::BODY_MIN_X && at.x <= P::BODY_MAX_X &&
+           at.y >= P::BODY_MIN_Y && at.y <= P::BODY_MAX_Y;
+  };
+  if (insideBoards(from) && insideBoards(to)) return to;
+  const Vector2F start{from.x * G::LENGTH, from.y * G::WIDTH};
+  const Vector2F wanted{to.x * G::LENGTH, to.y * G::WIDTH};
+  // The stands' front walls (and the tunnel's far end) all round.
+  Vector2F end{
+      std::clamp(wanted.x, -P::STAND_END_METRES + R, G::LENGTH + P::STAND_END_METRES - R),
+      std::clamp(wanted.y, -P::STAND_SIDE_METRES + R, G::TUNNEL.y1 - R)};
+  bool moved = end.x != wanted.x || end.y != wanted.y;
+  // The boards: whole along the top and the ends, open along the bottom.
+  moved |= keepOffWall(true, -P::BOARDS_SIDE_METRES, -P::BOARDS_END_METRES,
+                       G::LENGTH + P::BOARDS_END_METRES, start, end);
+  for (const float plane : {-P::BOARDS_END_METRES, G::LENGTH + P::BOARDS_END_METRES})
+    moved |= keepOffWall(false, plane, -P::BOARDS_SIDE_METRES, G::BOARDS_Y,
+                         start, end);
+  for (const G::Span& span : G::BOTTOM_BOARDS)
+  {
+    moved |= keepOffWall(true, G::BOARDS_Y, span.from, span.to, start, end);
+    moved |= keepOffWallEnd({span.from, G::BOARDS_Y}, start, end);
+    moved |= keepOffWallEnd({span.to, G::BOARDS_Y}, start, end);
+  }
+  // The dugouts' fronts (their backs are the stand wall).
+  for (const G::Rect& dugout : G::DUGOUTS)
+  {
+    moved |= keepOffWall(true, dugout.y0, dugout.x0, dugout.x1, start, end);
+    moved |= keepOffWallEnd({dugout.x0, dugout.y0}, start, end);
+    moved |= keepOffWallEnd({dugout.x1, dugout.y0}, start, end);
+  }
+  // The bottom stand's front wall, open at the tunnel mouth, and the
+  // tunnel's sides.
+  for (const G::Span& span : G::BOTTOM_STAND_WALL)
+    moved |= keepOffWall(true, G::STAND_Y, span.from, span.to, start, end);
+  for (const float side : {G::TUNNEL.x0, G::TUNNEL.x1})
+  {
+    moved |= keepOffWall(false, side, G::TUNNEL.y0, G::TUNNEL.y1, start, end);
+    moved |= keepOffWallEnd({side, G::TUNNEL.y0}, start, end);
+  }
+  if (!moved) return to;
+  return {end.x != wanted.x ? end.x / G::LENGTH : to.x,
+          end.y != wanted.y ? end.y / G::WIDTH : to.y};
+}
+
+/** A body's step from `from` to `to`, where it can physically go: round
+ * the pitch (keepOffGround) and out of the goal frames. */
 inline Vector2F moveBody(Vector2F from, Vector2F to)
 {
-  return keepOutOfGoalFrames(from, clampToBoards(to));
+  return keepOutOfGoalFrames(from, keepOffGround(from, to));
 }
 
 inline float length(Vector2F vector)

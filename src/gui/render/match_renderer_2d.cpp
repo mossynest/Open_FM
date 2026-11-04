@@ -28,6 +28,7 @@
 #include "gui/render/match_shirt_numbers.h"
 #include "gui/render/match_stadium_3d.h"
 #include "gui/widgets/theme.h"
+#include "model/match_ground.h"
 #include "model/player.h"
 #include "model/role_utils.h"
 
@@ -473,7 +474,9 @@ void MatchRenderer2D::State::buildStands()
     }
   };
   boards(-endBoard, width + endBoard, -sideBoard - board, true, 0U);
-  boards(-endBoard, width + endBoard, height + sideBoard, true, 1U);
+  // Along the bottom, open at the technical areas and the tunnel.
+  for (const MatchGround::Span& span : MatchGround::BOTTOM_BOARDS)
+    boards(span.from * ppm, span.to * ppm, height + sideBoard, true, 1U);
   boards(-sideBoard, height + sideBoard, -endBoard - board, false, 2U);
   boards(-sideBoard, height + sideBoard, width + endBoard, false, 3U);
 
@@ -838,12 +841,19 @@ void MatchRenderer2D::State::drawStadium()
       {viewport.x + viewport.width + endWall,
        viewport.y + viewport.height + sideWall},
       S::GAP_COLOR);
-  // Run-off grass up to the boards.
+  // Run-off grass up to the boards, and on through the technical areas to
+  // the dugouts.
   drawList->AddRectFilled(
       {viewport.x - endBoard, viewport.y - sideBoard},
       {viewport.x + viewport.width + endBoard,
        viewport.y + viewport.height + sideBoard},
       Tuning::Grass::RUN_OFF_COLOR);
+  const auto screen = [this](float xMetres, float yMetres)
+  { return ImVec2{viewport.x + xMetres * ppm, viewport.y + yMetres * ppm}; };
+  for (const MatchGround::Rect& area : MatchGround::TECHNICAL_AREAS)
+    drawList->AddRectFilled(screen(area.x0, MatchGround::BOARDS_Y),
+                            screen(area.x1, area.y1),
+                            Tuning::Grass::RUN_OFF_COLOR);
 
   if (standWidth != viewport.width || standHeight != viewport.height)
     buildStands();
@@ -870,6 +880,42 @@ void MatchRenderer2D::State::drawStadium()
     batchIndices -= 6;
   }
   releaseBatch();
+
+  // The tunnel under the stand, the dugouts' roofs, and the technical
+  // areas' dashed lines (1 m from the touchline, and out to the dugouts).
+  const MatchGround::Rect& tunnel = MatchGround::TUNNEL;
+  drawList->AddRectFilled(screen(tunnel.x0, tunnel.y0),
+                          screen(tunnel.x1, tunnel.y1), S::TUNNEL_COLOR);
+  const float edge = std::max(1.0f, px(1.0f));
+  for (const MatchGround::Rect& dugout : MatchGround::DUGOUTS)
+  {
+    drawList->AddRectFilled(screen(dugout.x0, dugout.y0),
+                            screen(dugout.x1, dugout.y1), S::DUGOUT_ROOF_COLOR);
+    drawList->AddLine(screen(dugout.x0, dugout.y0), screen(dugout.x1, dugout.y0),
+                      S::DUGOUT_EDGE_COLOR, edge * 2.0f);
+    drawList->AddRect(screen(dugout.x0, dugout.y0), screen(dugout.x1, dugout.y1),
+                      S::DUGOUT_EDGE_COLOR, 0.0f, 0, edge);
+  }
+  const float line = std::max(1.0f, S::TECHNICAL_LINE_METRES * ppm);
+  const auto dashed = [&](float x0, float y0, float x1, float y1)
+  {
+    const float metres = std::hypot(x1 - x0, y1 - y0);
+    const int dashes = std::max(1, static_cast<int>(metres / (2.0f * S::TECHNICAL_DASH_METRES)));
+    for (int dash = 0; dash < dashes; ++dash)
+    {
+      const float a = static_cast<float>(2 * dash) / static_cast<float>(2 * dashes - 1);
+      const float b = static_cast<float>(2 * dash + 1) / static_cast<float>(2 * dashes - 1);
+      drawList->AddLine(screen(x0 + (x1 - x0) * a, y0 + (y1 - y0) * a),
+                        screen(x0 + (x1 - x0) * b, y0 + (y1 - y0) * b),
+                        S::TECHNICAL_LINE_COLOR, line);
+    }
+  };
+  for (const MatchGround::Rect& area : MatchGround::TECHNICAL_AREAS)
+  {
+    dashed(area.x0, area.y0, area.x1, area.y0);
+    dashed(area.x0, area.y0, area.x0, area.y1);
+    dashed(area.x1, area.y0, area.x1, area.y1);
+  }
 }
 
 void MatchRenderer2D::State::drawGrass()

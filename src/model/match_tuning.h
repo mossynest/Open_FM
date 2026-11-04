@@ -77,6 +77,28 @@ struct MatchTuning final
     /** The rows of crowd the match views show: this deep into the stand.
      * A ball that goes further has gone out of sight. */
     static constexpr float VISIBLE_CROWD_METRES = 4.0f;
+    /** The touchline furniture, all on the bottom touchline (y = 1): the
+     * tunnel in the stand's front wall on the halfway line, a dugout either
+     * side of it (home on the left, x < 0.5) set against the stand wall,
+     * and each dugout's technical area (Law 3 guidance: 1 m either side of
+     * the seats, to 1 m from the touchline). The boards open in front of
+     * the tunnel and of each technical area. MatchGround builds the shapes
+     * from these; the views draw them from there too. */
+    static constexpr float TUNNEL_WIDTH_METRES = 4.0f;
+    static constexpr float TUNNEL_DEPTH_METRES = 8.0f;
+    static constexpr float TUNNEL_HEIGHT_METRES = 2.4f;
+    static constexpr float DUGOUT_FROM_HALFWAY_METRES = 5.0f;
+    static constexpr float DUGOUT_LENGTH_METRES = 12.0f;
+    static constexpr float DUGOUT_DEPTH_METRES = 2.0f;
+    /** The dugout's perspex front wall, and its roof sloping down towards
+     * the pitch (a ball on it rolls off the front). */
+    static constexpr float DUGOUT_FRONT_HEIGHT_METRES = 1.2f;
+    static constexpr float DUGOUT_ROOF_FRONT_METRES = 2.0f;
+    static constexpr float DUGOUT_ROOF_BACK_METRES = 2.4f;
+    static constexpr float TECHNICAL_AREA_SIDE_METRES = 1.0f;
+    static constexpr float TECHNICAL_AREA_FROM_TOUCHLINE_METRES = 1.0f;
+    /** The fourth official's place: on the halfway line, this far out. */
+    static constexpr float FOURTH_OFFICIAL_OUT_METRES = 1.0f;
     /** The goal frame as a body meets it: posts (square, this thick, the
      * goal's width inside them), side nets and the back net this far
      * behind the line at the ground. The 3D view draws them here too. */
@@ -84,8 +106,9 @@ struct MatchTuning final
     static constexpr float GOAL_NET_DEPTH_METRES = 2.0f;
     /** A body's footprint: a circle this wide round his position. */
     static constexpr float BODY_RADIUS_METRES = 0.4f;
-    /** How far a body can physically go (MatchEngineInternal::
-     * clampToBoards): up to the boards, his footprint touching them. */
+    /** Inside the boards, his footprint touching them (MatchEngineInternal::
+     * clampToBoards): where a player may mean to go to fetch a ball. His
+     * body can go further, through the gaps in the boards (moveBody). */
     static constexpr float BODY_MIN_X =
         -(BOARDS_END_METRES - BODY_RADIUS_METRES) / LENGTH_METRES;
     static constexpr float BODY_MAX_X = 1.0f - BODY_MIN_X;
@@ -105,6 +128,10 @@ struct MatchTuning final
     static constexpr float WALL_RESTITUTION = 0.65f;
     static constexpr float NET_RESTITUTION = 0.1f;
     static constexpr float POST_RESTITUTION = 0.7f;
+    /** A dugout's perspex (a stiff panel, a little livelier than the
+     * padded boards) and the tunnel's concrete. */
+    static constexpr float DUGOUT_RESTITUTION = 0.6f;
+    static constexpr float TUNNEL_RESTITUTION = WALL_RESTITUTION;
     /** A fan catches a ball up to this far above the seating he stands on. */
     static constexpr float FAN_REACH_METRES = 2.0f;
     /** A throw back (a fan, a steward): this fast (an adult's two-handed

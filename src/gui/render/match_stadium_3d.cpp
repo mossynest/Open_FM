@@ -14,6 +14,7 @@
 #include <numbers>
 
 #include "gui/render/match_render_3d_tuning.h"
+#include "model/match_ground.h"
 
 namespace Stadium3D
 {
@@ -311,6 +312,27 @@ void buildWear(Geometry& geometry)
 void buildMarkings(Geometry& geometry)
 {
   auto& lines = geometry.markings;
+  // The technical areas' dashed lines (1 m from the touchline, and out to
+  // the dugouts); world y runs the other way from the engine's.
+  const auto dashed = [&lines](float x0, float y0, float x1, float y1)
+  {
+    constexpr float DASH = Tuning::Fixtures::DASH;
+    const float metres = std::hypot(x1 - x0, y1 - y0);
+    const int dashes = std::max(1, static_cast<int>(metres / (2.0f * DASH)));
+    for (int dash = 0; dash < dashes; ++dash)
+    {
+      const float a = static_cast<float>(2 * dash) / static_cast<float>(2 * dashes - 1);
+      const float b = static_cast<float>(2 * dash + 1) / static_cast<float>(2 * dashes - 1);
+      addLine(lines, x0 + (x1 - x0) * a, WIDTH - (y0 + (y1 - y0) * a),
+              x0 + (x1 - x0) * b, WIDTH - (y0 + (y1 - y0) * b));
+    }
+  };
+  for (const MatchGround::Rect& area : MatchGround::TECHNICAL_AREAS)
+  {
+    dashed(area.x0, area.y0, area.x1, area.y0);
+    dashed(area.x0, area.y0, area.x0, area.y1);
+    dashed(area.x1, area.y0, area.x1, area.y1);
+  }
   addLine(lines, 0.0f, 0.0f, LENGTH, 0.0f);
   addLine(lines, 0.0f, WIDTH, LENGTH, WIDTH);
   addLine(lines, 0.0f, 0.0f, 0.0f, WIDTH);
@@ -952,10 +974,7 @@ void buildBoards(Geometry& geometry)
     Vec3 end;
     Vec3 normal;
   };
-  const std::array<Run, 4> runs{{
-      {{-B::END_OFFSET + 2.0f, -B::SIDE_OFFSET, 0.0f},
-       {LENGTH + B::END_OFFSET - 2.0f, -B::SIDE_OFFSET, 0.0f},
-       {0.0f, 1.0f, 0.0f}},
+  const std::array<Run, 3> runs{{
       {{-B::END_OFFSET + 2.0f, WIDTH + B::SIDE_OFFSET, 0.0f},
        {LENGTH + B::END_OFFSET - 2.0f, WIDTH + B::SIDE_OFFSET, 0.0f},
        {0.0f, -1.0f, 0.0f}},
@@ -985,10 +1004,85 @@ void buildBoards(Geometry& geometry)
       board.origin = centre - right * (B::LENGTH * 0.5f);
       board.right = right;
       board.normal = run.normal;
+      board.length = B::LENGTH;
       board.sponsor = static_cast<std::uint8_t>(sponsor++ % SPONSORS.size());
     }
     sponsor = static_cast<std::uint8_t>(sponsor + 3);
   }
+
+  // The near side (the engine's bottom touchline): open at the technical
+  // areas and the tunnel, each stretch filled edge to edge.
+  const Vec3 right{1.0f, 0.0f, 0.0f};
+  for (const MatchGround::Span& span : MatchGround::BOTTOM_BOARDS)
+  {
+    const float from = std::max(span.from, -B::END_OFFSET + 2.0f);
+    const float to = std::min(span.to, LENGTH + B::END_OFFSET - 2.0f);
+    const int count =
+        std::max(1, static_cast<int>(std::lround((to - from) / (B::LENGTH + B::GAP))));
+    const float pitch = (to - from) / static_cast<float>(count);
+    for (int index = 0; index < count; ++index)
+    {
+      AdBoard& board = geometry.boards.emplace_back();
+      board.origin = {from + pitch * static_cast<float>(index) + B::GAP * 0.5f,
+                      WIDTH - MatchGround::BOARDS_Y, 0.0f};
+      board.right = right;
+      board.normal = {0.0f, 1.0f, 0.0f};
+      board.length = pitch - B::GAP;
+      board.sponsor = static_cast<std::uint8_t>(sponsor++ % SPONSORS.size());
+    }
+  }
+}
+
+/// The dugouts (a back panel, a perspex front and roof, a bench, front
+/// posts) and the tunnel mouth in the near stand's front wall. World y
+/// runs the other way from the engine's (MatchGround) y.
+void buildFixtures(Geometry& geometry)
+{
+  using F = Tuning::Fixtures;
+  using P = MatchTuning::Pitch;
+  const auto worldY = [](float groundY) { return WIDTH - groundY; };
+  for (const MatchGround::Rect& dugout : MatchGround::DUGOUTS)
+  {
+    const float front = worldY(dugout.y0);
+    const float back = worldY(dugout.y1);
+    geometry.fixtures.push_back(
+        makeAxisBox({dugout.x0, back, 0.0f},
+                    {dugout.x1, back + F::PANEL, P::DUGOUT_ROOF_BACK_METRES},
+                    F::DUGOUT_BACK_COLOR));
+    geometry.fixtures.push_back(makeAxisBox(
+        {dugout.x0 + F::BENCH_INSET, back + F::PANEL, 0.0f},
+        {dugout.x1 - F::BENCH_INSET, back + F::PANEL + F::BENCH_DEPTH, F::BENCH_HEIGHT},
+        F::BENCH_COLOR));
+    geometry.fixtures.push_back(
+        makeAxisBox({dugout.x0, front - F::PANEL, 0.0f},
+                    {dugout.x1, front, P::DUGOUT_FRONT_HEIGHT_METRES},
+                    F::PERSPEX_COLOR));
+    for (const float x : {dugout.x0, dugout.x1 - F::POST})
+      geometry.fixtures.push_back(
+          makeAxisBox({x, front - F::POST, 0.0f},
+                      {x + F::POST, front, P::DUGOUT_ROOF_FRONT_METRES},
+                      F::POST_COLOR));
+    // The roof, sloping down to the front.
+    Box roof = makeAxisBox({dugout.x0, back, 0.0f}, {dugout.x1, front, F::PANEL},
+                           F::PERSPEX_COLOR);
+    for (Vec3& corner : roof.corners)
+      corner.z += MatchGround::dugoutRoofHeight(dugout, WIDTH - corner.y);
+    geometry.fixtures.push_back(roof);
+  }
+  const MatchGround::Rect& tunnel = MatchGround::TUNNEL;
+  const float wall = worldY(tunnel.y0);
+  const float top = P::TUNNEL_HEIGHT_METRES;
+  geometry.fixtures.push_back(
+      makeAxisBox({tunnel.x0, wall - F::PANEL, 0.0f},
+                  {tunnel.x1, wall + F::PANEL, top}, F::TUNNEL_COLOR));
+  for (const float x : {tunnel.x0 - F::PORTAL, tunnel.x1})
+    geometry.fixtures.push_back(
+        makeAxisBox({x, wall - F::PORTAL, 0.0f},
+                    {x + F::PORTAL, wall + F::PANEL, top + F::PORTAL},
+                    F::PORTAL_COLOR));
+  geometry.fixtures.push_back(
+      makeAxisBox({tunnel.x0, wall - F::PORTAL, top},
+                  {tunnel.x1, wall + F::PANEL, top + F::PORTAL}, F::PORTAL_COLOR));
 }
 
 void buildGoals(Geometry& geometry)
@@ -1090,6 +1184,7 @@ void Geometry::build(const MatchKits& kits, bool daylight)
   clumps.clear();
   flags.clear();
   boards.clear();
+  fixtures.clear();
 
   buildGround(*this, day);
   buildWear(*this);
@@ -1121,6 +1216,7 @@ void Geometry::build(const MatchKits& kits, bool daylight)
   stands.buildCorner({x0, y1, 0.0f}, north, west, Side::NORTH);
   buildFloodlights(*this, day);
   buildBoards(*this);
+  buildFixtures(*this);
   buildGoals(*this);
   cornerFlags = {Vec3{0.0f, 0.0f, 0.0f}, Vec3{LENGTH, 0.0f, 0.0f},
                  Vec3{0.0f, WIDTH, 0.0f}, Vec3{LENGTH, WIDTH, 0.0f}};

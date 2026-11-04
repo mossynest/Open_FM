@@ -165,6 +165,8 @@ struct AdBoard
   Vec3 origin; /**< Bottom-left corner as seen from the pitch. */
   Vec3 right;  /**< Unit vector along the board, left to right. */
   Vec3 normal; /**< Unit vector facing the pitch. */
+  /** Along `right`, metres (shorter between the gaps by the dugouts). */
+  float length = 0.0f;
   std::uint8_t sponsor = 0;
 };
 
@@ -236,6 +238,8 @@ struct Geometry
   std::vector<CrowdClump> clumps;
   std::vector<CrowdFlag> flags;
   std::vector<AdBoard> boards;
+  /** The touchline furniture (MatchGround): dugouts and the tunnel mouth. */
+  std::vector<Box> fixtures;
   std::array<Goal, 2> goals{};
   std::array<Vec3, 4> cornerFlags{};
   /** Daylight build: sunlit and shaded stands, lamps off. */
