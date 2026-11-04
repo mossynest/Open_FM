@@ -2437,6 +2437,36 @@ struct MatchTuning final
    * appetite) and fades linearly; a team talk scales execution, decisions and
    * work rate by at most a few per cent for one half.
    */
+  /** The people round the touchline (touchline plan, stage 2): each side's
+   * subs and staff seated in its dugout, and its manager in his technical
+   * area. Their bodies collide like players' (Binturong bodies only). */
+  struct TouchlinePeople final
+  {
+    /** Stand-ins for people without a player's stats (agreed): an average
+     * fit adult, every stat 50, 75 kg. */
+    static constexpr float STAND_IN_ATTRIBUTE = 0.5f;
+    static constexpr float STAND_IN_MASS_KILOGRAMS = 75.0f;
+    /** They walk (staff walk only; agreed), at the restart walk's pace. */
+    static constexpr float WALK_SPEED = 1.5f;
+    /** Seats along the dugout's bench, staff nearest the halfway line: the
+     * first this far in from the dugout's halfway end, then this apart. */
+    static constexpr float FIRST_SEAT_METRES = 0.5f;
+    static constexpr float SEAT_SPACING_METRES = 0.6f;
+    /** Close enough to his seat or spot to stop there. */
+    static constexpr float ARRIVED_METRES = 0.15f;
+    /** The manager: his spot this far in front of his dugout, level with
+     * the play along his technical area (it moves on once the play has
+     * moved this far); up at the front edge while the ball is this near
+     * his area, or for this long after his side's shout. */
+    static constexpr float MANAGER_SPOT_OUT_METRES = 1.5f;
+    static constexpr float MANAGER_FOLLOW_METRES = 1.0f;
+    static constexpr float MANAGER_BALL_NEAR_METRES = 25.0f;
+    static constexpr float MANAGER_SHOUT_SECONDS = 20.0f;
+    /** A touchline body takes part in a step's run-ins only with a player
+     * within this of it (nobody else can reach it in a step). */
+    static constexpr float COLLISION_RANGE_METRES = 5.0f;
+  };
+
   struct Touchline final
   {
     static constexpr float SHOUT_DURATION_SECONDS = 600.0f;

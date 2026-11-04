@@ -433,6 +433,8 @@ void MatchEngine::updateRestartSupport(MatchPlayer& player,
 
 float MatchEngine::chooseGetUp(const MatchPlayer& player)
 {
+  // Nobody round the touchline has a brain or a ball to win.
+  if (onTouchline(player)) return touchlineGetUpSeconds(player);
   switch (brainOf(player.isHomeTeam))
   {
     case BrainId::AARDVARK:

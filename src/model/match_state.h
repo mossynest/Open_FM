@@ -9,6 +9,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string_view>
 
 /**
@@ -81,3 +82,13 @@ enum class GoalkeeperState
 };
 
 std::string_view goalkeeperStateName(GoalkeeperState state);
+
+/** Who a person round the touchline is (touchline plan, stage 2). */
+enum class TouchlineRole : std::uint8_t
+{
+  SUBSTITUTE,
+  ASSISTANT,
+  GOALKEEPER_COACH,
+  PHYSIO,
+  MANAGER
+};

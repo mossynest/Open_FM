@@ -82,6 +82,28 @@ struct MatchRenderPlayer
   float upFacingAngle = 0.0f;
 };
 
+/** Someone round the touchline (touchline plan stage 2): a sub, a member of
+ * staff or a manager, seated in the dugout or on his feet. */
+struct MatchRenderTouchlinePerson
+{
+  /** A sub's player; staff and managers have none. */
+  const Player* player = nullptr;
+  bool isHomeTeam = false;
+  TouchlineRole role = TouchlineRole::SUBSTITUTE;
+  bool seated = false;
+  Vector2F previousPosition{};
+  Vector2F currentPosition{};
+  float previousFacingAngle = 0.0f;
+  float currentFacingAngle = 0.0f;
+  float heightMetres = MatchTuning::Units::DEFAULT_PLAYER_HEIGHT_METRES;
+  float speedMetresPerSecond = 0.0f;
+  /** Down after a knock, as a player's (MatchRenderPlayer). */
+  bool fallen = false;
+  float lyingAngle = 0.0f;
+  bool onFront = false;
+  float getUpShare = 0.0f;
+};
+
 struct MatchRenderBall
 {
   Vector2F previousPosition{MatchTuning::Pitch::CENTRE,
@@ -111,6 +133,7 @@ struct MatchRenderBall
 struct MatchRenderSnapshot
 {
   std::vector<MatchRenderPlayer> players;
+  std::vector<MatchRenderTouchlinePerson> touchline;
   /** Sides whose strips the views draw (the match screen's own ids, so its
    * colour swatches match); 0: taken from the players' clubs. */
   TeamID homeTeam = 0;

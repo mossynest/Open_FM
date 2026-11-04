@@ -61,6 +61,35 @@ void fillMatchRenderSnapshot(const MatchEngine& engine,
                                                 : source.feetHeight;
   }
 
+  const auto& bodies = engine.getTouchlineBodies();
+  const auto& people = engine.getTouchlinePeople();
+  const auto& previousTouchline = engine.getPreviousTouchlinePositions();
+  const auto& previousTouchlineFacing = engine.getPreviousTouchlineFacingAngles();
+  snapshot.touchline.clear();
+  for (std::size_t index = 0; index < bodies.size() && index < people.size(); ++index)
+  {
+    const MatchPlayer& body = bodies[index];
+    MatchRenderTouchlinePerson& person = snapshot.touchline.emplace_back();
+    person.player = body.player;
+    person.isHomeTeam = body.isHomeTeam;
+    person.role = people[index].role;
+    person.seated = people[index].seated;
+    person.currentPosition = body.position;
+    person.previousPosition =
+        index < previousTouchline.size() ? previousTouchline[index] : body.position;
+    person.currentFacingAngle = body.facingAngle;
+    person.previousFacingAngle = index < previousTouchlineFacing.size()
+                                     ? previousTouchlineFacing[index]
+                                     : body.facingAngle;
+    person.heightMetres = body.heightMetres;
+    person.speedMetresPerSecond =
+        std::sqrt(body.velocity.x * body.velocity.x + body.velocity.y * body.velocity.y);
+    person.fallen = body.fallen;
+    person.lyingAngle = body.lyingAngle;
+    person.onFront = body.onFront();
+    person.getUpShare = body.getUpShare();
+  }
+
   const MatchBall& ball = engine.getBall();
   snapshot.ball.currentPosition = ball.position;
   snapshot.ball.previousPosition = engine.getPreviousBallPosition();

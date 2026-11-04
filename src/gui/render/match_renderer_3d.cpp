@@ -701,6 +701,10 @@ struct MatchRenderer3D::State
   void addCornerFlags();
   void addBoards();
   void addFixtures();
+  /** Someone round the touchline: a plain figure, seated, standing,
+   * walking or lying (no kit numbers, no actions). */
+  void addTouchlinePerson(const MatchRenderTouchlinePerson& person, std::size_t index,
+                          float alpha);
   void addBall(const MatchRenderSnapshot& snapshot, float alpha);
   void flushSorted();
   void drawHead(const Primitive& primitive);
@@ -3454,6 +3458,153 @@ void MatchRenderer3D::State::addFixtures()
   }
 }
 
+void MatchRenderer3D::State::addTouchlinePerson(const MatchRenderTouchlinePerson& person,
+                                                std::size_t index, float alpha)
+{
+  using P = Tuning::Player;
+  using T = Tuning::TouchlineFigure;
+  const Vec3 root = RenderMath::worldFromPitch(
+      lerpRenderPosition(person.previousPosition, person.currentPosition, alpha));
+  ScreenPoint anchor;
+  if (!projection.project(root + UP * P::HIP_HEIGHT, anchor)) return;
+  const RenderMath::ScreenRect& rect = projection.rect;
+  if (anchor.x < rect.x - P::CULL_MARGIN_PIXELS ||
+      anchor.x > rect.x + rect.width + P::CULL_MARGIN_PIXELS ||
+      anchor.y < rect.y - P::CULL_MARGIN_PIXELS ||
+      anchor.y > rect.y + rect.height + P::CULL_MARGIN_PIXELS)
+    return;
+  const float scale = person.heightMetres / P::REFERENCE_HEIGHT_METRES;
+  const float pixelHeight = person.heightMetres * projection.focalPixels / anchor.depth;
+  const PlayerLod lod = pixelHeight < Tuning::Rig::FAR_PIXELS ? PlayerLod::FAR
+                        : pixelHeight < P::ROUND_MIN_PIXELS   ? PlayerLod::MID
+                                                              : PlayerLod::NEAR;
+  const float objectDepth = anchor.depth;
+  // Staff and managers have no player: a look of their own, the same every
+  // frame (by side, role and place in the list).
+  const PlayerLook look =
+      lookFor(person.player ? person.player->getId()
+                            : T::STAFF_LOOK_SEED + static_cast<std::uint32_t>(index) * 7U +
+                                  (person.isHomeTeam ? 0U : 1U));
+  const KitColors& kit = kitList[person.isHomeTeam ? 0U : 2U];
+  ImU32 top = T::TRACKSUIT_COLOR;
+  ImU32 legs = T::TRACKSUIT_COLOR;
+  if (person.role == TouchlineRole::SUBSTITUTE)
+    top = shadeColor(kit.shirt, T::SUB_TOP_SHADE);
+  else if (person.role == TouchlineRole::MANAGER)
+    top = legs = T::SUIT_COLOR;
+
+  const float yaw =
+      person.fallen
+          ? RenderMath::worldYawFromFacing(person.lyingAngle)
+          : RenderMath::worldYawFromFacing(RenderMath::lerpAngle(
+                person.previousFacingAngle, person.currentFacingAngle, alpha));
+  const Vec3 forward{std::cos(yaw), std::sin(yaw), 0.0f};
+  const Vec3 side{-forward.y, forward.x, 0.0f};
+
+  // Down after a knock: a body lying along the ground, head at one end.
+  if (person.fallen && person.getUpShare < 0.5f)
+  {
+    const float length = person.heightMetres - 2.0f * P::HEAD_RADIUS * scale;
+    const Vec3 feet = root - forward * (0.5f * length) + UP * T::LYING_HEIGHT;
+    const Vec3 neck = root + forward * (0.5f * length) + UP * T::LYING_HEIGHT;
+    addSegment(feet, root + UP * T::LYING_HEIGHT, T::LIMB_HALF * scale, T::TORSO_HALF * scale,
+               legs, UP, objectDepth, lod);
+    addSegment(root + UP * T::LYING_HEIGHT, neck, T::TORSO_HALF * scale, T::TORSO_HALF * scale,
+               top, UP, objectDepth, lod);
+    const Vec3 head = neck + forward * (P::HEAD_RADIUS * scale);
+    ScreenPoint headPoint;
+    if (projection.project(head, headPoint))
+    {
+      Primitive primitive;
+      primitive.firstPoint = static_cast<std::uint32_t>(points.size());
+      primitive.pointCount = 2;
+      primitive.kind = PrimitiveKind::HEAD;
+      primitive.color = look.skin;
+      primitive.secondaryColor = look.hair;
+      primitive.reference = static_cast<std::uint32_t>(look.hairStyle) |
+                            (look.beard ? HEAD_BEARD_BIT : 0U) | (128U << HEAD_FACING_SHIFT);
+      primitive.size = P::HEAD_RADIUS * scale * projection.focalPixels / headPoint.depth;
+      points.push_back(toImVec(headPoint));
+      points.push_back(toImVec(headPoint));
+      keys.push_back({objectDepth, headPoint.depth,
+                      static_cast<std::uint32_t>(primitives.size())});
+      primitives.push_back(primitive);
+    }
+    return;
+  }
+
+  // Seated on the bench, or on his feet (a simple stride while he walks).
+  const bool seated = person.seated;
+  const float hipHeight = (seated ? T::SEAT_HEIGHT : P::HIP_HEIGHT) * scale;
+  const Vec3 pelvis = root + UP * hipHeight;
+  const float stride =
+      seated ? 0.0f
+             : std::sin(elapsedSeconds * T::STRIDE_RATE) *
+                   std::min(person.speedMetresPerSecond / T::FULL_STRIDE_SPEED, 1.0f) *
+                   T::STRIDE_REACH * scale;
+  for (const float which : {-1.0f, 1.0f})
+  {
+    const Vec3 hip = pelvis + side * (which * P::HIP_SPREAD * scale);
+    const Vec3 ankle =
+        seated ? hip + forward * (T::KNEE_FORWARD * scale) -
+                     UP * (hipHeight - T::ANKLE_HEIGHT * scale)
+               : root + side * (which * P::HIP_SPREAD * scale) +
+                     forward * (which * stride) + UP * (T::ANKLE_HEIGHT * scale);
+    if (seated)
+    {
+      const Vec3 knee = hip + forward * (T::KNEE_FORWARD * scale);
+      addSegment(hip, knee, T::LIMB_HALF * scale, T::LIMB_HALF * scale * 0.85f, legs, UP,
+                 objectDepth, lod);
+      addSegment(knee, ankle, T::LIMB_HALF * scale * 0.8f, T::LIMB_HALF * scale * 0.6f, legs,
+                 forward, objectDepth, lod);
+    }
+    else
+    {
+      addSegment(hip, ankle, T::LIMB_HALF * scale, T::LIMB_HALF * scale * 0.6f, legs, forward,
+                 objectDepth, lod);
+    }
+    addSegment(ankle, ankle + forward * (T::FOOT_LENGTH * scale), T::FOOT_HALF * scale,
+               T::FOOT_HALF * scale, T::SHOE_COLOR, UP, objectDepth, lod);
+  }
+  const Vec3 shoulders = pelvis + UP * (T::TORSO_LENGTH * scale);
+  orientedBox(pelvis + UP * (0.5f * T::TORSO_LENGTH * scale), forward * (T::TORSO_DEPTH * scale),
+              side * (T::TORSO_HALF * scale), UP * (0.5f * T::TORSO_LENGTH * scale), top,
+              objectDepth);
+  for (const float which : {-1.0f, 1.0f})
+  {
+    const Vec3 shoulder = shoulders + side * (which * T::SHOULDER_SPREAD * scale);
+    const Vec3 hand =
+        seated ? pelvis + side * (which * T::SHOULDER_SPREAD * scale) +
+                     forward * (T::KNEE_FORWARD * 0.6f * scale) + UP * (0.05f * scale)
+               : shoulder - UP * (T::ARM_LENGTH * scale) - forward * (which * stride * 0.6f);
+    addSegment(shoulder, hand, T::ARM_HALF * scale, T::ARM_HALF * scale * 0.75f, top, forward,
+               objectDepth, lod);
+  }
+  const Vec3 headCentre = shoulders + UP * (T::NECK_LENGTH * scale + P::HEAD_RADIUS * scale);
+  ScreenPoint head;
+  if (!projection.project(headCentre, head)) return;
+  Primitive primitive;
+  primitive.firstPoint = static_cast<std::uint32_t>(points.size());
+  primitive.pointCount = 2;
+  primitive.kind = PrimitiveKind::HEAD;
+  primitive.color = look.skin;
+  primitive.secondaryColor = look.hair;
+  const float facing =
+      RenderMath::dot(forward, RenderMath::normalize(projection.eye - headCentre));
+  primitive.reference =
+      static_cast<std::uint32_t>(look.hairStyle) | (look.beard ? HEAD_BEARD_BIT : 0U) |
+      (static_cast<std::uint32_t>(std::clamp(facing * 0.5f + 0.5f, 0.0f, 1.0f) * 255.0f)
+       << HEAD_FACING_SHIFT);
+  primitive.size = P::HEAD_RADIUS * scale * projection.focalPixels / head.depth;
+  points.push_back(toImVec(head));
+  ScreenPoint facePoint;
+  points.push_back(projection.project(headCentre + forward * 0.1f, facePoint)
+                       ? toImVec(facePoint)
+                       : toImVec(head));
+  keys.push_back({objectDepth, head.depth, static_cast<std::uint32_t>(primitives.size())});
+  primitives.push_back(primitive);
+}
+
 void MatchRenderer3D::State::addBoards()
 {
   using B = Tuning::Boards;
@@ -4087,6 +4238,8 @@ void MatchRenderer3D::render(const MatchRenderSnapshot& snapshot,
   s.addCornerFlags();
   s.addBoards();
   s.addFixtures();
+  for (std::size_t index = 0; index < snapshot.touchline.size(); ++index)
+    s.addTouchlinePerson(snapshot.touchline[index], index, alpha);
   if (!snapshot.ball.outOfSight) s.addBall(snapshot, alpha);
   s.flushSorted();
 

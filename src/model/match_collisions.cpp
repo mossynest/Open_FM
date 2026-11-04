@@ -248,6 +248,9 @@ void MatchEngine::rememberStepStart()
   const std::size_t count = std::min(players.size(), stepStartPositions.size());
   for (std::size_t index = 0; index < count; ++index)
     stepStartPositions[index] = players[index].position;
+  touchlineStepStart.resize(touchlineBodies.size());
+  for (std::size_t index = 0; index < touchlineBodies.size(); ++index)
+    touchlineStepStart[index] = touchlineBodies[index].position;
 }
 
 void MatchEngine::collidePlayers(float dt)
@@ -271,12 +274,54 @@ void MatchEngine::collidePlayers(float dt)
       bool takesPart = false;
       bool hit = false;
     };
-    const std::size_t count = std::min(players.size(), stepStartPositions.size());
-    std::array<Path, 32> paths{};
+    const std::size_t playerCount = std::min(players.size(), stepStartPositions.size());
+    // Then the touchline's bodies (touchline plan stage 2) a player could
+    // reach this step: their slots follow the players'.
+    constexpr std::size_t MOST = 64;
+    std::array<MatchPlayer*, MOST> bodies{};
+    std::array<std::size_t, MOST> touchlineIndex{};
+    for (std::size_t index = 0; index < playerCount; ++index) bodies[index] = &players[index];
+    std::size_t count = playerCount;
+    for (std::size_t index = 0; index < touchlineBodies.size() && count < MOST; ++index)
+    {
+      const MatchPlayer& body = touchlineBodies[index];
+      if (body.fallen || index >= touchlineStepStart.size()) continue;
+      bool near = false;
+      for (std::size_t slot = 0; slot < playerCount && !near; ++slot)
+      {
+        const MatchPlayer& player = players[slot];
+        near = active(player) && bodyOf(player.isHomeTeam) == BodyId::BINTURONG &&
+               length(toMetres({player.position.x - body.position.x,
+                                player.position.y - body.position.y})) <=
+                   MatchTuning::TouchlinePeople::COLLISION_RANGE_METRES;
+      }
+      if (!near) continue;
+      bodies[count] = &touchlineBodies[index];
+      touchlineIndex[count] = index;
+      ++count;
+    }
+    const auto onLine = [playerCount](std::size_t index) { return index >= playerCount; };
+    std::array<Path, MOST> paths{};
     for (std::size_t index = 0; index < count; ++index)
     {
-      const MatchPlayer& player = players[index];
+      const MatchPlayer& player = *bodies[index];
       Path& path = paths[index];
+      if (onLine(index))
+      {
+        // Someone round the touchline: a stand-in's weight, a sub's own.
+        const Vector2F start = toMetres(touchlineStepStart[touchlineIndex[index]]);
+        const Vector2F end = toMetres(player.position);
+        path.takesPart = true;
+        path.anchor = start;
+        path.velocity = scaled({end.x - start.x, end.y - start.y}, 1.0f / dt);
+        path.inverseMass =
+            1.0f / (player.player
+                        ? std::max(bodyMassKilograms(player.heightMetres,
+                                                     player.derivedStat(DerivedStat::STRENGTH)),
+                                   1.0f)
+                        : MatchTuning::TouchlinePeople::STAND_IN_MASS_KILOGRAMS);
+        continue;
+      }
       // A diving keeper is out of it (keepers in traffic: a later plan),
       // and a fallen player: others hurdle him.
       path.takesPart =
@@ -318,6 +363,8 @@ void MatchEngine::collidePlayers(float dt)
           if (!paths[second].takesPart) continue;
           if (paths[first].inverseMass == 0.0f && paths[second].inverseMass == 0.0f)
             continue;
+          // Round the touchline, only players run into them.
+          if (onLine(first) && onLine(second)) continue;
           const Vector2F gap{paths[second].anchor.x - paths[first].anchor.x,
                              paths[second].anchor.y - paths[first].anchor.y};
           const Vector2F closing{paths[second].velocity.x - paths[first].velocity.x,
@@ -365,9 +412,10 @@ void MatchEngine::collidePlayers(float dt)
       record.atSeconds = now;
       record.where = toPitch(scaled(add(oneAt, twoAt), 0.5f));
       const std::array<std::size_t, 2> indices{firstIndex, secondIndex};
+      const bool bothPlayers = !onLine(firstIndex) && !onLine(secondIndex);
       for (std::size_t side = 0; side < 2; ++side)
       {
-        MatchPlayer& player = players[indices[side]];
+        MatchPlayer& player = *bodies[indices[side]];
         CollisionSide& entry = record.sides[side];
         entry.player = player.player ? player.player->getId() : 0;
         entry.jolt = jolts[side];
@@ -381,7 +429,8 @@ void MatchEngine::collidePlayers(float dt)
                                            C::SUDDEN_WINDOW_SECONDS,
                                        EPSILON);
         judgeKnock(player, entry, dt - now);
-        if (entry.outcome > 0)
+        // The knock breakdowns are the players' own.
+        if (entry.outcome > 0 && bothPlayers)
         {
           const std::size_t otherSide = 1 - side;
           const Vector2F before{entry.after.x - entry.jolt.x, entry.after.y - entry.jolt.y};
@@ -457,7 +506,7 @@ void MatchEngine::collidePlayers(float dt)
         }
       }
       // Who ran into whom, and when: a re-hit is read against it.
-      for (std::size_t side = 0; side < 2; ++side)
+      for (std::size_t side = 0; side < 2 && bothPlayers; ++side)
       {
         players[indices[side]].lastContactSlot = static_cast<std::int8_t>(indices[1 - side]);
         players[indices[side]].lastContactAt = getSimulatedSeconds() + now;
@@ -474,7 +523,7 @@ void MatchEngine::collidePlayers(float dt)
     for (std::size_t index = 0; index < count; ++index)
     {
       if (!paths[index].hit) continue;
-      MatchPlayer& player = players[index];
+      MatchPlayer& player = *bodies[index];
       const Vector2F end = toPitch(at(index, dt));
       player.position = moveBody(player.position, end);
       player.velocity = paths[index].velocity;
@@ -487,12 +536,14 @@ void MatchEngine::collidePlayers(float dt)
       if (!paths[first].takesPart) continue;
       for (std::size_t second = first + 1; second < count; ++second)
       {
-        if (!paths[second].takesPart) continue;
+        if (!paths[second].takesPart || (onLine(first) && onLine(second))) continue;
         const float inverseTotal =
             paths[first].inverseMass + paths[second].inverseMass;
         if (inverseTotal <= 0.0f) continue;
-        const Vector2F gap = toMetres({players[second].position.x - players[first].position.x,
-                                       players[second].position.y - players[first].position.y});
+        MatchPlayer& one = *bodies[first];
+        MatchPlayer& two = *bodies[second];
+        const Vector2F gap = toMetres({two.position.x - one.position.x,
+                                       two.position.y - one.position.y});
         const float apart = length(gap);
         const float overlap = C::BODY_DIAMETER_METRES - apart;
         if (overlap <= 0.0f) continue;
@@ -502,16 +553,13 @@ void MatchEngine::collidePlayers(float dt)
         const float easing = C::OVERLAP_EASING_PER_SECOND * overlap;
         // Only what they lack of it: a pair already parting fast enough is
         // left alone.
-        const float parting = dot(players[second].velocity, line) -
-                              dot(players[first].velocity, line);
+        const float parting = dot(two.velocity, line) - dot(one.velocity, line);
         const float needed = easing - parting;
         if (needed <= 0.0f) continue;
-        players[first].velocity =
-            add(players[first].velocity,
-                scaled(line, -needed * paths[first].inverseMass / inverseTotal));
-        players[second].velocity =
-            add(players[second].velocity,
-                scaled(line, needed * paths[second].inverseMass / inverseTotal));
+        one.velocity =
+            add(one.velocity, scaled(line, -needed * paths[first].inverseMass / inverseTotal));
+        two.velocity =
+            add(two.velocity, scaled(line, needed * paths[second].inverseMass / inverseTotal));
       }
     }
   }

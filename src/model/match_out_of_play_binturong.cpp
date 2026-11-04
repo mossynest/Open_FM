@@ -1005,8 +1005,8 @@ void MatchEngine::moveDeadBallBinturong(float dt)
     // beyond those rows it has gone out of sight. Not down the tunnel,
     // under the seats: a steward fetches it from there.
     const float depth = G::beyond(to, G::WALL_X, G::WALL_Y);
-    if (depth <= 0.0f || MatchGround::TUNNEL.contains(to.x, to.y) &&
-                             ball.z * Z < P::TUNNEL_HEIGHT_METRES)
+    if (depth <= 0.0f || (MatchGround::TUNNEL.contains(to.x, to.y) &&
+                          ball.z * Z < P::TUNNEL_HEIGHT_METRES))
       continue;
     if (depth > P::VISIBLE_CROWD_METRES)
     {

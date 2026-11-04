@@ -254,6 +254,7 @@ struct MatchRenderer2D::State
   void drawMarkings();
   void drawGoal(bool left);
   void drawOffside();
+  void drawTouchline(const MatchRenderSnapshot& snapshot, float alpha);
   void drawFlights();
   void drawTrail();
   void drawTokens(const MatchRenderSnapshot& snapshot,
@@ -1116,6 +1117,32 @@ void MatchRenderer2D::State::drawGoal(bool left)
   drawList->AddCircleFilled(postB, post * 0.9f, G::POST_COLOR);
 }
 
+void MatchRenderer2D::State::drawTouchline(const MatchRenderSnapshot& snapshot,
+                                           float alpha)
+{
+  using T = Tuning::Touchline;
+  for (const MatchRenderTouchlinePerson& person : snapshot.touchline)
+  {
+    const Vector2F at =
+        lerpRenderPosition(person.previousPosition, person.currentPosition, alpha);
+    const ImVec2 centre = atMetres(at.x * LENGTH, at.y * WIDTH);
+    const bool manager = person.role == TouchlineRole::MANAGER;
+    const float radius =
+        std::max(px(T::MIN_RADIUS_PIXELS),
+                 (manager ? T::MANAGER_RADIUS_METRES : T::RADIUS_METRES) * ppm);
+    const KitColors& kit = person.isHomeTeam ? kits.home : kits.away;
+    const ImU32 body = person.role == TouchlineRole::SUBSTITUTE
+                           ? shadeColor(kit.shirt, T::SUB_SHADE)
+                       : manager ? T::SUIT_COLOR
+                                 : T::STAFF_COLOR;
+    drawList->AddCircleFilled(centre, radius + std::max(1.0f, px(1.0f)), T::OUTLINE_COLOR);
+    if (person.role != TouchlineRole::SUBSTITUTE)
+      drawList->AddCircleFilled(centre, radius, kit.shirt);
+    drawList->AddCircleFilled(
+        centre, person.role == TouchlineRole::SUBSTITUTE ? radius : radius * 0.7f, body);
+  }
+}
+
 void MatchRenderer2D::State::drawOffside()
 {
   using O = Tuning::Offside;
@@ -1747,6 +1774,7 @@ void MatchRenderer2D::render(const MatchRenderSnapshot& snapshot,
   }
 #endif
 
+  s.drawTouchline(snapshot, alpha);
   s.drawOffside();
   s.drawFlights();
   s.drawTokens(snapshot, options, alpha);

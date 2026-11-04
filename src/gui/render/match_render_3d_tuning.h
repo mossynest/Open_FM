@@ -191,6 +191,37 @@ struct MatchRender3DTuning final
     static constexpr ImU32 PORTAL_COLOR = IM_COL32(88, 92, 102, 255);
   };
 
+  /** The people round the touchline: a plain figure (metres at 1.80 m
+   * tall, scaled by height). Subs in a training top of their side's
+   * colour, staff in dark tracksuits, managers in suits. */
+  struct TouchlineFigure final
+  {
+    static constexpr float SEAT_HEIGHT = 0.47f;
+    static constexpr float KNEE_FORWARD = 0.45f;
+    static constexpr float ANKLE_HEIGHT = 0.08f;
+    static constexpr float FOOT_LENGTH = 0.22f;
+    static constexpr float FOOT_HALF = 0.045f;
+    static constexpr float LIMB_HALF = 0.07f;
+    static constexpr float ARM_HALF = 0.05f;
+    static constexpr float ARM_LENGTH = 0.55f;
+    static constexpr float TORSO_LENGTH = 0.52f;
+    static constexpr float TORSO_HALF = 0.18f;
+    static constexpr float TORSO_DEPTH = 0.11f;
+    static constexpr float SHOULDER_SPREAD = 0.22f;
+    static constexpr float NECK_LENGTH = 0.06f;
+    static constexpr float LYING_HEIGHT = 0.15f;
+    /** A walking stride: how fast the legs swing (rad/s), how far, and the
+     * speed (m/s) at which it is full. */
+    static constexpr float STRIDE_RATE = 7.0f;
+    static constexpr float STRIDE_REACH = 0.25f;
+    static constexpr float FULL_STRIDE_SPEED = 1.5f;
+    static constexpr float SUB_TOP_SHADE = 0.85f;
+    static constexpr std::uint32_t STAFF_LOOK_SEED = 900000U;
+    static constexpr ImU32 TRACKSUIT_COLOR = IM_COL32(36, 40, 52, 255);
+    static constexpr ImU32 SUIT_COLOR = IM_COL32(26, 26, 30, 255);
+    static constexpr ImU32 SHOE_COLOR = IM_COL32(20, 20, 22, 255);
+  };
+
   struct Stands final
   {
     static constexpr float SIDE_FRONT = MatchTuning::Pitch::STAND_SIDE_METRES;

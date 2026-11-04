@@ -431,6 +431,18 @@ struct MatchPlayer
   std::size_t statsIndex = 0;
 };
 
+/** Who a touchline body is and where he belongs (touchline plan stage 2);
+ * his body is a MatchPlayer, so it moves and collides like a player's. */
+struct TouchlinePerson
+{
+  TouchlineRole role = TouchlineRole::SUBSTITUTE;
+  /** His seat on his side's dugout bench (normalised pitch); the manager's
+   * is his spot in his technical area, moved with the play. */
+  Vector2F seat{};
+  /** Sitting on it (else on his feet). */
+  bool seated = false;
+};
+
 /** What a first touch tries to do (first-touch plan): send the ball to
  * `targetSpot` (normalised), arriving at `arrivalSpeed` m/s. */
 struct TouchIntent
@@ -1977,6 +1989,19 @@ class MatchEngine
   std::uint64_t getSimulatedSteps() const { return stepCounter; }
 
   const std::vector<MatchPlayer>& getPlayers() const { return players; }
+  /** The people round the touchline (touchline plan stage 2): their
+   * bodies (a sub's carries his player; staff have none) and who each is,
+   * index for index. */
+  const std::vector<MatchPlayer>& getTouchlineBodies() const { return touchlineBodies; }
+  const std::vector<TouchlinePerson>& getTouchlinePeople() const { return touchlinePeople; }
+  const std::vector<Vector2F>& getPreviousTouchlinePositions() const
+  {
+    return previousTouchlinePositions;
+  }
+  const std::vector<float>& getPreviousTouchlineFacingAngles() const
+  {
+    return previousTouchlineFacingAngles;
+  }
   const MatchBall& getBall() const { return ball; }
   /** Seconds left of the set-piece phase (0: none). */
   float getSetPiecePhaseRemaining() const { return setPiecePhaseRemaining; }
@@ -2564,6 +2589,15 @@ class MatchEngine
                   Vector2F target) const;
 
   std::vector<MatchPlayer> players;
+  /** The people round the touchline, index for index (touchline plan
+   * stage 2), set up at the first step; their positions at the last
+   * interpolation frame and at the start of this step's movement. */
+  std::vector<MatchPlayer> touchlineBodies;
+  std::vector<TouchlinePerson> touchlinePeople;
+  std::vector<Vector2F> previousTouchlinePositions;
+  std::vector<float> previousTouchlineFacingAngles;
+  std::vector<Vector2F> touchlineStepStart;
+  bool touchlineSetUp = false;
   MatchBall ball;
   const StatsConfig& statsConfig;
   Strategy homeStrategy;
@@ -3535,6 +3569,18 @@ class MatchEngine
   /** Collision plan: whether a pair meets by the new rules (both on the
    * Binturong body; otherwise today's separation). */
   bool collidesByMomentum(const MatchPlayer& first, const MatchPlayer& second) const;
+  /** Touchline plan stage 2: seats each Binturong-bodied side's subs and
+   * staff in its dugout and puts its manager in his technical area. */
+  void setUpTouchline();
+  /** Touchline plan stage 2: everyone round the touchline for a step (to
+   * and from their seats and spots, or knocked about). */
+  void updateTouchline(float dt);
+  /** A sub has gone on: off the touchline. */
+  void leaveTouchline(const Player* player);
+  /** Whether this body is one of the touchline's (not a player's). */
+  [[nodiscard]] bool onTouchline(const MatchPlayer& body) const;
+  /** How long a touchline body takes to get up once it has stopped. */
+  [[nodiscard]] float touchlineGetUpSeconds(const MatchPlayer& body) const;
   /** Before a movement step: where everyone starts. */
   void rememberStepStart();
   /** After a movement step: run-ins found along each path within the step

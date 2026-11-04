@@ -1073,6 +1073,13 @@ void MatchEngine::captureInterpolationFrame()
     previousPlayerFacingAngles[index] = players[index].facingAngle;
     previousPlayerFeetHeights[index] = players[index].feetHeight;
   }
+  previousTouchlinePositions.resize(touchlineBodies.size());
+  previousTouchlineFacingAngles.resize(touchlineBodies.size());
+  for (std::size_t index = 0; index < touchlineBodies.size(); ++index)
+  {
+    previousTouchlinePositions[index] = touchlineBodies[index].position;
+    previousTouchlineFacingAngles[index] = touchlineBodies[index].facingAngle;
+  }
   previousBallPosition = ball.position;
   previousBallZ = ball.z;
 }
@@ -1140,6 +1147,8 @@ void MatchEngine::simulateStepBody(float dt)
   // consumption, even if each individual stage still looks correct.
   // Replayed touchline changes happen between the same two steps as live.
   if (commandCursor < commandLog.size()) applyDueCommands();
+  // The bodies are chosen before the first step: then the touchline fills.
+  if (!touchlineSetUp) setUpTouchline();
   captureInterpolationFrame();
   if (headerRun > 0) trackHeaderRun();
   stepCounter += stepTicks;
@@ -1877,6 +1886,7 @@ void MatchEngine::updateMovement(float dt)
       batch[batched++] = static_cast<std::uint8_t>(slot);
   }
   movePlayers(batch.data(), batched, dt, false);
+  updateTouchline(dt);
   collidePlayers(dt);
   observeRunJitter(dt);
 }
@@ -2041,6 +2051,7 @@ void MatchEngine::updateRestartMovement(float dt)
       batch[batched++] = static_cast<std::uint8_t>(slot);
   }
   movePlayers(batch.data(), batched, dt, true);
+  updateTouchline(dt);
   collidePlayers(dt);
 }
 
@@ -6544,6 +6555,7 @@ bool MatchEngine::performSubstitution(MatchPlayer& outgoing,
   ++(homeTeam ? stats.homeSubstitutions : stats.awaySubstitutions);
   auto& bench = homeTeam ? homeBench : awayBench;
   std::erase(bench, inPlayer);
+  leaveTouchline(inPlayer);
 
   PlayerMatchStats& leaving = statsOf(outgoing);
   leaving.substitutedOff = true;

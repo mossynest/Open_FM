@@ -94,6 +94,20 @@ struct MatchRender2DTuning final
     static constexpr float TECHNICAL_LINE_METRES = 0.1f;
   };
 
+  /** The people round the touchline from above: smaller than the players'
+   * tokens (near true size). Subs in their side's colours, staff in dark
+   * tracksuits ringed with them, managers in suits. */
+  struct Touchline final
+  {
+    static constexpr float RADIUS_METRES = 0.3f;
+    static constexpr float MANAGER_RADIUS_METRES = 0.36f;
+    static constexpr float MIN_RADIUS_PIXELS = 2.5f;
+    static constexpr float SUB_SHADE = 0.8f;
+    static constexpr ImU32 STAFF_COLOR = IM_COL32(34, 38, 48, 255);
+    static constexpr ImU32 SUIT_COLOR = IM_COL32(22, 22, 26, 255);
+    static constexpr ImU32 OUTLINE_COLOR = IM_COL32(10, 12, 16, 220);
+  };
+
   /** Top-down kit tokens. */
   struct Token final
   {
