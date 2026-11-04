@@ -487,6 +487,9 @@ struct TouchlinePerson
   bool seated = false;
   /** An assistant referee on the top touchline (else the bottom one). */
   bool topLine = false;
+  /** Just substituted off: walking round the pitch's edge to his
+   * technical area, then to his seat (touchline plan stage 5). */
+  bool walkingRound = false;
 };
 
 /** What a first touch tries to do (first-touch plan): send the ball to
@@ -1551,6 +1554,33 @@ struct MatchCommandRecord
   float keepUrgency = 1.0f;
   /** FORCE_TACKLE_INTENT: what his free-ball tackles mean to do. */
   TackleIntent tackleIntent = TackleIntent::CONTROL;
+};
+
+/** A substitution under way (touchline plan stage 5): the sub waits on the
+ * touchline while the player going off walks off at the nearest point;
+ * once that player is wholly over the line the sub takes his slot and
+ * walks on, and play restarts once he is on. */
+struct PendingSubstitution
+{
+  enum class Stage : std::uint8_t
+  {
+    /** Asked for in play: the player plays on until the next stoppage. */
+    WAITING,
+    LEAVING,
+    ENTERING
+  };
+  Stage stage = Stage::WAITING;
+  /** The slot: the player going off, then the sub coming on. */
+  std::size_t slot = 0;
+  const Player* incoming = nullptr;
+  SubstitutionReason reason = SubstitutionReason::MANUAL;
+  /** Where the player going off leaves the pitch (metres, MatchGround's
+   * frame): the nearest point of the boundary, just over it. */
+  Vector2F exit{};
+  /** The manager's move of the sub to another slot, done once he is on. */
+  std::optional<MatchCommandRecord> moveToSlot;
+  /** How long it has held up play (s), for the safety net. */
+  float seconds = 0.0f;
 };
 
 /** One-shot action requested by an external controller (play mode). */
@@ -2653,6 +2683,8 @@ class MatchEngine
   bool touchlineSetUp = false;
   /** Touchline plan stage 4: the walk-out or walk-off in progress. */
   WalkState walk;
+  /** Touchline plan stage 5: the substitutions under way. */
+  std::vector<PendingSubstitution> pendingSubstitutions;
   /** A drill holding the referee on a spot (metres) facing a way. */
   std::optional<Vector2F> drillRefereeSpot;
   float drillRefereeFacing = 0.0f;
@@ -3602,8 +3634,30 @@ class MatchEngine
   void extendRestart(float seconds);
   /** At a new stoppage, each side's AI manager reviews its side once. */
   void runAiSubstitutions();
+  /** A substitution: with walk-outs (touchline plan stage 5) it is set
+   * under way (the player walks off, the sub walks on; true once set),
+   * else made at once. */
   bool performSubstitution(MatchPlayer& outgoing, const Player* inPlayer,
                            SubstitutionReason reason);
+  /** Makes the change in the slot at once: the sub becomes the slot's
+   * player where its body stands (the counts, windows, stats, event). */
+  bool applySubstitution(MatchPlayer& outgoing, const Player* inPlayer,
+                         SubstitutionReason reason);
+  /** Touchline plan stage 5, each step: the changes under way move on. */
+  void updateSubstitutions(float dt);
+  /** Whether a change under way holds up the restart. */
+  [[nodiscard]] bool substitutionHoldsRestart() const;
+  /** The change taking this slot's player off, if he is leaving now. */
+  [[nodiscard]] const PendingSubstitution* leavingFrom(std::size_t slot) const;
+  /** The change bringing this player on, if one is under way. */
+  [[nodiscard]] const PendingSubstitution* comingOn(const Player* player) const;
+  /** Where a sub waits to come on (metres): his side's spot, or his place
+   * in the queue behind it when several wait (user). */
+  [[nodiscard]] Vector2F substituteWaitSpot(bool home, const Player* incoming) const;
+  /** A player off the pitch for good goes to his side's bench: a new
+   * touchline body where his body stands (walking round to it unless he
+   * is in the tunnel). */
+  void benchSubstitutedPlayer(const MatchPlayer& body);
   /** What a card does: logged, counted, and a sending-off leaves. */
   void applySanction(MatchPlayer& offender, MatchRules::FoulSanction sanction);
   /** Current top speed (m/s) after fatigue, sprint reserve and injury. */

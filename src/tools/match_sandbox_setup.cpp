@@ -24,13 +24,13 @@ using nlohmann::json;
 
 std::array<BrainId, 2>& sandboxBrains()
 {
-  static std::array<BrainId, 2> brains{BrainId::AARDVARK, BrainId::AARDVARK};
+  static std::array<BrainId, 2> brains{BrainId::BINTURONG, BrainId::BINTURONG};
   return brains;
 }
 
 std::array<BodyId, 2>& sandboxBodies()
 {
-  static std::array<BodyId, 2> bodies{BodyId::AARDVARK, BodyId::AARDVARK};
+  static std::array<BodyId, 2> bodies{BodyId::BINTURONG, BodyId::BINTURONG};
   return bodies;
 }
 
@@ -42,14 +42,14 @@ HandshakeId& sandboxHandshake()
 
 RefereeId& sandboxReferee()
 {
-  static RefereeId referee = RefereeId::AARDVARK;
+  static RefereeId referee = RefereeId::BINTURONG;
   return referee;
 }
 
 std::array<ManagerId, 2>& sandboxManagers()
 {
-  static std::array<ManagerId, 2> managers{ManagerId::AARDVARK,
-                                           ManagerId::AARDVARK};
+  static std::array<ManagerId, 2> managers{ManagerId::BINTURONG,
+                                           ManagerId::BINTURONG};
   return managers;
 }
 
@@ -61,7 +61,7 @@ BallPhysicsId& sandboxBallPhysics()
 
 OutOfPlayId& sandboxOutOfPlay()
 {
-  static OutOfPlayId version = OutOfPlayId::AARDVARK;
+  static OutOfPlayId version = OutOfPlayId::BINTURONG;
   return version;
 }
 

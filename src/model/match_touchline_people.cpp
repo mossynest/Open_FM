@@ -41,6 +41,83 @@ Vector2F pitchOf(Vector2F metres)
   return {metres.x / MatchGround::LENGTH, metres.y / MatchGround::WIDTH};
 }
 
+/**
+ * The next point on the way from `at` to `goal` (metres, `goal` beside the
+ * bottom touchline) round the pitch's edge, inside the boards: a lap of a
+ * rectangle 2 m outside the touchlines and 3 m outside the goal lines
+ * (clear of the nets), the shorter way round.
+ */
+Vector2F roundThePitch(Vector2F at, Vector2F goal)
+{
+  namespace G = MatchGround;
+  static constexpr float X0 = -3.0f;
+  static constexpr float X1 = G::LENGTH + 3.0f;
+  static constexpr float Y0 = -2.0f;
+  static constexpr float Y1 = G::WIDTH + 2.0f;
+  // Where along the lap (clockwise from the top-left corner: top, right,
+  // bottom, left), from the nearest point on it.
+  const auto along = [](Vector2F p)
+  {
+    const float x = std::clamp(p.x, X0, X1);
+    const float y = std::clamp(p.y, Y0, Y1);
+    const std::array<float, 4> gaps{std::abs(y - Y0), std::abs(X1 - x), std::abs(Y1 - y),
+                                    std::abs(x - X0)};
+    const auto side = static_cast<int>(std::ranges::min_element(gaps) - gaps.begin());
+    const float top = X1 - X0;
+    const float right = Y1 - Y0;
+    switch (side)
+    {
+      case 0: return x - X0;
+      case 1: return top + (y - Y0);
+      case 2: return top + right + (X1 - x);
+      default: return 2.0f * top + right + (Y1 - y);
+    }
+  };
+  const float lap = 2.0f * ((X1 - X0) + (Y1 - Y0));
+  const std::array<std::pair<float, Vector2F>, 4> corners{{
+      {0.0f, {X0, Y0}},
+      {X1 - X0, {X1, Y0}},
+      {(X1 - X0) + (Y1 - Y0), {X1, Y1}},
+      {2.0f * (X1 - X0) + (Y1 - Y0), {X0, Y1}},
+  }};
+  const float from = along(at);
+  const float to = along(goal);
+  float ahead = to - from;
+  if (ahead < 0.0f) ahead += lap;
+  const bool clockwise = ahead <= 0.5f * lap;
+  // The first corner between him and the goal that way, else the goal.
+  float best = lap;
+  Vector2F next = goal;
+  for (const auto& [where, corner] : corners)
+  {
+    float gap = clockwise ? where - from : from - where;
+    if (gap < 0.0f) gap += lap;
+    const float total = clockwise ? ahead : lap - ahead;
+    if (gap > 0.05f && gap < total && gap < best)
+    {
+      best = gap;
+      next = corner;
+    }
+  }
+  // Out to the lap first if he is still on the pitch side of it.
+  if (at.x > X0 + 0.5f && at.x < X1 - 0.5f && at.y > Y0 + 0.5f && at.y < Y1 - 0.5f)
+  {
+    const float x = std::clamp(at.x, X0, X1);
+    const float y = std::clamp(at.y, Y0, Y1);
+    const std::array<std::pair<float, Vector2F>, 4> outs{{
+        {std::abs(y - Y0), {x, Y0}},
+        {std::abs(X1 - x), {X1, y}},
+        {std::abs(Y1 - y), {x, Y1}},
+        {std::abs(x - X0), {X0, y}},
+    }};
+    const auto nearest = std::ranges::min(outs, {}, &std::pair<float, Vector2F>::first);
+    // Already near the goal along the bottom: straight to it.
+    if (std::hypot(goal.x - at.x, goal.y - at.y) > 3.0f && nearest.first > 0.5f)
+      return nearest.second;
+  }
+  return next;
+}
+
 /** Turns his body toward `angle` at his turn rate. */
 void turnToward(MatchPlayer& body, float angle, float dt)
 {
@@ -60,7 +137,6 @@ void turnToward(MatchPlayer& body, float angle, float dt)
 void MatchEngine::setUpTouchline()
 {
   using T = MatchTuning::TouchlinePeople;
-  using P = MatchTuning::Pitch;
   namespace G = MatchGround;
   static_assert(T::STAND_IN_ATTRIBUTE == MatchTuning::Player::DEFAULT_ATTRIBUTE,
                 "staff (no player) load the stand-in stats");
@@ -74,7 +150,7 @@ void MatchEngine::setUpTouchline()
     // Along the bench from the dugout's halfway end, backs to the stand.
     const float end = home ? dugout.x1 : dugout.x0;
     const float inward = home ? -1.0f : 1.0f;
-    const float seatY = G::STAND_Y - P::BODY_RADIUS_METRES;
+    const float seatY = G::STAND_Y - MatchTuning::Body::RADIUS_METRES;
     int seats = 0;
     const auto add = [&](TouchlineRole role, const Player* player)
     {
@@ -156,9 +232,8 @@ void MatchEngine::setUpTouchline()
 void MatchEngine::updateTouchline(float dt)
 {
   using T = MatchTuning::TouchlinePeople;
-  using P = MatchTuning::Pitch;
   namespace G = MatchGround;
-  constexpr float R = P::BODY_RADIUS_METRES;
+  constexpr float R = MatchTuning::Body::RADIUS_METRES;
   const Vector2F ballAt = metresOf(ball.position);
   for (std::size_t index = 0; index < touchlineBodies.size(); ++index)
   {
@@ -237,7 +312,11 @@ void MatchEngine::updateTouchline(float dt)
       const float x = std::clamp(ballAt.x, area.x0 + R, area.x1 - R);
       person.seat = pitchOf({std::abs(x - spot.x) >= T::MANAGER_FOLLOW_METRES ? x : spot.x, y});
     }
-    else if (person.seated)
+    // A sub coming on (stage 5): up from the bench to wait on the touchline.
+    const bool comingOnNow = person.role == TouchlineRole::SUBSTITUTE && comingOn(body.player);
+    if (comingOnNow)
+      person.seated = false;
+    else if (!manager && person.seated)
     {
       body.velocity = {0.0f, 0.0f};
       turnToward(body, FACING_PITCH, dt);
@@ -245,26 +324,59 @@ void MatchEngine::updateTouchline(float dt)
     }
 
     // To his seat (into the dugout by its nearer open end when he is out
-    // in front of it) or his spot.
+    // in front of it), his spot, or where he waits to come on; out of the
+    // dugout the same way; round the pitch's edge when just substituted.
     const Vector2F at = metresOf(body.position);
-    Vector2F target = routeViaTunnel(at, metresOf(person.seat));
-    const bool leavingTunnel = target.x != metresOf(person.seat).x ||
-                               target.y != metresOf(person.seat).y;
-    if (!manager && !leavingTunnel)
+    const Vector2F goal = comingOnNow ? substituteWaitSpot(body.isHomeTeam, body.player) : metresOf(person.seat);
+    const G::Rect& dugout = G::DUGOUTS[side];
+    const float middleY = 0.5f * (dugout.y0 + dugout.y1);
+    const bool inDugout = at.x > dugout.x0 && at.x < dugout.x1 && at.y > dugout.y0;
+    const bool goalInDugout = !manager && !comingOnNow;
+    // Beside a dugout's open end: clear of its front, and of the boards'
+    // end at the edge of the technical area, 1 m further out.
+    constexpr float END_CLEAR = R + 0.05f;
+    if (person.walkingRound)
     {
-      const G::Rect& dugout = G::DUGOUTS[side];
-      const float middleY = 0.5f * (dugout.y0 + dugout.y1);
-      const bool inside = at.x > dugout.x0 && at.x < dugout.x1 && at.y > dugout.y0;
-      if (!inside && std::abs(at.y - middleY) > 2.0f * T::ARRIVED_METRES)
-      {
-        const bool nearLeft = std::abs(at.x - dugout.x0) < std::abs(at.x - dugout.x1);
-        target = {nearLeft ? dugout.x0 - 2.0f * R : dugout.x1 + 2.0f * R, middleY};
-      }
+      // Round the pitch's edge (inside the boards) to the front of his
+      // technical area; from there to his seat.
+      const G::Rect& area = G::TECHNICAL_AREAS[side];
+      const Vector2F front{0.5f * (area.x0 + area.x1), G::WIDTH + 1.5f};
+      if (std::hypot(front.x - at.x, front.y - at.y) <= 1.5f) person.walkingRound = false;
+    }
+    Vector2F target = routeViaTunnel(at, goal);
+    const bool viaTunnel = target.x != goal.x || target.y != goal.y;
+    if (person.walkingRound)
+    {
+      const G::Rect& area = G::TECHNICAL_AREAS[side];
+      target = roundThePitch(at, {0.5f * (area.x0 + area.x1), G::WIDTH + 1.5f});
+    }
+    else if (!viaTunnel && goalInDugout && !inDugout &&
+             std::abs(at.y - middleY) > 2.0f * T::ARRIVED_METRES)
+    {
+      const bool nearLeft = std::abs(at.x - dugout.x0) < std::abs(at.x - dugout.x1);
+      target = {nearLeft ? dugout.x0 - END_CLEAR : dugout.x1 + END_CLEAR, middleY};
+    }
+    else if (!viaTunnel && !goalInDugout && inDugout && std::abs(at.y - middleY) > 0.3f)
+    {
+      // Out along the bench to the nearer open end first.
+      target = {std::clamp(at.x, dugout.x0 + 0.5f, dugout.x1 - 0.5f), middleY};
+    }
+    else if (!viaTunnel && !goalInDugout && inDugout)
+    {
+      const bool nearLeft = std::abs(at.x - dugout.x0) < std::abs(at.x - dugout.x1);
+      target = {nearLeft ? dugout.x0 - END_CLEAR : dugout.x1 + END_CLEAR, middleY};
+    }
+    else if (!viaTunnel && !goalInDugout && at.y > dugout.y0 - 0.2f &&
+             at.x > dugout.x0 - 2.0f * R - 0.5f && at.x < dugout.x1 + 2.0f * R + 0.5f)
+    {
+      // Out of its end, beside it: forward, clear of its front, first.
+      target = {at.x < 0.5f * (dugout.x0 + dugout.x1) ? dugout.x0 - END_CLEAR
+                                                       : dugout.x1 + END_CLEAR,
+                dugout.y0 - 1.5f};
     }
     const Vector2F way{target.x - at.x, target.y - at.y};
     const float gap = std::hypot(way.x, way.y);
-    const bool home = target.x == metresOf(person.seat).x &&
-                      target.y == metresOf(person.seat).y;
+    const bool home = target.x == goal.x && target.y == goal.y;
     if (home && gap <= T::ARRIVED_METRES)
     {
       body.velocity = {0.0f, 0.0f};
@@ -273,6 +385,8 @@ void MatchEngine::updateTouchline(float dt)
                    std::atan2(ball.position.y - body.position.y,
                               ball.position.x - body.position.x),
                    dt);
+      else if (comingOnNow)
+        turnToward(body, FACING_PITCH, dt);
       else
         person.seated = true;
       continue;

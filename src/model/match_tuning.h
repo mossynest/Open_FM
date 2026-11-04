@@ -30,6 +30,16 @@ struct MatchTuning final
   MatchTuning& operator=(const MatchTuning&) = default;
   MatchTuning& operator=(MatchTuning&&) = default;
 
+  /** A body (collision plan): an upright cylinder 50 cm across (user,
+   * 2026-11-04; was 40 cm). The one size everywhere: two touch with their
+   * centres a diameter apart, and a body meets the boards, walls and goal
+   * frames at its radius. */
+  struct Body final
+  {
+    static constexpr float DIAMETER_METRES = 0.5f;
+    static constexpr float RADIUS_METRES = 0.5f * DIAMETER_METRES;
+  };
+
   struct Pitch final
   {
     static constexpr float LENGTH_METRES = 105.0f;
@@ -104,16 +114,14 @@ struct MatchTuning final
      * behind the line at the ground. The 3D view draws them here too. */
     static constexpr float GOAL_POST_METRES = 0.12f;
     static constexpr float GOAL_NET_DEPTH_METRES = 2.0f;
-    /** A body's footprint: a circle this wide round his position. */
-    static constexpr float BODY_RADIUS_METRES = 0.4f;
-    /** Inside the boards, his footprint touching them (MatchEngineInternal::
+    /** Inside the boards, his body touching them (MatchEngineInternal::
      * clampToBoards): where a player may mean to go to fetch a ball. His
      * body can go further, through the gaps in the boards (moveBody). */
     static constexpr float BODY_MIN_X =
-        -(BOARDS_END_METRES - BODY_RADIUS_METRES) / LENGTH_METRES;
+        -(BOARDS_END_METRES - Body::RADIUS_METRES) / LENGTH_METRES;
     static constexpr float BODY_MAX_X = 1.0f - BODY_MIN_X;
     static constexpr float BODY_MIN_Y =
-        -(BOARDS_SIDE_METRES - BODY_RADIUS_METRES) / WIDTH_METRES;
+        -(BOARDS_SIDE_METRES - Body::RADIUS_METRES) / WIDTH_METRES;
     static constexpr float BODY_MAX_Y = 1.0f - BODY_MIN_Y;
   };
 
@@ -502,15 +510,14 @@ struct MatchTuning final
    */
   struct Collision final
   {
-    /** A body is a cylinder 40 cm across: two touch with their centres
-     * this far apart. */
-    static constexpr float BODY_DIAMETER_METRES = 0.4f;
     /** Personal space (the Binturong brain's overtaking and way round): the
      * closest he plans to pass another player, centre to centre. A
-     * team-mate close (the bodies and 0.2 m between them; collision plan
-     * step 7); an opponent at walkers' ~1 m (Olivier et al. 2012). */
+     * team-mate close (the bodies and a gap between them; collision plan
+     * step 7, user); an opponent at walkers' ~1 m (Olivier et al. 2012). */
     static constexpr float OVERTAKE_OPPONENT_CLEARANCE_METRES = 1.0f;
-    static constexpr float OVERTAKE_TEAM_MATE_CLEARANCE_METRES = 0.6f;
+    static constexpr float OVERTAKE_TEAM_MATE_GAP_METRES = 0.2f;
+    static constexpr float OVERTAKE_TEAM_MATE_CLEARANCE_METRES =
+        Body::DIAMETER_METRES + OVERTAKE_TEAM_MATE_GAP_METRES;
     /** Kept his feet and balance: no drive, steering or braking for this
      * long per m/s of jolt (a pushed person's legs act after ~0.2-0.3 s). */
     static constexpr float PAUSE_SECONDS_PER_JOLT = 0.1f;
@@ -559,8 +566,9 @@ struct MatchTuning final
     static constexpr float LIE_ALONG_WITHIN_DEGREES = 45.0f;
     /** Sliding or tumbling, grass slows him at this (m/s²; friction ~0.5-0.6). */
     static constexpr float FALL_DECELERATION = 5.5f;
-    /** One turn of his body rolls him this far (m): 0.4 m across. */
-    static constexpr float ROLL_METRES_PER_TURN = 1.2566f;
+    /** One turn of his body rolls him this far (m): its circumference. */
+    static constexpr float ROLL_METRES_PER_TURN =
+        3.14159265f * Body::DIAMETER_METRES;
     /** The chance of a big hit, by the jolt: none at the first, certain at
      * the second (m/s). Only if he fell. */
     static constexpr float BIG_HIT_JOLT_FROM = 4.0f;
@@ -597,9 +605,9 @@ struct MatchTuning final
     static constexpr float GINGERLY_SECONDS_AT_AGILITY_99 = 3.0f;
 
     // The ball against a fallen body (plan step 6), worked out in the flat.
-    /** The ball reaches him with its centre below this (m): his body lies
-     * 0.4 m high, the ball 0.11 m round. */
-    static constexpr float FALLEN_BALL_BELOW_METRES = 0.5f;
+    /** The ball reaches him with its centre below this (m): his body lies a
+     * diameter high, and about a ball's radius above it (0.11 m). */
+    static constexpr float FALLEN_BALL_BELOW_METRES = Body::DIAMETER_METRES + 0.1f;
     /** Off his body: this share of the speed straight into it comes back
      * (an uncushioned chest; the wall rebound), this share along it is kept. */
     static constexpr float FALLEN_BOUNCE_BACK_SHARE = 0.35f;
@@ -2553,6 +2561,19 @@ struct MatchTuning final
     static constexpr float ARRIVED_METRES = 0.3f;
     /** Safety net: a walking phase moves on after this long anyway. */
     static constexpr float PHASE_LIMIT_SECONDS = 120.0f;
+    /** A substitution still holding up the restart after this long (user):
+     * the player going off and the sub are put where they were going (the
+     * one agreed exception to no teleporting). */
+    static constexpr float SUBSTITUTION_LIMIT_SECONDS = 60.0f;
+    /** Where a sub waits (agreed): this far beyond the touchline, this far
+     * from the edge of his technical area toward halfway; more than one,
+     * a queue along the touchline away from halfway, this far apart
+     * (user). Each comes on when the player he replaces is off. Back from
+     * the line clear of the assistant referee's run (Officials::
+     * ASSISTANT_OUT_METRES; user). */
+    static constexpr float SUB_OUT_METRES = 1.2f;
+    static constexpr float SUB_FROM_AREA_METRES = 1.0f;
+    static constexpr float SUB_QUEUE_SPACING_METRES = 0.8f;
   };
 
   struct Touchline final

@@ -250,7 +250,7 @@ void drawBody(const Painter& base, const Body& body, const Tuning& tuning,
   const bool full = detail == Detail::FULL;
   const float height = body.height;
   const float lift = body.feetHeight;
-  const float radius = 0.5f * C::BODY_DIAMETER_METRES;
+  const float radius = 0.5f * MatchTuning::Body::DIAMETER_METRES;
   const BodyLines lines = bodyLinesOfHeight(height);
   // In the air his feet, thigh and chest play nothing (the touch sweep
   // skips airborne players); down, nothing of his plays it.
@@ -293,8 +293,8 @@ void drawBody(const Painter& base, const Body& body, const Tuning& tuning,
         paint.sector(0.0f, radius, z0 + 0.004f, -180.0f, 180.0f, withAlpha(body.kit, 0.95f));
       paint.cylinderSides(radius, z0 + lift, z0 + lift + height, side);
       paint.cylinder(radius, z0 + lift, z0 + lift + height, -180.0f, 180.0f, edge, 1.5f);
-      add("Body: an upright cylinder, across", std::format("{:.2f} m", C::BODY_DIAMETER_METRES),
-          "Collision::BODY_DIAMETER_METRES");
+      add("Body: an upright cylinder, across", std::format("{:.2f} m", MatchTuning::Body::DIAMETER_METRES),
+          "Body::DIAMETER_METRES");
       add("Body: tall (his height)", std::format("{:.2f} m", height), "player height");
     }
     else
@@ -317,7 +317,7 @@ void drawBody(const Painter& base, const Body& body, const Tuning& tuning,
                                           r, z0 + z));
         return points;
       };
-      const float bodyTop = C::BODY_DIAMETER_METRES;
+      const float bodyTop = MatchTuning::Body::DIAMETER_METRES;
       const std::vector<Vec3> bottom = outline(0.0f, radius);
       const std::vector<Vec3> top = outline(bodyTop, radius);
       paint.fill(top, side);
@@ -340,7 +340,7 @@ void drawBody(const Painter& base, const Body& body, const Tuning& tuning,
               std::format("lying {:.2f} m long, {:.2f} m high", height, bodyTop),
               colour(150, 175, 210, 1.0f));
         add("Down: his body seen from above",
-            std::format("{:.2f} x {:.2f} m, ends rounded", height, C::BODY_DIAMETER_METRES),
+            std::format("{:.2f} x {:.2f} m, ends rounded", height, MatchTuning::Body::DIAMETER_METRES),
             "lyingBody (match_collisions.cpp): height long, BODY_DIAMETER across");
         add("Down: the ball comes off him",
             std::format("centre within {:.2f} m, below {:.2f} m", ballReach,

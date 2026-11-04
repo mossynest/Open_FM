@@ -515,7 +515,7 @@ Vector2F routeRoundGoalFrames(Vector2F from, Vector2F to)
       MatchTuning::Shooting::GOAL_HALF_WIDTH_METRES + 0.5f * P::GOAL_POST_METRES;
   constexpr float DEPTH = P::GOAL_NET_DEPTH_METRES;
   // Clear of the frame by his footprint and a little more.
-  constexpr float CLEAR = P::BODY_RADIUS_METRES + 0.4f;
+  constexpr float CLEAR = MatchTuning::Body::RADIUS_METRES + 0.4f;
   const bool right = 0.5f * (from.x + to.x) > P::CENTRE;
   const float line = right ? P::LENGTH_METRES : 0.0f;
   const float behind = right ? 1.0f : -1.0f;
@@ -538,7 +538,7 @@ Vector2F routeRoundGoalFrames(Vector2F from, Vector2F to)
   // grown by his footprint at its ends).
   const auto crossesNet = [](Vector2F p, Vector2F q)
   {
-    constexpr float R = P::BODY_RADIUS_METRES;
+    constexpr float R = MatchTuning::Body::RADIUS_METRES;
     const auto crossesAt = [&](bool alongU, float wall, float low, float high)
     {
       const float pa = alongU ? p.x : p.y;
@@ -1641,6 +1641,8 @@ void MatchEngine::completeRestartBinturong()
   const MatchState restartState = state;
   MatchPlayer* taker = restartTaker();
   const bool userPass = userRestartPassRequested();
+  // Not until any sub coming on is on the pitch (touchline plan stage 5).
+  if (substitutionHoldsRestart()) return;
   // Not until the ball is back on the spot.
   if (deadBall.active) return;
   // A kick-off after a goal waits for everyone to be back (for a while).

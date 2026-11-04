@@ -29,7 +29,13 @@ read-only inputs. It is not a deep copy of a career.
 
 `MatchPlayer` is a pitch slot, not the persistent `Player`. Substitution reuses
 the slot and gives the incoming player a new `PlayerMatchStats` entry; the
-outgoing player's statistics remain available. Never identify a player's
+outgoing player's statistics remain available. With walk-outs (Binturong out
+of play and both sides on the Binturong body) a substitution is set under
+way instead (`PendingSubstitution`): the player walks off at the nearest point
+of the boundary, the sub waits on the touchline (several queue), and the slot
+passes to the sub's own body (`applySubstitution`) once the player is wholly
+over the line; the restart waits until the sub is on, and after 60 s the two
+are put where they were going. Never identify a player's
 career by a vector index. Use `PlayerID`, and use `statsIndex` for the current
 occupant's match statistics.
 
@@ -94,7 +100,24 @@ The body executes this sequence:
 Goal celebrations, shootouts and half-time return from their own branches.
 Other restarts run substitution checks, reposition players, advance the clock
 when appropriate and call `completeRestart()` when ready. A goal celebration
-keeps the clock running; half-time and the shootout do not.
+keeps the clock running; half-time and the shootout do not. With walk-outs,
+`updateWalk()` owns the start of each half (out of the tunnel, the first
+half's line-up and handshake) and half-time's walk into the tunnel; the
+substitutions under way move on every step (`updateSubstitutions()`).
+
+### Round the pitch
+
+[MatchGround](../../src/model/match_ground.h) builds the tunnel, the dugouts,
+the technical areas and the gaps in the boards from `MatchTuning::Pitch`; the
+engine's walls (`keepOffGround()`), the dead ball and both views read it.
+Besides the players, the engine moves `touchlineBodies`, with
+`touchlinePeople` saying who each is: each Binturong-bodied side's subs,
+staff and manager, and the match officials (`match_touchline_people.cpp`).
+They are `MatchPlayer` bodies with stand-in stats, so walking, run-ins,
+stumbles and falls use the players' own code; they referee and manage
+nothing (the engine decides as before). `match_walk_out.cpp` holds the
+walk-outs, walk-offs and substitutions on foot. A body is one size
+everywhere, `MatchTuning::Body`.
 
 Order is part of behavior. Moving actions before players changes tackle reach;
 moving commands across the tick increment changes replay timing; continuing
@@ -180,6 +203,7 @@ cross-thread publishing. The 2D and 3D views interpolate the same state.
 |--------|------------|------------------|
 | Targets, actions, contact integration | `match_engine.cpp` | [Engine](../../test/test_match_engine.cpp), [scenarios](../../test/test_match_scenarios.cpp) |
 | Swappable parts (brain, body, handshake, referee, AI manager, ball physics, out of play) | `match_<part>.h`, `match_<part>_<version>.cpp`, `match_<part>_dispatch.cpp` | `match_sandbox --check`, `fm_lab` with the part's option |
+| Ground, touchline people, officials, walk-outs, substitutions on foot | `match_ground.h`, `match_touchline_people.cpp`, `match_walk_out.cpp` | `match_sandbox --check`, the *Into the referee* drill |
 | Roles, duties, shape and opposition orders | `tactics.*`, `strategy.*` | [Tactics](../../test/test_tactics.cpp) |
 | Pure football rules | `match_rules.*` | [Rules](../../test/test_match_rules.cpp) |
 | Batch inputs and league context | `match_scheduler.*`, `match_context.h` | [Scheduler/context](../../test/test_match_scheduler.cpp) |

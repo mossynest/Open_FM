@@ -113,7 +113,7 @@ inline Vector2F clampToBoards(Vector2F at)
 inline Vector2F keepOutOfGoalFrames(Vector2F from, Vector2F to)
 {
   using P = MatchTuning::Pitch;
-  constexpr float R = P::BODY_RADIUS_METRES;
+  constexpr float R = MatchTuning::Body::RADIUS_METRES;
   constexpr float W =
       MatchTuning::Shooting::GOAL_HALF_WIDTH_METRES + 0.5f * P::GOAL_POST_METRES;
   constexpr float D = P::GOAL_NET_DEPTH_METRES;
@@ -186,7 +186,7 @@ inline Vector2F keepOutOfGoalFrames(Vector2F from, Vector2F to)
 inline bool keepOffWall(bool alongX, float plane, float low, float high,
                         Vector2F from, Vector2F& to)
 {
-  constexpr float R = MatchTuning::Pitch::BODY_RADIUS_METRES;
+  constexpr float R = MatchTuning::Body::RADIUS_METRES;
   const float across0 = alongX ? from.y : from.x;
   float& across1 = alongX ? to.y : to.x;
   const float along0 = alongX ? from.x : from.y;
@@ -210,7 +210,7 @@ inline bool keepOffWall(bool alongX, float plane, float low, float high,
  * round it, his footprint clear. Returns whether it moved him. */
 inline bool keepOffWallEnd(Vector2F end, Vector2F from, Vector2F& to)
 {
-  constexpr float R = MatchTuning::Pitch::BODY_RADIUS_METRES;
+  constexpr float R = MatchTuning::Body::RADIUS_METRES;
   const float dx = to.x - end.x;
   const float dy = to.y - end.y;
   const float gap = std::sqrt(dx * dx + dy * dy);
@@ -237,7 +237,7 @@ inline Vector2F keepOffGround(Vector2F from, Vector2F to)
 {
   using P = MatchTuning::Pitch;
   namespace G = MatchGround;
-  constexpr float R = P::BODY_RADIUS_METRES;
+  constexpr float R = MatchTuning::Body::RADIUS_METRES;
   // Inside the boards, before and after: nothing to meet.
   const auto insideBoards = [](Vector2F at)
   {

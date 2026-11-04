@@ -285,8 +285,8 @@ int main(int argc, char* argv[])
            " [--trace-match SECONDS [CASES [neither|giveway|spot|all]]]\n"
            "  (--brains, --bodies, --managers: aardvark or binturong per side, "
            "one name for both; before --measure or --shot-map)\n"
-           "  (--referee: aardvark (default) or binturong; --ball: "
-           "binturong (default) or aardvark)\n"
+           "  (--referee: binturong (default) or aardvark; --ball, "
+           "--out-of-play: binturong (default) or aardvark)\n"
            "  (--home-advantage: 0 neutral venue (default) to 2, 1 the "
            "game's full home edge; --check defaults to 1)\n"
            "  (--handshake: binturong (default) or aardvark; --check "
@@ -334,9 +334,9 @@ int main(int argc, char* argv[])
     if (measureDrill)
       return runMeasureCommand(controller.getStatsConfig(), *measureDrill,
                                measureArguments);
-    // The window opens on Team 66 v Team 66, Binturong against Aardvark, so
-    // the two engines meet on equal players. The headless commands above
-    // keep the plain world and Aardvark for both.
+    // The window opens on Team 66 v Team 66, Binturong for both (every engine
+    // version defaults to Binturong). The headless commands above keep the
+    // plain world.
     addSandboxTestTeams(*controller.getGameData());
     if (traceLapsSeconds)
     {
@@ -352,8 +352,8 @@ int main(int argc, char* argv[])
       return runLapsTrace(trainees, controller.getStatsConfig(), *traceLapsSeconds,
                           traceLapsFollow);
     }
-    if (!brainsGiven) sandboxBrains() = {BrainId::BINTURONG, BrainId::AARDVARK};
-    if (!bodiesGiven) sandboxBodies() = {BodyId::BINTURONG, BodyId::AARDVARK};
+    if (!brainsGiven) sandboxBrains() = {BrainId::BINTURONG, BrainId::BINTURONG};
+    if (!bodiesGiven) sandboxBodies() = {BodyId::BINTURONG, BodyId::BINTURONG};
     GUIView view(controller);
     view.run(
         [kickOff, drill, drillView](GUIView* gui)

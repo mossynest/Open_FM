@@ -201,6 +201,12 @@ void MatchEngine::beginWalkOff()
 {
   walk.phase = WalkPhase::OFF;
   walk.seconds = 0.0f;
+  // A change under way at the whistle: made in the tunnel instead (one
+  // already coming on is made).
+  std::erase_if(pendingSubstitutions, [](const PendingSubstitution& pending)
+                { return pending.stage == PendingSubstitution::Stage::ENTERING; });
+  for (PendingSubstitution& pending : pendingSubstitutions)
+    pending.stage = PendingSubstitution::Stage::WAITING;
   for (MatchPlayer& player : players)
   {
     player.facingRequested = false;
@@ -397,6 +403,313 @@ void MatchEngine::updateWalk(float dt)
     case WalkPhase::NONE:
       break;
   }
+}
+
+// --- Substitutions on foot (stage 5) ----------------------------------------
+
+bool MatchEngine::performSubstitution(MatchPlayer& outgoing, const Player* inPlayer,
+                                      SubstitutionReason reason)
+{
+  // Without walk-outs, or in the tunnel at half-time: at once.
+  const bool inTunnel = state == MatchState::HALF_TIME && walk.phase == WalkPhase::IN;
+  if (!walksOut() || inTunnel)
+  {
+    MatchPlayer before = outgoing;
+    const bool done = applySubstitution(outgoing, inPlayer, reason);
+    if (done && walksOut()) benchSubstitutedPlayer(before);
+    return done;
+  }
+  if (!inPlayer || !active(outgoing) || !canSubstitute(outgoing.isHomeTeam)) return false;
+  const std::size_t slot = slotOf(outgoing);
+  for (const PendingSubstitution& pending : pendingSubstitutions)
+    if (pending.slot == slot || pending.incoming == inPlayer) return false;
+  // He is no longer on the bench to be picked; the change is under way.
+  std::erase(outgoing.isHomeTeam ? homeBench : awayBench, inPlayer);
+  PendingSubstitution& pending = pendingSubstitutions.emplace_back();
+  pending.slot = slot;
+  pending.incoming = inPlayer;
+  pending.reason = reason;
+  pending.stage = PendingSubstitution::Stage::WAITING;
+  updateSubstitutions(0.0f);
+  return true;
+}
+
+Vector2F MatchEngine::substituteWaitSpot(bool home, const Player* incoming) const
+{
+  // On the touchline at halfway, his side of the fourth official, 1 m in
+  // from the edge of his technical area (agreed). Several waiting (user):
+  // a queue along the touchline away from halfway, in the order the
+  // changes were made, closing up as each goes on.
+  std::size_t place = 0;
+  for (const PendingSubstitution& pending : pendingSubstitutions)
+  {
+    if (pending.incoming == incoming) break;
+    if (pending.stage != PendingSubstitution::Stage::ENTERING &&
+        pending.slot < players.size() && players[pending.slot].isHomeTeam == home)
+      ++place;
+  }
+  const float along = W::SUB_QUEUE_SPACING_METRES * static_cast<float>(place);
+  const float x = home ? G::TECHNICAL_AREAS[0].x1 + W::SUB_FROM_AREA_METRES - along
+                       : G::TECHNICAL_AREAS[1].x0 - W::SUB_FROM_AREA_METRES + along;
+  return {x, G::WIDTH + W::SUB_OUT_METRES};
+}
+
+const PendingSubstitution* MatchEngine::leavingFrom(std::size_t slot) const
+{
+  for (const PendingSubstitution& pending : pendingSubstitutions)
+    if (pending.slot == slot && pending.stage == PendingSubstitution::Stage::LEAVING)
+      return &pending;
+  return nullptr;
+}
+
+const PendingSubstitution* MatchEngine::comingOn(const Player* player) const
+{
+  for (const PendingSubstitution& pending : pendingSubstitutions)
+    if (pending.incoming == player && pending.stage != PendingSubstitution::Stage::ENTERING)
+      return &pending;
+  return nullptr;
+}
+
+bool MatchEngine::substitutionHoldsRestart() const
+{
+  // Any change under way at a stoppage: until its sub is on.
+  return std::ranges::any_of(pendingSubstitutions, [this](const PendingSubstitution& pending)
+                             { return pending.stage != PendingSubstitution::Stage::WAITING ||
+                                      state != MatchState::PLAYING; });
+}
+
+void MatchEngine::updateSubstitutions(float dt)
+{
+  if (pendingSubstitutions.empty()) return;
+  // Wholly over (or inside) the lines: his body's edge past them.
+  const float edge = 0.5f * MatchTuning::Body::DIAMETER_METRES;
+  const auto outside = [edge](Vector2F at)
+  {
+    return at.x < -edge || at.x > G::LENGTH + edge || at.y < -edge || at.y > G::WIDTH + edge;
+  };
+  const auto inside = [edge](Vector2F at)
+  {
+    return at.x > edge && at.x < G::LENGTH - edge && at.y > edge && at.y < G::WIDTH - edge;
+  };
+  for (std::size_t index = 0; index < pendingSubstitutions.size();)
+  {
+    PendingSubstitution& pending = pendingSubstitutions[index];
+    MatchPlayer& player = players[pending.slot];
+    const bool home = player.isHomeTeam;
+    // Asked for in play and still waiting at half-time: made in the tunnel.
+    if (pending.stage == PendingSubstitution::Stage::WAITING &&
+        state == MatchState::HALF_TIME && walk.phase == WalkPhase::IN)
+    {
+      const PendingSubstitution made = pending;
+      pendingSubstitutions.erase(pendingSubstitutions.begin() +
+                                 static_cast<std::ptrdiff_t>(index));
+      const MatchPlayer before = player;
+      if (active(player) && applySubstitution(player, made.incoming, made.reason))
+      {
+        benchSubstitutedPlayer(before);
+        if (made.moveToSlot) executeCommand(*made.moveToSlot);
+      }
+      else
+      {
+        (home ? homeBench : awayBench).push_back(made.incoming);
+      }
+      continue;
+    }
+    // Play has stopped: off he goes, at the nearest point of the boundary.
+    if (pending.stage == PendingSubstitution::Stage::WAITING && state != MatchState::PLAYING &&
+        state != MatchState::HALF_TIME && walk.phase == WalkPhase::NONE)
+    {
+      if (!active(player) || !canSubstitute(home))
+      {
+        // No longer possible (sent off meanwhile, or no window left): the
+        // sub stays on the bench.
+        (home ? homeBench : awayBench).push_back(pending.incoming);
+        pendingSubstitutions.erase(pendingSubstitutions.begin() +
+                                   static_cast<std::ptrdiff_t>(index));
+        continue;
+      }
+      const Vector2F at = metresOf(player.position);
+      const float out = edge + 0.3f;
+      const std::array<std::pair<float, Vector2F>, 4> exits{{
+          {at.y, {at.x, -out}},
+          {G::WIDTH - at.y, {at.x, G::WIDTH + out}},
+          {at.x, {-out, at.y}},
+          {G::LENGTH - at.x, {G::LENGTH + out, at.y}},
+      }};
+      pending.exit = std::ranges::min(exits, {}, &std::pair<float, Vector2F>::first).second;
+      // Off over a goal line: beside the goal, not through it.
+      constexpr float CLEAR_OF_POST = MatchTuning::Shooting::GOAL_HALF_WIDTH_METRES + 1.5f;
+      if ((pending.exit.x < 0.0f || pending.exit.x > G::LENGTH) &&
+          std::abs(pending.exit.y - 0.5f * G::WIDTH) < CLEAR_OF_POST)
+        pending.exit.y = 0.5f * G::WIDTH +
+                         (pending.exit.y < 0.5f * G::WIDTH ? -CLEAR_OF_POST : CLEAR_OF_POST);
+      pending.stage = PendingSubstitution::Stage::LEAVING;
+      if (deadBall.fetcherIndex == pending.slot) deadBall.fetcherIndex.reset();
+      // He takes no restart: another does.
+      if (restartTaker() == &player)
+      {
+        MatchPlayer* taker = nullptr;
+        float best = std::numeric_limits<float>::max();
+        for (MatchPlayer& other : players)
+        {
+          if (!active(other) || other.isHomeTeam != home || &other == &player ||
+              leavingFrom(slotOf(other)))
+            continue;
+          const float gap = distance(other.position, ball.position);
+          if (gap < best)
+          {
+            best = gap;
+            taker = &other;
+          }
+        }
+        setRestartTaker(taker);
+        if (deadBall.active && (deadBall.phase == DeadBallReturn::Phase::CARRIED ||
+                                deadBall.phase == DeadBallReturn::Phase::LIFTED))
+        {
+          // Out of his hands: it drops where he held it.
+          deadBall.phase = DeadBallReturn::Phase::LOOSE;
+          deadBall.seconds = 0.0f;
+        }
+        else if (ball.possessedBy == player.player)
+        {
+          clearPossession();
+        }
+      }
+    }
+    // Sent off on his way: the change lapses; the sub sits down again.
+    if (pending.stage != PendingSubstitution::Stage::WAITING && !active(player))
+    {
+      if (pending.stage == PendingSubstitution::Stage::LEAVING)
+        (home ? homeBench : awayBench).push_back(pending.incoming);
+      pendingSubstitutions.erase(pendingSubstitutions.begin() +
+                                 static_cast<std::ptrdiff_t>(index));
+      continue;
+    }
+    // Over the line, the sub at his spot: the sub takes his slot (each
+    // keeps his own body).
+    MatchPlayer* sub = nullptr;
+    for (MatchPlayer& body : touchlineBodies)
+      if (body.player == pending.incoming) sub = &body;
+    const Vector2F waitSpot = substituteWaitSpot(home, pending.incoming);
+    // Safety net (user): a change holding up play over a minute is done at
+    // once, the player going off put over the line and the sub on his spot.
+    if (pending.stage != PendingSubstitution::Stage::WAITING) pending.seconds += dt;
+    const bool overdue = pending.seconds >= W::SUBSTITUTION_LIMIT_SECONDS;
+    const auto put = [this](MatchPlayer& body, Vector2F at)
+    {
+      if (body.fallen) standUp(body);
+      body.position = at;
+      body.velocity = {0.0f, 0.0f};
+      body.stumbleSeconds = 0.0f;
+      body.collisionPause = 0.0f;
+    };
+    if (overdue && pending.stage == PendingSubstitution::Stage::LEAVING)
+    {
+      put(player, pitchOf(pending.exit));
+      if (sub) put(*sub, pitchOf(waitSpot));
+    }
+    const bool subReady =
+        !sub || std::hypot(sub->position.x * G::LENGTH - waitSpot.x,
+                           sub->position.y * G::WIDTH - waitSpot.y) <= 1.0f;
+    if (pending.stage == PendingSubstitution::Stage::LEAVING && subReady &&
+        outside(metresOf(player.position)))
+    {
+      const MatchPlayer leaving = player;
+      pending.stage = PendingSubstitution::Stage::ENTERING;
+      if (sub)
+      {
+        player.position = sub->position;
+        player.velocity = sub->velocity;
+        player.facingAngle = sub->facingAngle;
+        player.targetAngle = sub->targetAngle;
+        player.movementTarget = sub->position;
+        player.tacticalTarget = sub->position;
+        if (player.fallen) standUp(player);
+        player.stumbleSeconds = 0.0f;
+        player.collisionPause = 0.0f;
+        const std::size_t slot = pending.slot;
+        if (slot < previousPlayerPositions.size())
+          previousPlayerPositions[slot] = player.position;
+        if (slot < stepStartPositions.size()) stepStartPositions[slot] = player.position;
+      }
+      if (!applySubstitution(player, pending.incoming, pending.reason))
+      {
+        // Refused at the last (should not happen): he stays on.
+        player = leaving;
+        (home ? homeBench : awayBench).push_back(pending.incoming);
+        pendingSubstitutions.erase(pendingSubstitutions.begin() +
+                                   static_cast<std::ptrdiff_t>(index));
+        continue;
+      }
+      benchSubstitutedPlayer(leaving);
+      // On to the pitch: to his place in the shape (at a kick-off, his
+      // kick-off position); a restart's own targets take over from there.
+      player.movementTarget =
+          state == MatchState::KICK_OFF ? kickOffPosition(player) : player.basePosition;
+      player.tacticalTarget = player.movementTarget;
+      PendingSubstitution& entering = pendingSubstitutions[index];
+      if (entering.moveToSlot)
+      {
+        const MatchCommandRecord move = *entering.moveToSlot;
+        entering.moveToSlot.reset();
+        executeCommand(move);
+      }
+    }
+    // Overdue coming on: put on his place.
+    if (pendingSubstitutions[index].stage == PendingSubstitution::Stage::ENTERING &&
+        pendingSubstitutions[index].seconds >= W::SUBSTITUTION_LIMIT_SECONDS)
+    {
+      MatchPlayer& coming = players[pendingSubstitutions[index].slot];
+      put(coming, clampToPitch(coming.movementTarget));
+    }
+    // On the pitch: the change is made.
+    if (pendingSubstitutions[index].stage == PendingSubstitution::Stage::ENTERING &&
+        inside(metresOf(players[pendingSubstitutions[index].slot].position)))
+    {
+      pendingSubstitutions.erase(pendingSubstitutions.begin() +
+                                 static_cast<std::ptrdiff_t>(index));
+      continue;
+    }
+    ++index;
+  }
+}
+
+void MatchEngine::benchSubstitutedPlayer(const MatchPlayer& body)
+{
+  using T = MatchTuning::TouchlinePeople;
+  const bool home = body.isHomeTeam;
+  const G::Rect& dugout = G::DUGOUTS[home ? 0 : 1];
+  // The first free seat from the dugout's halfway end.
+  const float end = home ? dugout.x1 : dugout.x0;
+  const float inward = home ? -1.0f : 1.0f;
+  float seatX = end + inward * T::FIRST_SEAT_METRES;
+  for (int seat = 0; seat < 64; ++seat)
+  {
+    seatX = end + inward * (T::FIRST_SEAT_METRES + T::SEAT_SPACING_METRES * static_cast<float>(seat));
+    bool taken = false;
+    for (std::size_t index = 0; index < touchlinePeople.size(); ++index)
+      if (touchlineBodies[index].isHomeTeam == home &&
+          touchlinePeople[index].role != TouchlineRole::MANAGER &&
+          !isOfficial(touchlinePeople[index].role) &&
+          std::abs(touchlinePeople[index].seat.x * G::LENGTH - seatX) < 0.1f)
+        taken = true;
+    if (!taken) break;
+  }
+  MatchPlayer& bench = touchlineBodies.emplace_back(body);
+  bench.onPitch = false;
+  bench.isGoalkeeper = false;
+  bench.intent = PlayerIntent::HOLD_SHAPE;
+  bench.facingRequested = false;
+  TouchlinePerson& person = touchlinePeople.emplace_back();
+  person.role = TouchlineRole::SUBSTITUTE;
+  person.seat = pitchOf({seatX, G::STAND_Y - MatchTuning::Body::RADIUS_METRES});
+  person.seated = false;
+  // Off at the boundary: round the pitch's edge to his technical area. In
+  // the tunnel (a half-time change): out with the staff.
+  person.walkingRound = !deepInTunnel(body.position);
+  previousTouchlinePositions.push_back(body.position);
+  previousTouchlineFacingAngles.push_back(body.facingAngle);
+  touchlineStepStart.push_back(body.position);
 }
 
 void MatchEngine::finishWalkOut()

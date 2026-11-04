@@ -1128,22 +1128,16 @@ void MatchRenderer2D::State::drawTouchline(const MatchRenderSnapshot& snapshot,
     const Vector2F at =
         lerpRenderPosition(person.previousPosition, person.currentPosition, alpha);
     const ImVec2 centre = atMetres(at.x * LENGTH, at.y * WIDTH);
+    // His body only: he can't play the ball.
+    const float radius = std::max(px(T::MIN_RADIUS_PIXELS), T::RADIUS_METRES * ppm);
     if (isOfficial(person.role))
     {
-      // In the officials' colours; the referee and assistants larger.
-      const float radius = std::max(
-          px(T::MIN_RADIUS_PIXELS),
-          (person.role == TouchlineRole::FOURTH_OFFICIAL ? T::RADIUS_METRES
-                                                         : T::OFFICIAL_RADIUS_METRES) *
-              ppm);
+      // In the officials' colours.
       drawList->AddCircleFilled(centre, radius + std::max(1.0f, px(1.0f)), T::OUTLINE_COLOR);
       drawList->AddCircleFilled(centre, radius, officials);
       continue;
     }
     const bool manager = person.role == TouchlineRole::MANAGER;
-    const float radius =
-        std::max(px(T::MIN_RADIUS_PIXELS),
-                 (manager ? T::MANAGER_RADIUS_METRES : T::RADIUS_METRES) * ppm);
     const KitColors& kit = person.isHomeTeam ? kits.home : kits.away;
     const ImU32 body = person.role == TouchlineRole::SUBSTITUTE
                            ? shadeColor(kit.shirt, T::SUB_SHADE)
@@ -1429,8 +1423,9 @@ void MatchRenderer2D::State::drawTokens(const MatchRenderSnapshot& snapshot,
 {
   using T = Tuning::Token;
   const float fontSize = ImGui::GetFontSize();
-  const float radius =
-      std::max(T::RADIUS_METRES * ppm, fontSize * T::MIN_RADIUS_FONT_SHARE);
+  // His reach to scale, however small the pitch is drawn: the shirt number
+  // scales with it (and is left out once too small to read).
+  const float radius = T::RADIUS_METRES * ppm;
   tokens.clear();
   for (const MatchRenderPlayer& player : snapshot.players)
   {
@@ -1468,15 +1463,22 @@ void MatchRenderer2D::State::drawTokens(const MatchRenderSnapshot& snapshot,
   }
 
   // Shadows first so no token's shadow falls on a neighbour.
-  const float offset = radius * T::SHADOW_OFFSET_SHARE;
+  // On the pitch, his reach; off it (sent off, forced off), his body only,
+  // as for the people round the touchline.
+  const float offPitchRadius = std::max(px(Tuning::Touchline::MIN_RADIUS_PIXELS),
+                                        Tuning::Touchline::RADIUS_METRES * ppm);
+  const auto sizeOf = [&](const TokenOnScreen& token)
+  { return token.player->onPitch ? radius : offPitchRadius; };
   for (const TokenOnScreen& token : tokens)
   {
+    const float size = sizeOf(token);
+    const float offset = size * T::SHADOW_OFFSET_SHARE;
     drawList->AddCircleFilled(
         {token.position.x + offset * 1.6f, token.position.y + offset * 2.0f},
-        radius * 1.18f, withAlpha(T::SHADOW_COLOR, 30));
+        size * 1.18f, withAlpha(T::SHADOW_COLOR, 30));
     drawList->AddCircleFilled(
         {token.position.x + offset, token.position.y + offset * 1.3f},
-        radius * 1.05f, T::SHADOW_COLOR);
+        size * 1.05f, T::SHADOW_COLOR);
   }
   const TokenOnScreen* carrier = nullptr;
   for (const TokenOnScreen& token : tokens)
@@ -1487,10 +1489,10 @@ void MatchRenderer2D::State::drawTokens(const MatchRenderSnapshot& snapshot,
       continue;
     }
     if (&token == hovered) continue;
-    drawToken(token, radius, false);
+    drawToken(token, sizeOf(token), false);
   }
-  if (carrier && carrier != hovered) drawToken(*carrier, radius, false);
-  if (hovered) drawToken(*hovered, radius, true);
+  if (carrier && carrier != hovered) drawToken(*carrier, sizeOf(*carrier), false);
+  if (hovered) drawToken(*hovered, sizeOf(*hovered), true);
 
   // Names sit under the token: by default only the ball carrier and a
   // hovered player are labelled so formations stay readable.

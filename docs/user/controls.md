@@ -147,7 +147,7 @@ before a shootout) at any speed until you resume it.
 
 | Input | Action |
 |-------|--------|
-| Drag a substitute onto a player | Plan a substitution; several planned changes are made together at the next stoppage |
+| Drag a substitute onto a player | Plan a substitution; several planned changes are made together at the next stoppage (with the newer match engine, the players walk off and the subs walk on before play restarts) |
 | *Pause while open* | Keeps the match paused while the board or the panel is open (a saved setting) |
 
 The tactics panel changes the style, the instructions and the formation

@@ -153,8 +153,9 @@ teleport players. `integrateMovements()` blends a tactical target into the
 movement target with a familiarity-dependent response. It applies acceleration,
 braking, turning, fatigue and speed limits. Players slow to arrive and cannot
 reverse their velocity instantly. `collidePlayers()` resolves body contact
-after movement. Two players who both have the Binturong body are 0.4 m
-cylinders: each pair's first contact is found along their straight paths
+after movement. Two players who both have the Binturong body are cylinders
+`MatchTuning::Body` across (0.5 m; the one body size, also used against the
+boards, walls and goal frames): each pair's first contact is found along their straight paths
 through the step, both are wound back to it, the hit is applied by momentum
 (no bounce along the line between their centres, the sideways part kept,
 weight from height and Strength) and both are wound forward. `judgeKnock()`

@@ -12,6 +12,8 @@
 
 #include <cstdint>
 
+#include "model/match_tuning.h"
+
 /**
  * Named tuning values for the 2D tactical match view. Distances are metres
  * on the pitch unless a name says pixels (logical pixels, multiplied by the
@@ -94,16 +96,15 @@ struct MatchRender2DTuning final
     static constexpr float TECHNICAL_LINE_METRES = 0.1f;
   };
 
-  /** The people round the touchline from above: smaller than the players'
-   * tokens (near true size). Subs in their side's colours, staff in dark
-   * tracksuits ringed with them, managers in suits. */
+  /** The people round the touchline and the officials from above: their
+   * body only (the engine's, 0.4 m across), as they can't play the ball
+   * (user). Subs in their side's colours, staff in dark tracksuits ringed
+   * with them, managers in suits. Players off the pitch are drawn at this
+   * size too. */
   struct Touchline final
   {
-    static constexpr float RADIUS_METRES = 0.3f;
-    static constexpr float MANAGER_RADIUS_METRES = 0.36f;
-    /** The referee and his assistants: nearer the players' token size,
-     * to be seen among them. */
-    static constexpr float OFFICIAL_RADIUS_METRES = 0.75f;
+    static constexpr float RADIUS_METRES =
+        0.5f * MatchTuning::Body::DIAMETER_METRES;
     static constexpr float MIN_RADIUS_PIXELS = 2.5f;
     static constexpr float SUB_SHADE = 0.8f;
     static constexpr ImU32 STAFF_COLOR = IM_COL32(34, 38, 48, 255);
@@ -111,12 +112,11 @@ struct MatchRender2DTuning final
     static constexpr ImU32 OUTLINE_COLOR = IM_COL32(10, 12, 16, 220);
   };
 
-  /** Top-down kit tokens. */
+  /** Top-down kit tokens: a player on the pitch as the reach he plays the
+   * ball within (the engine's outfield first-touch reach; user). */
   struct Token final
   {
-    static constexpr float RADIUS_METRES = 1.1f;
-    /** Tokens never get smaller than this share of the font size. */
-    static constexpr float MIN_RADIUS_FONT_SHARE = 0.46f;
+    static constexpr float RADIUS_METRES = MatchTuning::Ball::OUTFIELD_CONTROL_RADIUS_METRES;
     static constexpr float SHIRT_SHARE = 0.74f;
     static constexpr float OUTLINE_SHARE = 0.12f;
     static constexpr float WEDGE_REACH = 1.62f;

@@ -626,25 +626,36 @@ bool MatchEngine::executeCommand(const MatchCommandRecord& command)
           !canSubstitute(command.homeTeam))
         return false;
       // A change made while the ball is live stops play for it; several
-      // changes made together share that stoppage (and window).
-      if (state == MatchState::PLAYING && manualSubstitutionStep != stepCounter)
+      // changes made together share that stoppage (and window). On foot
+      // (touchline plan stage 5) it waits for the next stoppage instead.
+      if (state == MatchState::PLAYING && manualSubstitutionStep != stepCounter &&
+          !walksOut())
       {
         beginStoppage();
         manualSubstitutionStep = stepCounter;
       }
       if (!canSubstitute(outgoing->isHomeTeam)) return false;
       ++inputRevision;
+      const bool wasKeeper = outgoing->isGoalkeeper;
+      const std::int8_t wasSlot = outgoing->formationSlot;
       const bool changed =
           performSubstitution(*outgoing, inPlayer, SubstitutionReason::MANUAL);
-      if (changed && command.slot && !outgoing->isGoalkeeper &&
-          outgoing->formationSlot >= 0)
+      if (changed && command.slot && !wasKeeper && wasSlot >= 0)
       {
         MatchCommandRecord move;
         move.type = MatchCommandType::MOVE_TO_SLOT;
         move.homeTeam = command.homeTeam;
         move.player = inPlayer->getId();
         move.slot = command.slot;
-        executeCommand(move);
+        // On foot, once he is on.
+        bool underWay = false;
+        for (PendingSubstitution& pending : pendingSubstitutions)
+          if (pending.incoming == inPlayer)
+          {
+            pending.moveToSlot = move;
+            underWay = true;
+          }
+        if (!underWay) executeCommand(move);
       }
       describePendingEvents();
       return changed;
@@ -1155,6 +1166,8 @@ void MatchEngine::simulateStepBody(float dt)
     walk.started = true;
     if (walksOut() && state == MatchState::KICK_OFF && period == 1) startInTunnel();
   }
+  // Substitutions on foot move on (touchline plan stage 5).
+  updateSubstitutions(dt);
   captureInterpolationFrame();
   if (headerRun > 0) trackHeaderRun();
   stepCounter += stepTicks;
@@ -2032,7 +2045,12 @@ void MatchEngine::updateRestartMovement(float dt)
         player.movementTarget = goalkeeperTarget(player, nullptr);
     }
     if (!fetching) updateRestartSupport(player, taker);
-    if (!fetching && &player != taker) keepRestartDistance(player);
+    // Not a player going off or a sub coming on (touchline plan stage 5):
+    // the laws' distances are for those in play.
+    const bool changingOver = std::ranges::any_of(
+        pendingSubstitutions, [slot](const PendingSubstitution& pending)
+        { return pending.slot == slot && pending.stage != PendingSubstitution::Stage::WAITING; });
+    if (!fetching && &player != taker && !changingOver) keepRestartDistance(player);
     // While the ball is on its way back, everyone else waits on the pitch.
     if (deadBall.active && &player != taker && !fetching)
       player.movementTarget = clampToPitch(player.movementTarget);
@@ -2056,6 +2074,11 @@ void MatchEngine::updateRestartMovement(float dt)
             clampToPitchY(restartSpot().y + step.y)};
       }
     }
+    // Going off for a sub (touchline plan stage 5): to his exit, and only
+    // that.
+    if (const PendingSubstitution* leaving = leavingFrom(slot))
+      player.movementTarget = {leaving->exit.x / MatchTuning::Pitch::LENGTH_METRES,
+                               leaving->exit.y / MatchTuning::Pitch::WIDTH_METRES};
     player.intent = player.isGoalkeeper ? PlayerIntent::GOALKEEP
                                         : PlayerIntent::RECOVER_SHAPE;
     // His restart spot is where he is going: his tactical target too, as
@@ -6522,7 +6545,13 @@ bool MatchEngine::canSubstitute(bool homeTeam) const
 {
   if (state == MatchState::FULL_TIME || state == MatchState::PENALTY_SHOOTOUT)
     return false;
-  if (getSubstitutionsUsed(homeTeam) >= maxSubstitutions()) return false;
+  // Changes under way count (touchline plan stage 5) until they are made.
+  int underWay = 0;
+  for (const PendingSubstitution& pending : pendingSubstitutions)
+    if (pending.stage != PendingSubstitution::Stage::ENTERING &&
+        pending.slot < players.size() && players[pending.slot].isHomeTeam == homeTeam)
+      ++underWay;
+  if (getSubstitutionsUsed(homeTeam) + underWay >= maxSubstitutions()) return false;
   // Half-time changes and further changes in an already used stoppage do
   // not consume a new window.
   const std::uint32_t lastWindow =
@@ -6558,7 +6587,7 @@ bool MatchEngine::substitutePlayer(uint32_t outPlayerId, const Player* inPlayer,
   return recordCommand(command);
 }
 
-bool MatchEngine::performSubstitution(MatchPlayer& outgoing,
+bool MatchEngine::applySubstitution(MatchPlayer& outgoing,
                                       const Player* inPlayer,
                                       SubstitutionReason reason)
 {
@@ -6784,6 +6813,11 @@ void MatchEngine::rebalanceShape(bool homeTeam, Vector2F vacatedBase,
 void MatchEngine::ensureGoalkeeper(bool homeTeam)
 {
   if (findGoalkeeper(homeTeam)) return;
+  // A keeper already on his way on (touchline plan stage 5).
+  for (const PendingSubstitution& pending : pendingSubstitutions)
+    if (pending.incoming && pending.incoming->getRole() == PlayerRole::GK &&
+        pending.slot < players.size() && players[pending.slot].isHomeTeam == homeTeam)
+      return;
   const bool autoManaged =
       homeTeam ? homeAutoSubstitutions : awayAutoSubstitutions;
   if (autoManaged && canSubstitute(homeTeam))

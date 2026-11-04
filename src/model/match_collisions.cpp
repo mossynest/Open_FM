@@ -372,7 +372,7 @@ void MatchEngine::collidePlayers(float dt)
           const Vector2F closing{paths[second].velocity.x - paths[first].velocity.x,
                                  paths[second].velocity.y - paths[first].velocity.y};
           const std::optional<float> time =
-              contactTime(gap, closing, now, dt, C::BODY_DIAMETER_METRES);
+              contactTime(gap, closing, now, dt, MatchTuning::Body::DIAMETER_METRES);
           if (time && (!earliest || *time < *earliest))
           {
             earliest = time;
@@ -547,7 +547,7 @@ void MatchEngine::collidePlayers(float dt)
         const Vector2F gap = toMetres({two.position.x - one.position.x,
                                        two.position.y - one.position.y});
         const float apart = length(gap);
-        const float overlap = C::BODY_DIAMETER_METRES - apart;
+        const float overlap = MatchTuning::Body::DIAMETER_METRES - apart;
         if (overlap <= 0.0f) continue;
         const Vector2F line =
             apart > EPSILON ? scaled(gap, 1.0f / apart)
@@ -581,13 +581,12 @@ struct LyingBody
 
 LyingBody lyingBody(const MatchPlayer& player)
 {
-  using C = MatchTuning::Collision;
   const Vector2F along{std::cos(player.lyingAngle) * MatchTuning::Pitch::LENGTH_METRES,
                        std::sin(player.lyingAngle) * MatchTuning::Pitch::WIDTH_METRES};
   const float alongLength = std::max(length(along), EPSILON);
   return {toMetres(player.position),
           scaled(along, 1.0f / alongLength),
-          std::max(0.0f, 0.5f * player.heightMetres - 0.5f * C::BODY_DIAMETER_METRES)};
+          std::max(0.0f, 0.5f * player.heightMetres - 0.5f * MatchTuning::Body::DIAMETER_METRES)};
 }
 
 /** The nearest point of the body's middle line to `point` (metres). */
@@ -654,7 +653,7 @@ std::optional<std::pair<std::size_t, float>> MatchEngine::fallenBodyInPath(
   const Vector2F move = scaled(ball.velocity, seconds);
   const float startHeight = ball.z * MatchTuning::Units::BALL_Z_METRES;
   const float reach =
-      0.5f * C::BODY_DIAMETER_METRES + MatchTuning::Units::BALL_RADIUS_METRES;
+      0.5f * MatchTuning::Body::DIAMETER_METRES + MatchTuning::Units::BALL_RADIUS_METRES;
   std::optional<std::pair<std::size_t, float>> first;
   for (std::size_t slot = 0; slot < players.size(); ++slot)
   {
