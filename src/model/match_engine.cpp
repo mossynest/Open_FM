@@ -2941,7 +2941,8 @@ void MatchEngine::applySanction(MatchPlayer& offender,
     ++stats.homeRedCards;
   else
     ++stats.awayRedCards;
-  removeFromPitch(offender);
+  // With walk-outs he walks to the tunnel (touchline plan stage 6).
+  removeFromPitch(offender, walksOut());
 }
 
 void MatchEngine::decideAction(MatchPlayer& carrier)
@@ -6714,7 +6715,7 @@ void MatchEngine::injurePlayer(MatchPlayer& player, bool fromContact)
   if (ball.possessedBy == player.player) player.actionCooldown = 0.0f;
 }
 
-void MatchEngine::removeFromPitch(MatchPlayer& player)
+void MatchEngine::removeFromPitch(MatchPlayer& player, bool walksOff)
 {
   if (!active(player)) return;
   const bool homeTeam = player.isHomeTeam;
@@ -6725,8 +6726,12 @@ void MatchEngine::removeFromPitch(MatchPlayer& player)
   if (ball.possessedBy == player.player)
   {
     clearPossession();
-    ball.velocity = {0.0f, 0.0f};
+    // Walking off, it runs on as it was (else it stops where he was).
+    if (!walksOff) ball.velocity = {0.0f, 0.0f};
   }
+  // Walking off (stage 6): his body walks on as a touchline body; the
+  // slot's record waits out of sight in the tunnel.
+  if (walksOff) sendToTunnel(player);
   // Park beside the dugouts, clear of play and of each other.
   int parked = 0;
   for (const auto& other : players)
@@ -6737,21 +6742,45 @@ void MatchEngine::removeFromPitch(MatchPlayer& player)
   player.isMakingRun = false;
   player.intent = PlayerIntent::HOLD_SHAPE;
   player.velocity = {0.0f, 0.0f};
-  player.position = {MatchTuning::Pitch::CENTRE +
+  player.position =
+      walksOff
+          ? Vector2F{MatchTuning::Pitch::CENTRE,
+                     (MatchGround::STAND_Y + MatchTuning::WalkOut::WAIT_METRES) /
+                         MatchTuning::Pitch::WIDTH_METRES}
+          : Vector2F{MatchTuning::Pitch::CENTRE +
                          (homeTeam ? -1.0f : 1.0f) *
                              (MatchTuning::Rules::PARKED_PLAYER_OFFSET +
                               static_cast<float>(parked) *
                                   MatchTuning::Rules::PARKED_PLAYER_SPACING),
                      MatchTuning::Pitch::PLAYER_MIN_Y};
   player.movementTarget = player.position;
+  if (walksOff)
+  {
+    const auto slot = slotOf(player);
+    if (slot < previousPlayerPositions.size()) previousPlayerPositions[slot] = player.position;
+    if (slot < stepStartPositions.size()) stepStartPositions[slot] = player.position;
+  }
   if (restartTaker() == &player)
   {
     MatchPlayer* replacement =
         findClosestPlayer(ball.position, homeTeam, false);
     setRestartTaker(replacement);
-    if (replacement && state != MatchState::PLAYING)
+    if (walksOff)
+    {
+      // The new taker goes to the ball; one in his hands drops.
+      if (deadBall.active && (deadBall.phase == DeadBallReturn::Phase::CARRIED ||
+                              deadBall.phase == DeadBallReturn::Phase::LIFTED))
+      {
+        deadBall.phase = DeadBallReturn::Phase::LOOSE;
+        deadBall.seconds = 0.0f;
+      }
+    }
+    else if (replacement && state != MatchState::PLAYING)
+    {
       handBallTo(replacement->player);
+    }
   }
+  if (walksOff && deadBall.fetcherIndex == slotOf(player)) deadBall.fetcherIndex.reset();
   if (wasKeeper) ensureGoalkeeper(homeTeam);
   rebalanceShape(homeTeam, vacated, wasKeeper ? -1 : vacatedSlot);
 

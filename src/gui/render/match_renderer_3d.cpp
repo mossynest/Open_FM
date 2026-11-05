@@ -3492,6 +3492,11 @@ void MatchRenderer3D::State::addTouchlinePerson(const MatchRenderTouchlinePerson
   ImU32 legs = T::TRACKSUIT_COLOR;
   if (person.role == TouchlineRole::SUBSTITUTE)
     top = shadeColor(kit.shirt, T::SUB_TOP_SHADE);
+  else if (person.role == TouchlineRole::SENT_OFF)
+  {
+    top = kit.shirt;
+    legs = kit.shorts;
+  }
   else if (person.role == TouchlineRole::MANAGER)
     top = legs = T::SUIT_COLOR;
   else if (isOfficial(person.role))

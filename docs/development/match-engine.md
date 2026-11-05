@@ -115,9 +115,15 @@ Besides the players, the engine moves `touchlineBodies`, with
 staff and manager, and the match officials (`match_touchline_people.cpp`).
 They are `MatchPlayer` bodies with stand-in stats, so walking, run-ins,
 stumbles and falls use the players' own code; they referee and manage
-nothing (the engine decides as before). `match_walk_out.cpp` holds the
-walk-outs, walk-offs and substitutions on foot. A body is one size
-everywhere, `MatchTuning::Body`.
+nothing (the engine decides as before). The match officials collide with
+no one: each steps out of players' way as they come (`moveOfficial`), and
+the referee picks a spot near his usual one clear of players
+(`officialSpot`). `match_walk_out.cpp` holds the
+walk-outs, walk-offs, substitutions on foot and sendings-off on foot (the
+player leaves at the nearest point of the boundary, as a substituted player
+does, and walks round the pitch's edge into the tunnel; the restart waits
+only until he is off the pitch). A
+body is one size everywhere, `MatchTuning::Body`.
 
 Order is part of behavior. Moving actions before players changes tackle reach;
 moving commands across the tick increment changes replay timing; continuing
@@ -203,7 +209,7 @@ cross-thread publishing. The 2D and 3D views interpolate the same state.
 |--------|------------|------------------|
 | Targets, actions, contact integration | `match_engine.cpp` | [Engine](../../test/test_match_engine.cpp), [scenarios](../../test/test_match_scenarios.cpp) |
 | Swappable parts (brain, body, handshake, referee, AI manager, ball physics, out of play) | `match_<part>.h`, `match_<part>_<version>.cpp`, `match_<part>_dispatch.cpp` | `match_sandbox --check`, `fm_lab` with the part's option |
-| Ground, touchline people, officials, walk-outs, substitutions on foot | `match_ground.h`, `match_touchline_people.cpp`, `match_walk_out.cpp` | `match_sandbox --check`, the *Into the referee* drill |
+| Ground, touchline people, officials, walk-outs, substitutions on foot | `match_ground.h`, `match_touchline_people.cpp`, `match_walk_out.cpp` | `match_sandbox --check` |
 | Roles, duties, shape and opposition orders | `tactics.*`, `strategy.*` | [Tactics](../../test/test_tactics.cpp) |
 | Pure football rules | `match_rules.*` | [Rules](../../test/test_match_rules.cpp) |
 | Batch inputs and league context | `match_scheduler.*`, `match_context.h` | [Scheduler/context](../../test/test_match_scheduler.cpp) |

@@ -286,6 +286,34 @@ void MatchEngine::updateTouchline(float dt)
       }
     }
 
+    // Sent off (stage 6): off at the nearest point of the boundary (his
+    // `seat`), round the pitch's edge to the tunnel, through the gap in the
+    // boards, and in he stays.
+    if (person.role == TouchlineRole::SENT_OFF)
+    {
+      const Vector2F at = metresOf(body.position);
+      if (deepInTunnel(body.position))
+      {
+        body.velocity = {0.0f, 0.0f};
+        continue;
+      }
+      const bool on = at.x > -R && at.x < G::LENGTH + R && at.y > -R && at.y < G::WIDTH + R;
+      const Vector2F front{G::HALFWAY, G::WIDTH + 1.5f};
+      if (!on && person.walkingRound && std::hypot(front.x - at.x, front.y - at.y) <= 1.5f)
+        person.walkingRound = false;
+      const float file = body.isHomeTeam ? -1.0f : 1.0f;
+      const Vector2F tunnel{G::HALFWAY + file * MatchTuning::WalkOut::FILE_METRES,
+                            G::STAND_Y + MatchTuning::WalkOut::WAIT_METRES};
+      const Vector2F next = on && person.walkingRound ? metresOf(person.seat)
+                            : person.walkingRound    ? roundThePitch(at, front)
+                                                     : routeViaTunnel(at, tunnel);      const Vector2F way{next.x - at.x, next.y - at.y};
+      const float gap = std::max(std::hypot(way.x, way.y), 1e-4f);
+      body.movementTarget = pitchOf(next);
+      moveControlledBinturong(body, {way.x / gap * T::WALK_SPEED, way.y / gap * T::WALK_SPEED},
+                              T::WALK_SPEED, T::WALK_SPEED, 0.0f, dt, nullptr);
+      continue;
+    }
+
     if (isOfficial(person.role))
     {
       const Vector2F spot = officialSpot(body, person);
@@ -452,9 +480,8 @@ Vector2F MatchEngine::officialSpot(const MatchPlayer& body, const TouchlinePerso
     return {top ? std::clamp(x, 0.0f, G::HALFWAY) : std::clamp(x, G::HALFWAY, G::LENGTH), y};
   }
 
-  // The referee: where a drill holds him, else his diagonal (play between
-  // him and the assistant on that half).
-  if (drillRefereeSpot) return *drillRefereeSpot;
+  // The referee: on his diagonal (play between him and the assistant on
+  // that half).
   const float x0 = O::DIAGONAL_END_X_METRES;
   const float x1 = G::LENGTH - O::DIAGONAL_END_X_METRES;
   const auto diagonalY = [&](float x)
@@ -468,80 +495,125 @@ Vector2F MatchEngine::officialSpot(const MatchPlayer& body, const TouchlinePerso
     return Vector2F{v.x * std::cos(angle) - v.y * std::sin(angle),
                     v.x * std::sin(angle) + v.y * std::cos(angle)};
   };
-  switch (state)
+  const auto usualSpot = [&]() -> std::optional<Vector2F>
   {
-    case MatchState::KICK_OFF:
+    switch (state)
     {
-      // In the half of the side not kicking off (home's half is the left).
-      const float into = !taker || taker->isHomeTeam ? 1.0f : -1.0f;
-      return {G::HALFWAY + into * O::KICK_OFF_INTO_HALF_METRES,
-              CENTRE_Y + O::KICK_OFF_BELOW_CENTRE_METRES};
+      case MatchState::KICK_OFF:
+      {
+        // In the half of the side not kicking off (home's half is the left).
+        const float into = !taker || taker->isHomeTeam ? 1.0f : -1.0f;
+        return Vector2F{G::HALFWAY + into * O::KICK_OFF_INTO_HALF_METRES,
+                        CENTRE_Y + O::KICK_OFF_BELOW_CENTRE_METRES};
+      }
+      case MatchState::GOAL_KICK:
+      {
+        const float into = taker && !taker->isHomeTeam ? 1.0f : -1.0f;
+        const float x = G::HALFWAY + into * O::GOAL_KICK_FROM_HALFWAY_METRES;
+        return Vector2F{x, diagonalY(x)};
+      }
+      case MatchState::CORNER_KICK:
+      {
+        const float goalX = restartAt.x < G::HALFWAY ? 0.0f : G::LENGTH;
+        const float inward = goalX == 0.0f ? 1.0f : -1.0f;
+        const float across = restartAt.y < CENTRE_Y ? 1.0f : -1.0f;
+        return inside({goalX + inward * O::CORNER_OUT_METRES,
+                       CENTRE_Y + across * (MatchTuning::Shooting::GOAL_HALF_WIDTH_METRES +
+                                            O::CORNER_PAST_FAR_POST_METRES)});
+      }
+      case MatchState::FREE_KICK:
+      {
+        // To the side, where he sees the wall: of the two, the one with more
+        // pitch round it.
+        const Vector2F goal{taker && taker->isHomeTeam ? G::LENGTH : 0.0f, CENTRE_Y};
+        Vector2F toGoal{goal.x - restartAt.x, goal.y - restartAt.y};
+        const float gap = std::max(std::hypot(toGoal.x, toGoal.y), 1e-3f);
+        toGoal = {toGoal.x / gap * O::FREE_KICK_METRES, toGoal.y / gap * O::FREE_KICK_METRES};
+        const Vector2F a = rotate(toGoal, O::FREE_KICK_ANGLE_RADIANS);
+        const Vector2F b = rotate(toGoal, -O::FREE_KICK_ANGLE_RADIANS);
+        const Vector2F one{restartAt.x + a.x, restartAt.y + a.y};
+        const Vector2F two{restartAt.x + b.x, restartAt.y + b.y};
+        return inside(std::abs(one.y - CENTRE_Y) <= std::abs(two.y - CENTRE_Y) ? one : two);
+      }
+      case MatchState::PENALTY:
+      {
+        // Outside the area by the end of the arc (user): a clear view of the
+        // kicker, the defenders and the attackers. The end he is nearer.
+        const float goalX = restartAt.x < G::HALFWAY ? 0.0f : G::LENGTH;
+        const float outward = goalX == 0.0f ? 1.0f : -1.0f;
+        const float areaDepth = P::LEFT_PENALTY_AREA_EDGE * G::LENGTH;
+        const float spotDepth = P::LEFT_PENALTY_SPOT_X * G::LENGTH;
+        const float arc = MatchTuning::Timing::KICK_OPPONENT_DISTANCE_METRES;
+        const float arcEnd = std::sqrt(
+            std::max(arc * arc - (areaDepth - spotDepth) * (areaDepth - spotDepth), 0.0f));
+        const float side = at.y < CENTRE_Y ? -1.0f : 1.0f;
+        return Vector2F{goalX + outward * (areaDepth + O::PENALTY_BEYOND_AREA_METRES),
+                        CENTRE_Y + side * (arcEnd + O::PENALTY_BEYOND_ARC_METRES)};
+      }
+      case MatchState::GOAL:
+        return Vector2F{G::HALFWAY, CENTRE_Y + O::GOAL_BELOW_CENTRE_METRES};
+      case MatchState::PLAYING:
+      case MatchState::THROW_IN:
+        break;
+      default:
+        return std::nullopt;
     }
-    case MatchState::GOAL_KICK:
+    // In play: on his diagonal by the ball, 15-25 m from it.
+    const Vector2F onLine{std::clamp(ballAt.x, x0, x1), diagonalY(ballAt.x)};
+    Vector2F away{onLine.x - ballAt.x, onLine.y - ballAt.y};
+    float apart = std::hypot(away.x, away.y);
+    if (apart < 1e-3f)
     {
-      const float into = taker && !taker->isHomeTeam ? 1.0f : -1.0f;
-      const float x = G::HALFWAY + into * O::GOAL_KICK_FROM_HALFWAY_METRES;
-      return {x, diagonalY(x)};
+      // On the diagonal itself: away from the assistant on that half.
+      away = {0.0f, ballAt.x < G::HALFWAY ? 1.0f : -1.0f};
+      apart = 1.0f;
     }
-    case MatchState::CORNER_KICK:
-    {
-      const float goalX = restartAt.x < G::HALFWAY ? 0.0f : G::LENGTH;
-      const float inward = goalX == 0.0f ? 1.0f : -1.0f;
-      const float across = restartAt.y < CENTRE_Y ? 1.0f : -1.0f;
-      return inside({goalX + inward * O::CORNER_OUT_METRES,
-                     CENTRE_Y + across * (MatchTuning::Shooting::GOAL_HALF_WIDTH_METRES +
-                                          O::CORNER_PAST_FAR_POST_METRES)});
-    }
-    case MatchState::FREE_KICK:
-    {
-      // To the side, where he sees the wall: of the two, the one with more
-      // pitch round it.
-      const Vector2F goal{taker && taker->isHomeTeam ? G::LENGTH : 0.0f, CENTRE_Y};
-      Vector2F toGoal{goal.x - restartAt.x, goal.y - restartAt.y};
-      const float gap = std::max(std::hypot(toGoal.x, toGoal.y), 1e-3f);
-      toGoal = {toGoal.x / gap * O::FREE_KICK_METRES, toGoal.y / gap * O::FREE_KICK_METRES};
-      const Vector2F a = rotate(toGoal, O::FREE_KICK_ANGLE_RADIANS);
-      const Vector2F b = rotate(toGoal, -O::FREE_KICK_ANGLE_RADIANS);
-      const Vector2F one{restartAt.x + a.x, restartAt.y + a.y};
-      const Vector2F two{restartAt.x + b.x, restartAt.y + b.y};
-      return inside(std::abs(one.y - CENTRE_Y) <= std::abs(two.y - CENTRE_Y) ? one : two);
-    }
-    case MatchState::PENALTY:
-    {
-      // Outside the area by the end of the arc (user): a clear view of the
-      // kicker, the defenders and the attackers. The end he is nearer.
-      const float goalX = restartAt.x < G::HALFWAY ? 0.0f : G::LENGTH;
-      const float outward = goalX == 0.0f ? 1.0f : -1.0f;
-      const float areaDepth = P::LEFT_PENALTY_AREA_EDGE * G::LENGTH;
-      const float spotDepth = P::LEFT_PENALTY_SPOT_X * G::LENGTH;
-      const float arc = MatchTuning::Timing::KICK_OPPONENT_DISTANCE_METRES;
-      const float arcEnd =
-          std::sqrt(std::max(arc * arc - (areaDepth - spotDepth) * (areaDepth - spotDepth), 0.0f));
-      const float side = at.y < CENTRE_Y ? -1.0f : 1.0f;
-      return {goalX + outward * (areaDepth + O::PENALTY_BEYOND_AREA_METRES),
-              CENTRE_Y + side * (arcEnd + O::PENALTY_BEYOND_ARC_METRES)};
-    }
-    case MatchState::GOAL:
-      return {G::HALFWAY, CENTRE_Y + O::GOAL_BELOW_CENTRE_METRES};
-    case MatchState::PLAYING:
-    case MatchState::THROW_IN:
-      break;
-    default:
-      return at;
-  }
-  // In play: on his diagonal by the ball, 15-25 m from it.
-  const Vector2F onLine{std::clamp(ballAt.x, x0, x1), diagonalY(ballAt.x)};
-  Vector2F away{onLine.x - ballAt.x, onLine.y - ballAt.y};
-  float apart = std::hypot(away.x, away.y);
-  if (apart < 1e-3f)
+    const float keep =
+        std::clamp(apart, O::NEAREST_TO_BALL_METRES, O::FURTHEST_FROM_BALL_METRES);
+    return inside({ballAt.x + away.x / apart * keep, ballAt.y + away.y / apart * keep});
+  };
+  const std::optional<Vector2F> usual = usualSpot();
+  if (!usual) return at;
+
+  // Out of the way (user): near his usual spot, where the nearest player is
+  // furthest off, without dithering between near-equal spots.
+  const auto clearance = [this](Vector2F spot)
   {
-    // On the diagonal itself: away from the assistant on that half.
-    away = {0.0f, ballAt.x < G::HALFWAY ? 1.0f : -1.0f};
-    apart = 1.0f;
-  }
-  const float keep =
-      std::clamp(apart, O::NEAREST_TO_BALL_METRES, O::FURTHEST_FROM_BALL_METRES);
-  return inside({ballAt.x + away.x / apart * keep, ballAt.y + away.y / apart * keep});
+    float nearest = O::CLEAR_SPOT_METRES;
+    for (const MatchPlayer& player : players)
+    {
+      if (!active(player)) continue;
+      const Vector2F them = metresOf(player.position);
+      nearest = std::min(nearest, std::hypot(them.x - spot.x, them.y - spot.y));
+    }
+    return nearest;
+  };
+  const auto score = [&](Vector2F spot)
+  {
+    return clearance(spot) -
+           O::CLEAR_SPOT_MOVE_COST * (std::hypot(spot.x - usual->x, spot.y - usual->y) +
+                                      0.5f * std::hypot(spot.x - at.x, spot.y - at.y));
+  };
+  Vector2F best = *usual;
+  float bestScore = score(best);
+  constexpr int DIRECTIONS = 12;
+  for (const float ring : {0.5f * O::CLEAR_SPOT_SEARCH_METRES, O::CLEAR_SPOT_SEARCH_METRES})
+    for (int step = 0; step < DIRECTIONS; ++step)
+    {
+      const float angle = 2.0f * std::numbers::pi_v<float> * static_cast<float>(step) /
+                          static_cast<float>(DIRECTIONS);
+      const Vector2F spot =
+          inside({usual->x + ring * std::cos(angle), usual->y + ring * std::sin(angle)});
+      const float value = score(spot);
+      if (value > bestScore)
+      {
+        bestScore = value;
+        best = spot;
+      }
+    }
+  // Where he is, if no worse: he stays put rather than shuffle.
+  if (const Vector2F here = inside(at); score(here) >= bestScore) best = here;
+  return best;
 }
 
 void MatchEngine::moveOfficial(MatchPlayer& body, const TouchlinePerson& person,
@@ -553,58 +625,92 @@ void MatchEngine::moveOfficial(MatchPlayer& body, const TouchlinePerson& person,
   const float topSpeed = person.role == TouchlineRole::FOURTH_OFFICIAL
                              ? MatchTuning::TouchlinePeople::WALK_SPEED
                              : O::TOP_SPEED;
-  // The referee watches the ball (or faces where a drill has him); the
-  // others face the pitch.
+  // The referee watches the ball; the others face the pitch.
   const float facing =
-      referee && drillRefereeSpot ? drillRefereeFacing
-      : referee ? std::atan2(ball.position.y - body.position.y, ball.position.x - body.position.x)
+      referee ? std::atan2(ball.position.y - body.position.y, ball.position.x - body.position.x)
       : person.topLine ? -FACING_PITCH
                        : FACING_PITCH;
   const Vector2F at = metresOf(body.position);
   const Vector2F way{spot.x - at.x, spot.y - at.y};
   const float gap = std::hypot(way.x, way.y);
   body.movementTarget = pitchOf(spot);
-  if (gap <= O::DEAD_BAND_METRES)
+  const bool there = gap <= O::DEAD_BAND_METRES;
+  // As fast as lets him pull up on it.
+  float speed = there ? 0.0f : std::min(topSpeed, std::sqrt(2.0f * O::ARRIVE_BRAKING * gap));
+  Vector2F desired = there ? Vector2F{} : Vector2F{way.x / gap * speed, way.y / gap * speed};
+  bool dodging = false;
+  // Every official out of the players' way (user). Of the speeds and
+  // directions he could take, the nearest to what he wants that keeps
+  // everyone (going on as they are) clear of him through the look-ahead;
+  // failing that, the one that keeps them off longest.
+  {
+    // When a player first comes within the clearance (the look-ahead and
+    // more if never; 0 if he already is and they are not parting).
+    const auto soonest = [&](Vector2F velocity)
+    {
+      float first = O::LOOK_AHEAD_SECONDS + 1.0f;
+      for (const MatchPlayer& player : players)
+      {
+        if (!active(player)) continue;
+        const Vector2F them = metresOf(player.position);
+        const Vector2F rel{them.x - at.x, them.y - at.y};
+        const Vector2F closing{player.velocity.x - velocity.x, player.velocity.y - velocity.y};
+        const float along = rel.x * closing.x + rel.y * closing.y;
+        if (along >= 0.0f) continue;  // parting
+        const float c = rel.x * rel.x + rel.y * rel.y - O::CLEARANCE_METRES * O::CLEARANCE_METRES;
+        if (c <= 0.0f)
+        {
+          first = 0.0f;
+          continue;
+        }
+        const float a = closing.x * closing.x + closing.y * closing.y;
+        const float discriminant = along * along - a * c;
+        if (discriminant < 0.0f) continue;  // passes clear
+        first = std::min(first, (-along - std::sqrt(discriminant)) / a);
+      }
+      return first;
+    };
+    const auto cost = [&](Vector2F velocity)
+    {
+      const float when = soonest(velocity);
+      const float threat =
+          when <= O::LOOK_AHEAD_SECONDS ? O::THREAT_COST * (O::LOOK_AHEAD_SECONDS + 1.0f - when)
+                                        : 0.0f;
+      return std::hypot(velocity.x - desired.x, velocity.y - desired.y) + threat;
+    };
+    Vector2F best = desired;
+    float bestCost = cost(desired);
+    if (soonest(desired) <= O::LOOK_AHEAD_SECONDS)
+    {
+      const auto consider = [&](Vector2F velocity)
+      {
+        const float value = cost(velocity);
+        if (value < bestCost)
+        {
+          bestCost = value;
+          best = velocity;
+        }
+      };
+      consider({0.0f, 0.0f});
+      constexpr int DIRECTIONS = 16;
+      for (const float pace : O::DODGE_SPEEDS)
+        for (int step = 0; step < DIRECTIONS; ++step)
+        {
+          const float angle = 2.0f * std::numbers::pi_v<float> * static_cast<float>(step) /
+                              static_cast<float>(DIRECTIONS);
+          consider({pace * std::cos(angle), pace * std::sin(angle)});
+        }
+      dodging = true;
+      desired = best;
+      speed = std::hypot(best.x, best.y);
+    }
+  }
+  if (there && !dodging)
   {
     // There: he pulls up and faces the play.
     moveControlledBinturong(body, {0.0f, 0.0f}, 0.0f, topSpeed, 0.0f, dt, nullptr);
     turnToward(body, facing, dt);
     return;
-  }
-  // As fast as lets him pull up on it.
-  const float speed = std::min(topSpeed, std::sqrt(2.0f * O::ARRIVE_BRAKING * gap));
-  Vector2F desired{way.x / gap * speed, way.y / gap * speed};
-  if (referee)
-  {
-    // Round a player his line would bring him too close to: the first such
-    // in the look-ahead, steered away from.
-    float soonest = O::LOOK_AHEAD_SECONDS + 1.0f;
-    Vector2F nearest{};
-    for (const MatchPlayer& player : players)
-    {
-      if (!active(player)) continue;
-      const Vector2F them = metresOf(player.position);
-      const Vector2F rel{them.x - at.x, them.y - at.y};
-      const Vector2F closing{player.velocity.x - desired.x, player.velocity.y - desired.y};
-      const float squared = closing.x * closing.x + closing.y * closing.y;
-      const float t = squared > 1e-6f
-                          ? std::clamp(-(rel.x * closing.x + rel.y * closing.y) / squared, 0.0f,
-                                       O::LOOK_AHEAD_SECONDS)
-                          : 0.0f;
-      const float closest = std::hypot(rel.x + closing.x * t, rel.y + closing.y * t);
-      if (closest < O::CLEARANCE_METRES && t < soonest)
-      {
-        soonest = t;
-        nearest = rel;
-      }
-    }
-    if (soonest <= O::LOOK_AHEAD_SECONDS)
-    {
-      const float side = desired.x * nearest.y - desired.y * nearest.x;
-      const float angle = side > 0.0f ? -O::STEER_RADIANS : O::STEER_RADIANS;
-      desired = {desired.x * std::cos(angle) - desired.y * std::sin(angle),
-                 desired.x * std::sin(angle) + desired.y * std::cos(angle)};
-    }
   }
   const float before = body.facingAngle;
   moveControlledBinturong(body, desired, speed, topSpeed, 0.0f, dt, nullptr);
@@ -615,42 +721,6 @@ void MatchEngine::moveOfficial(MatchPlayer& body, const TouchlinePerson& person,
     body.facingAngle = before;
     turnToward(body, facing, dt);
   }
-}
-
-bool MatchEngine::setDrillReferee(std::optional<Vector2F> spot, float facing)
-{
-  if (!touchlineSetUp) setUpTouchline();
-  for (std::size_t index = 0; index < touchlineBodies.size(); ++index)
-  {
-    if (touchlinePeople[index].role != TouchlineRole::REFEREE) continue;
-    MatchPlayer& body = touchlineBodies[index];
-    if (!spot)
-    {
-      drillRefereeSpot.reset();
-      return true;
-    }
-    // A drill's set-up places him, as it places its players.
-    drillRefereeSpot = metresOf(*spot);
-    drillRefereeFacing = facing;
-    if (body.fallen) standUp(body);
-    body.position = *spot;
-    body.velocity = {0.0f, 0.0f};
-    body.stumbleSeconds = 0.0f;
-    body.collisionPause = 0.0f;
-    body.facingAngle = facing;
-    body.targetAngle = facing;
-    if (index < touchlineStepStart.size()) touchlineStepStart[index] = *spot;
-    if (index < previousTouchlinePositions.size()) previousTouchlinePositions[index] = *spot;
-    return true;
-  }
-  return false;
-}
-
-const MatchPlayer* MatchEngine::getRefereeBody() const
-{
-  for (std::size_t index = 0; index < touchlineBodies.size(); ++index)
-    if (touchlinePeople[index].role == TouchlineRole::REFEREE) return &touchlineBodies[index];
-  return nullptr;
 }
 
 void MatchEngine::leaveTouchline(const Player* player)

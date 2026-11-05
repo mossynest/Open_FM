@@ -94,7 +94,9 @@ enum class TouchlineRole : std::uint8_t
   /** The match officials (stage 3). */
   REFEREE,
   ASSISTANT_REFEREE,
-  FOURTH_OFFICIAL
+  FOURTH_OFFICIAL,
+  /** Sent off (stage 6): on his way to the tunnel, and staying there. */
+  SENT_OFF
 };
 
 /** Whether a touchline role is one of the match officials. */

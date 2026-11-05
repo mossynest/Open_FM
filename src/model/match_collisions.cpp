@@ -285,7 +285,9 @@ void MatchEngine::collidePlayers(float dt)
     for (std::size_t index = 0; index < touchlineBodies.size() && count < MOST; ++index)
     {
       const MatchPlayer& body = touchlineBodies[index];
-      if (body.fallen || index >= touchlineStepStart.size() || deepInTunnel(body.position))
+      // The officials collide with no one (user): they keep out of the way.
+      if (body.fallen || index >= touchlineStepStart.size() || deepInTunnel(body.position) ||
+          isOfficial(touchlinePeople[index].role))
         continue;
       bool near = false;
       for (std::size_t slot = 0; slot < playerCount && !near; ++slot)

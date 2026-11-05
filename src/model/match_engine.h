@@ -2461,13 +2461,6 @@ class MatchEngine
    * the carrier is unknown.
    */
   bool startDrill(const MatchScenario& scenario);
-  /** A drill's referee (touchline plan stage 3): stood on `spot`
-   * (normalised pitch) facing `facing` and kept there, or (none) back to
-   * his own positioning. False when there is no referee (no Binturong
-   * body). */
-  bool setDrillReferee(std::optional<Vector2F> spot, float facing = 0.0f);
-  /** The referee's body, if there is one. */
-  const MatchPlayer* getRefereeBody() const;
 
   /**
    * Drills: holds a player's tactical target (normalised pitch), which then
@@ -2685,9 +2678,6 @@ class MatchEngine
   WalkState walk;
   /** Touchline plan stage 5: the substitutions under way. */
   std::vector<PendingSubstitution> pendingSubstitutions;
-  /** A drill holding the referee on a spot (metres) facing a way. */
-  std::optional<Vector2F> drillRefereeSpot;
-  float drillRefereeFacing = 0.0f;
   MatchBall ball;
   const StatsConfig& statsConfig;
   Strategy homeStrategy;
@@ -3625,7 +3615,15 @@ class MatchEngine
   int maxSubstitutions() const;
   void checkInjuries();
   void injurePlayer(MatchPlayer& player, bool fromContact);
-  void removeFromPitch(MatchPlayer& player);
+  /** Off the pitch for good: parked beside the dugouts, or (`walksOff`, a
+   * sending-off with walk-outs; touchline plan stage 6) on foot to the
+   * tunnel as a touchline body. */
+  void removeFromPitch(MatchPlayer& player, bool walksOff = false);
+  /** Touchline plan stage 6: a sent-off player, from where his body stands,
+   * becomes a touchline body walking to the tunnel. */
+  void sendToTunnel(const MatchPlayer& body);
+  /** Whether a sent-off player is still on the pitch (the restart waits). */
+  [[nodiscard]] bool sentOffStillOn() const;
   void rebalanceShape(bool homeTeam, Vector2F vacatedBase,
                       std::int8_t vacatedSlot);
   void ensureGoalkeeper(bool homeTeam);

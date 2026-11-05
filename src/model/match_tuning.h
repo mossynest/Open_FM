@@ -2496,11 +2496,22 @@ struct MatchTuning final
     static constexpr float FURTHEST_FROM_BALL_METRES = 25.0f;
     /** He stays this far inside the lines. */
     static constexpr float INSIDE_LINES_METRES = 1.0f;
-    /** Going round players: anyone his line would bring within this in the
-     * next look-ahead, he steers this far (radians) away from. */
-    static constexpr float CLEARANCE_METRES = 1.0f;
+    /** The referee out of the players' way (user): if anyone (going on as
+     * he is) would come within this in the look-ahead, he takes, of
+     * standing still and these speeds in 16 directions, the nearest to
+     * what he wants, each second sooner that someone would come within it
+     * costing as much as this much more speed off what he wants (m/s). */
+    static constexpr float CLEARANCE_METRES = 2.0f;
     static constexpr float LOOK_AHEAD_SECONDS = 2.0f;
-    static constexpr float STEER_RADIANS = 0.9f;
+    static constexpr std::array<float, 3> DODGE_SPEEDS{2.0f, 4.0f, 6.5f};
+    static constexpr float THREAT_COST = 20.0f;
+    /** Out of the way (user): his spot is moved, up to this far, to where
+     * the nearest player is furthest off (counting up to this far); each
+     * metre moved costs this much of that, and each metre from where he
+     * already is half as much (so he does not dither). */
+    static constexpr float CLEAR_SPOT_SEARCH_METRES = 6.0f;
+    static constexpr float CLEAR_SPOT_METRES = 6.0f;
+    static constexpr float CLEAR_SPOT_MOVE_COST = 0.35f;
     /** At restarts: kick-off, this far into the half of the side not
      * kicking off and this far below the centre; goal kick, this far from
      * halfway into the kicking side's half; corner, this far out from the

@@ -1641,8 +1641,9 @@ void MatchEngine::completeRestartBinturong()
   const MatchState restartState = state;
   MatchPlayer* taker = restartTaker();
   const bool userPass = userRestartPassRequested();
-  // Not until any sub coming on is on the pitch (touchline plan stage 5).
-  if (substitutionHoldsRestart()) return;
+  // Not until any sub coming on is on the pitch (touchline plan stage 5),
+  // nor while a player sent off is still on it (stage 6).
+  if (substitutionHoldsRestart() || sentOffStillOn()) return;
   // Not until the ball is back on the spot.
   if (deadBall.active) return;
   // A kick-off after a goal waits for everyone to be back (for a while).

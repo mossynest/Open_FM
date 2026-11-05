@@ -220,6 +220,12 @@ std::pair<bool, std::optional<Vector2F>> MatchEngine::touchlineWalk(std::size_t 
   const MatchPlayer& body = touchlineBodies[index];
   const TouchlinePerson& person = touchlinePeople[index];
   const float file = isOfficial(person.role) ? 0.0f : body.isHomeTeam ? -1.0f : 1.0f;
+  // Sent off: into the tunnel, and he stays in.
+  if (person.role == TouchlineRole::SENT_OFF)
+  {
+    if (deepInTunnel(body.position)) return {true, std::nullopt};
+    return {false, waitSpot(file)};
+  }
   switch (walk.phase)
   {
     case WalkPhase::OFF:
@@ -528,21 +534,7 @@ void MatchEngine::updateSubstitutions(float dt)
                                    static_cast<std::ptrdiff_t>(index));
         continue;
       }
-      const Vector2F at = metresOf(player.position);
-      const float out = edge + 0.3f;
-      const std::array<std::pair<float, Vector2F>, 4> exits{{
-          {at.y, {at.x, -out}},
-          {G::WIDTH - at.y, {at.x, G::WIDTH + out}},
-          {at.x, {-out, at.y}},
-          {G::LENGTH - at.x, {G::LENGTH + out, at.y}},
-      }};
-      pending.exit = std::ranges::min(exits, {}, &std::pair<float, Vector2F>::first).second;
-      // Off over a goal line: beside the goal, not through it.
-      constexpr float CLEAR_OF_POST = MatchTuning::Shooting::GOAL_HALF_WIDTH_METRES + 1.5f;
-      if ((pending.exit.x < 0.0f || pending.exit.x > G::LENGTH) &&
-          std::abs(pending.exit.y - 0.5f * G::WIDTH) < CLEAR_OF_POST)
-        pending.exit.y = 0.5f * G::WIDTH +
-                         (pending.exit.y < 0.5f * G::WIDTH ? -CLEAR_OF_POST : CLEAR_OF_POST);
+      pending.exit = nearestExit(metresOf(player.position));
       pending.stage = PendingSubstitution::Stage::LEAVING;
       if (deadBall.fetcherIndex == pending.slot) deadBall.fetcherIndex.reset();
       // He takes no restart: another does.
@@ -710,6 +702,42 @@ void MatchEngine::benchSubstitutedPlayer(const MatchPlayer& body)
   previousTouchlinePositions.push_back(body.position);
   previousTouchlineFacingAngles.push_back(body.facingAngle);
   touchlineStepStart.push_back(body.position);
+}
+
+// --- Sendings-off on foot (stage 6) ------------------------------------------
+
+void MatchEngine::sendToTunnel(const MatchPlayer& body)
+{
+  // He walks from where he is, as he is moving: off at the nearest point of
+  // the boundary (`seat`), then round the pitch's edge to the tunnel.
+  MatchPlayer& off = touchlineBodies.emplace_back(body);
+  off.onPitch = false;
+  off.isGoalkeeper = false;
+  off.isPressing = false;
+  off.isMakingRun = false;
+  off.facingRequested = false;
+  off.intent = PlayerIntent::HOLD_SHAPE;
+  TouchlinePerson& person = touchlinePeople.emplace_back();
+  person.role = TouchlineRole::SENT_OFF;
+  person.seat = pitchOf(nearestExit(metresOf(body.position)));
+  person.walkingRound = true;
+  previousTouchlinePositions.push_back(body.position);
+  previousTouchlineFacingAngles.push_back(body.facingAngle);
+  touchlineStepStart.push_back(body.position);
+}
+
+bool MatchEngine::sentOffStillOn() const
+{
+  // Until his body is wholly over a line.
+  const float edge = MatchTuning::Body::RADIUS_METRES;
+  for (std::size_t index = 0; index < touchlinePeople.size(); ++index)
+  {
+    if (touchlinePeople[index].role != TouchlineRole::SENT_OFF) continue;
+    const Vector2F at = metresOf(touchlineBodies[index].position);
+    if (at.x > -edge && at.x < G::LENGTH + edge && at.y > -edge && at.y < G::WIDTH + edge)
+      return true;
+  }
+  return false;
 }
 
 void MatchEngine::finishWalkOut()

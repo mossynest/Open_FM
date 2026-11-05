@@ -1139,15 +1139,16 @@ void MatchRenderer2D::State::drawTouchline(const MatchRenderSnapshot& snapshot,
     }
     const bool manager = person.role == TouchlineRole::MANAGER;
     const KitColors& kit = person.isHomeTeam ? kits.home : kits.away;
-    const ImU32 body = person.role == TouchlineRole::SUBSTITUTE
-                           ? shadeColor(kit.shirt, T::SUB_SHADE)
-                       : manager ? T::SUIT_COLOR
-                                 : T::STAFF_COLOR;
+    // Subs in training tops of their colours, a player sent off in his kit.
+    const bool inColours = person.role == TouchlineRole::SUBSTITUTE ||
+                           person.role == TouchlineRole::SENT_OFF;
+    const ImU32 body = person.role == TouchlineRole::SUBSTITUTE ? shadeColor(kit.shirt, T::SUB_SHADE)
+                       : person.role == TouchlineRole::SENT_OFF ? kit.shirt
+                       : manager                                ? T::SUIT_COLOR
+                                                                : T::STAFF_COLOR;
     drawList->AddCircleFilled(centre, radius + std::max(1.0f, px(1.0f)), T::OUTLINE_COLOR);
-    if (person.role != TouchlineRole::SUBSTITUTE)
-      drawList->AddCircleFilled(centre, radius, kit.shirt);
-    drawList->AddCircleFilled(
-        centre, person.role == TouchlineRole::SUBSTITUTE ? radius : radius * 0.7f, body);
+    if (!inColours) drawList->AddCircleFilled(centre, radius, kit.shirt);
+    drawList->AddCircleFilled(centre, inColours ? radius : radius * 0.7f, body);
   }
 }
 

@@ -331,6 +331,27 @@ inline Vector2F routeViaTunnel(Vector2F at, Vector2F target)
   return target;
 }
 
+/**
+ * Where a player at `at` (metres) leaves the pitch: the nearest point of
+ * the boundary, a little over it (beside the goal, not through it).
+ */
+inline Vector2F nearestExit(Vector2F at)
+{
+  namespace G = MatchGround;
+  const float out = MatchTuning::Body::RADIUS_METRES + 0.3f;
+  const std::array<std::pair<float, Vector2F>, 4> exits{{
+      {at.y, {at.x, -out}},
+      {G::WIDTH - at.y, {at.x, G::WIDTH + out}},
+      {at.x, {-out, at.y}},
+      {G::LENGTH - at.x, {G::LENGTH + out, at.y}},
+  }};
+  Vector2F exit = std::ranges::min(exits, {}, &std::pair<float, Vector2F>::first).second;
+  constexpr float CLEAR_OF_POST = MatchTuning::Shooting::GOAL_HALF_WIDTH_METRES + 1.5f;
+  if ((exit.x < 0.0f || exit.x > G::LENGTH) && std::abs(exit.y - 0.5f * G::WIDTH) < CLEAR_OF_POST)
+    exit.y = 0.5f * G::WIDTH + (exit.y < 0.5f * G::WIDTH ? -CLEAR_OF_POST : CLEAR_OF_POST);
+  return exit;
+}
+
 /** A body's step from `from` to `to`, where it can physically go: round
  * the pitch (keepOffGround) and out of the goal frames. */
 inline Vector2F moveBody(Vector2F from, Vector2F to)
