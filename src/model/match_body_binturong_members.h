@@ -278,8 +278,25 @@
    * shot first meets his torso or a leg, and what it meets: his stride
    * (shot block plan §3c, rolled once per path) until he has reacted, then
    * a leg put across its line if he can reach it (§3d). */
-  std::optional<std::pair<float, ShotBodyPart>> shotMeetsBodyBinturong(
-      const MatchPlayer& player, std::size_t slot, Point3F from, Point3F to);
+  std::optional<ShotBodyHit> shotMeetsBodyBinturong(const MatchPlayer& player,
+                                                    std::size_t slot, Point3F from, Point3F to);
+  /** The check (shot block plan §3f): a shot that met nothing on him, but
+   * whose path against his own move over the sub-step went well inside his
+   * torso, is counted. */
+  /** How far through the step (share) this stretch of the ball's flight
+   * begins and ends: where each player is along his move over it. */
+  [[nodiscard]] std::pair<float, float> stretchStepSharesBinturong() const;
+  void checkShotThroughTorsoBinturong(const MatchPlayer& player, std::size_t slot, Point3F from,
+                                      Point3F to);
+  /** A shot off his body where it met him (shot block plan step 3): off
+   * the surface against its own motion, spring-back and grip by the part,
+   * spin from the grip; a leg put out's foot turned a little to send it
+   * away from his goal. */
+  void bounceShotOffBodyBinturong(const MatchPlayer& player, const ShotBodyHit& hit);
+  /** After a shot is turned (off a body or the woodwork; shot block plan
+   * step 4): whether it is still heading into the goal it was struck at;
+   * if so it stays a shot, on target, and the keeper reads it afresh. */
+  bool shotStaysOnGoalBinturong();
   /** Once he has reacted to a shot (shot block plan §3d): whether he puts
    * a leg across its line, seen on the path from `start` to `end` (from his
    * centre on the ground, metres), and where; fills `legs`. */

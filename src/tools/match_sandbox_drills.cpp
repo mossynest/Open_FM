@@ -3903,6 +3903,13 @@ class ShotBlockDrill final : public Drill
                            "His leg out to full reach: 0.45 s at 1 to 0.25 s at "
                            "99; his miss 0.25 m to 0.05 m (doubled when rushed)."));
     list.push_back(setting("Height (cm)", &height, 160.0f, 205.0f, true));
+    DrillParameter keeper = setting("Keeper", &keeperChoice, 0.0f, 1.0f, true,
+                                    "In goal: on his line in the middle, reading the "
+                                    "shot (and a deflection still going in, afresh).");
+    keeper.choices = {"None", "In goal"};
+    keeper.section = "Keeper";
+    list.push_back(keeper);
+    list.push_back(setting("Goalkeeping", &goalkeeping, 1.0f, 100.0f, true));
     return list;
   }
 
@@ -3928,7 +3935,11 @@ class ShotBlockDrill final : public Drill
     DrillPlayerSpec defender{"Defender", PlayerRole::CB, false, {{"Defending", defending}},
                              static_cast<int>(height)};
     defender.derived[DerivedStat::TACKLING] = tackling;
-    return {{"Shooter", PlayerRole::ST, true, {{"Shooting", shooting}}, 180}, defender};
+    std::vector<DrillPlayerSpec> list{
+        {"Shooter", PlayerRole::ST, true, {{"Shooting", shooting}}, 180}, defender};
+    if (keeperChoice > 0.5f)
+      list.push_back({"Keeper", PlayerRole::GK, false, {{"Goalkeeping", goalkeeping}}, 188});
+    return list;
   }
 
   void begin(MatchEngine& engine, const std::vector<PlayerID>& ids) override
@@ -3951,6 +3962,7 @@ class ShotBlockDrill final : public Drill
     MatchScenario scenario;
     scenario.players.push_back({shooterId, spot, false});
     scenario.players.push_back({defenderId, start, false});
+    if (keeperChoice > 0.5f) scenario.players.push_back({ids[2], {0.985f, 0.5f}, false});
     scenario.carrierId = shooterId;
     scenario.ballPosition = spot;
     engine.startDrill(scenario);
@@ -3981,9 +3993,13 @@ class ShotBlockDrill final : public Drill
     endAt.reset();
     legs.reset();
     closest = 99.0f;
+    stillShot = false;
+    afterBlock.clear();
     part.clear();
     blocksBefore = engine.getStats().shotBlocksByPart;
     reactionBefore = engine.getStats().shotReactionBlocks;
+    throughBefore = throughNow = engine.getStats().shotTorsoPassThroughs;
+    insideBefore = insideNow = engine.getStats().shotTorsoInsideAtStart;
   }
 
   bool afterStep(MatchEngine& engine) override
@@ -4027,6 +4043,7 @@ class ShotBlockDrill final : public Drill
         case MatchEventType::OWN_GOAL: outcome = "goal"; break;
         case MatchEventType::WOODWORK: outcome = "woodwork"; break;
         case MatchEventType::SHOT_BLOCKED: outcome = "blocked"; break;
+        case MatchEventType::SAVE: outcome = "saved"; break;
         case MatchEventType::GOAL_KICK:
         case MatchEventType::CORNER:
         case MatchEventType::THROW_IN: outcome = "off target"; break;
@@ -4040,15 +4057,51 @@ class ShotBlockDrill final : public Drill
       const auto slot = static_cast<std::size_t>(defender - engine.getPlayers().data());
       if (const auto recent = engine.recentShotLegs(slot, 10.0f)) legs = recent->first;
       closest = std::min(closest, metresBetween(engine.getBall().position, defender->position));
+      throughNow = engine.getStats().shotTorsoPassThroughs;
+      insideNow = engine.getStats().shotTorsoInsideAtStart;
     }
     if (outcome == "blocked" && part.empty())
     {
+      // Off him, as it left him: how fast, turned how far from the shot's
+      // line, how much it rose, its spin.
+      const MatchEngine::ShotBounce& off = engine.lastShotBounce();
+      offSpeed = std::hypot(off.velocity.x, off.velocity.y);
+      offUp = off.velocity.z;
+      offSpin = off.spin;
+      offNormalUp = off.hit.normal.z;
+      offPart = static_cast<int>(off.hit.part);
+      const Vector2F shotLine = directionBetween(spot, {1.0f, 0.5f + aimAcross / WIDTH});
+      offTurn = offSpeed > 1e-3f
+                    ? turnDegrees(shotLine, {off.velocity.x / offSpeed, off.velocity.y / offSpeed})
+                    : 0.0f;
       const MatchStats& stats = engine.getStats();
       static constexpr std::array<const char*, 4> PARTS{"torso", "thigh", "shin", "foot"};
       for (std::size_t index = 0; index < PARTS.size(); ++index)
         if (stats.shotBlocksByPart[index] > blocksBefore[index]) part = PARTS[index];
       if (!part.empty() && part != "torso")
         part += stats.shotReactionBlocks > reactionBefore ? " (reaction block)" : " (stride)";
+      // Still going in off him: still the shot (shot block plan step 4).
+      stillShot = engine.getBall().isShot;
+    }
+    // After a block: what came of it (a goal, in off him or from a rebound;
+    // a save; out; or someone's).
+    if (outcome == "blocked" && afterBlock.empty())
+    {
+      for (; seenEvents < events.size() && afterBlock.empty(); ++seenEvents)
+        switch (events[seenEvents].type)
+        {
+          case MatchEventType::GOAL:
+          case MatchEventType::OWN_GOAL: afterBlock = "goal"; break;
+          case MatchEventType::SAVE: afterBlock = "saved"; break;
+          case MatchEventType::CORNER: afterBlock = "corner"; break;
+          case MatchEventType::GOAL_KICK:
+          case MatchEventType::THROW_IN: afterBlock = "out"; break;
+          default: break;
+        }
+      const MatchBall& ball = engine.getBall();
+      if (afterBlock.empty() && ball.possessedBy && !ball.inTouch)
+        afterBlock = ball.possessedBy->getId() == defenderId ? "his" : "shooter's";
+      if (afterBlock.empty() && endAt && now >= *endAt + 4.0) afterBlock = "loose";
     }
     if (outcome.empty() && !shotAt && now >= 10.0) outcome = "no shot";
     if (outcome.empty() && shotAt && now >= *shotAt + 6.0) outcome = "no outcome";
@@ -4057,7 +4110,7 @@ class ShotBlockDrill final : public Drill
       endAt = now;
       tally();
     }
-    return !(endAt && now >= *endAt + 1.0);
+    return !(endAt && now >= *endAt + 1.0 && (outcome != "blocked" || !afterBlock.empty()));
   }
 
   void drawOverlay(const IMatchRenderer& renderer, ImDrawList& draw) const override
@@ -4100,6 +4153,13 @@ class ShotBlockDrill final : public Drill
     }
     if (!outcome.empty())
       lines.push_back("OUTCOME  " + outcome + (part.empty() ? "" : " off his " + part));
+    if (outcome == "blocked")
+      lines.push_back(std::format("{} off him; then: {}", stillShot ? "Still a shot" : "Loose",
+                                  afterBlock.empty() ? "..." : afterBlock));
+    if (outcome == "blocked")
+      lines.push_back(std::format("Off him at {:.1f} m/s, turned {:.0f} deg from the shot's line, "
+                                  "{:+.1f} m/s up; spin {:+.0f} side, {:+.0f} top (rad/s)",
+                                  offSpeed, offTurn, offUp, offSpin.side, offSpin.top));
     if (const auto found = tallies.find(settingsKey()); found != tallies.end())
     {
       const Tally& t = found->second;
@@ -4143,7 +4203,22 @@ class ShotBlockDrill final : public Drill
         {"No leg: out of reach", noLeg("reach")},
         {"No leg: behind him", noLeg("behind")},
         {"No leg: past him", noLeg("past")},
+        {"Still a shot", blocked && stillShot ? 1.0 : 0.0},
+        {"Goal after", afterBlock == "goal" ? 1.0 : 0.0},
+        {"Saved after", afterBlock == "saved" ? 1.0 : 0.0},
+        {"Corner after", afterBlock == "corner" ? 1.0 : 0.0},
+        {"His ball after", afterBlock == "his" ? 1.0 : 0.0},
+        {"Shooter's ball after", afterBlock == "shooter's" ? 1.0 : 0.0},
+        {"Off him (m/s)", blocked ? offSpeed : 0.0},
+        {"Turned (deg)", blocked ? offTurn : 0.0},
+        {"Rising (m/s)", blocked ? offUp : 0.0},
+        {"Sidespin (rad/s)", blocked ? offSpin.side : 0.0},
+        {"Topspin (rad/s)", blocked ? offSpin.top : 0.0},
+        {"Surface facing up", blocked ? offNormalUp : 0.0},
+        {"Part hit", blocked ? static_cast<double>(offPart) : -1.0},
         {"Goal", outcome == "goal" ? 1.0 : 0.0},
+        {"Through torso unmet", static_cast<double>(throughNow - throughBefore)},
+        {"Inside at sub-step start", static_cast<double>(insideNow - insideBefore)},
     };
   }
 
@@ -4168,7 +4243,8 @@ class ShotBlockDrill final : public Drill
     return std::format("{:.1f}|{:.1f}|{:.2f}|{:.2f}|{:.2f}|{:.0f}|{:.1f}|{:.2f}|{:.0f}|{:.1f}|"
                        "{:.0f}|{:.0f}|{:.0f}",
                        line, side, aimAcross, aimHeight, power, shooting, distance, offLine,
-                       moving, runUp, defending, tackling, height);
+                       moving, runUp, defending, tackling, height) +
+           std::format("|{:.0f}|{:.0f}", keeperChoice, goalkeeping);
   }
   void tally()
   {
@@ -4195,7 +4271,17 @@ class ShotBlockDrill final : public Drill
   float offLine = 0.7f;
   float moving = 0.0f;
   float runUp = 12.0f;
+  float keeperChoice = 0.0f;
+  float goalkeeping = 70.0f;
   float offLineAtShot = 0.0f;
+  float offSpeed = 0.0f;
+  float offTurn = 0.0f;
+  float offUp = 0.0f;
+  BallSpin offSpin{};
+  float offNormalUp = 0.0f;
+  int offPart = -1;
+  bool stillShot = false;
+  std::string afterBlock;
   /** The nearest the ball came to him at a step's end while the shot was
    * on (m). */
   float closest = 99.0f;
@@ -4220,6 +4306,10 @@ class ShotBlockDrill final : public Drill
   std::optional<ShotLegs> legs;
   std::array<int, 4> blocksBefore{};
   int reactionBefore = 0;
+  int throughBefore = 0;
+  int throughNow = 0;
+  int insideBefore = 0;
+  int insideNow = 0;
   std::map<std::string, Tally> tallies;
 };
 // --- First touch -----------------------------------------------------------

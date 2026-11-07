@@ -787,8 +787,13 @@ void MatchEngine::bounceOffFrameBinturong()
     event.isHomeTeam = shooter->isHomeTeam;
     event.primaryPlayerId = shooter->player->getId();
   }
-  ball.isShot = false;
-  ball.shotOnTarget = false;
+  // Still going in, it is still a shot (the keeper reads it afresh);
+  // otherwise a loose ball (shot block plan step 4).
+  if (!shotStaysOnGoalBinturong())
+  {
+    ball.isShot = false;
+    ball.shotOnTarget = false;
+  }
 }
 
 bool MatchEngine::shotOffWoodworkStandsBinturong() const

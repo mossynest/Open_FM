@@ -940,6 +940,8 @@ struct ShotLegs
    * came of it. */
   bool reacted = false;
   ShotLegOutcome outcome = ShotLegOutcome::LEG_OUT;
+  /** Counted as gone through his torso (the check). */
+  bool passedThrough = false;
   /** He put a leg across its line: which, from when (s), how long it takes
    * to get out to `aim` (s), and how far out it had got when last met
    * (0-1). */
@@ -974,6 +976,20 @@ enum class ShotBodyPart : std::uint8_t
   THIGH,
   SHIN,
   FOOT,
+};
+
+/** Where a shot meets his body (shot block plan §3c-3): how far along the
+ * ball's stretch (0-1), the part, the surface's outward normal there (unit,
+ * metres), how fast that surface is moving (m/s: his own velocity, and a
+ * leg put out still going out), and whether it is the foot of a leg he put
+ * out (it may aim a little). */
+struct ShotBodyHit
+{
+  float share = 0.0f;
+  ShotBodyPart part = ShotBodyPart::TORSO;
+  Point3F normal{0.0f, 0.0f, 1.0f};
+  Point3F surfaceVelocity{};
+  bool blockFoot = false;
 };
 
 /** One contact the body is asked for (unified kick plan): a touch, with
@@ -1168,6 +1184,9 @@ struct MatchBall
   bool shotIsPenalty = false;
   bool shotFromSetPiece = false;
   bool shotSaveResolved = false;
+  /** An opponent's body has blocked this shot already (shot block plan
+   * step 4: one blocked shot per shot; after, a deflection). */
+  bool shotBlocked = false;
   /** Lofted delivery (cross, corner, long ball) that can be contested. */
   bool isAerialDelivery = false;
   /** Thrown in and untouched since: it cannot score directly. */
@@ -1351,6 +1370,15 @@ struct MatchStats
   /** Of those off a leg, the ones off a leg he put there (shot block plan
    * §3d: a reaction block) rather than his stride. */
   int shotReactionBlocks = 0;
+  /** Shots off a Binturong body that were no block (shot block plan step
+   * 4): off a team-mate, or off anyone once blocked already. */
+  int shotDeflections = 0;
+  /** Check (shot block plan §3f): shots whose path, against the player's
+   * own move over the sub-step, went well inside a Binturong torso without
+   * meeting him (one per shot and player; should be none), and of those,
+   * the ones already inside at a sub-step's start. */
+  int shotTorsoPassThroughs = 0;
+  int shotTorsoInsideAtStart = 0;
   /** Shots whose line passed within a Binturong outfielder's full reach
    * (shot block plan §3d), one per shot and defender; of those, what came
    * of it once he reacted (ShotLegOutcome; the rest: the ball got to him
@@ -1934,6 +1962,18 @@ class MatchEngine
    * sandbox's true view shows them; drills report them). */
   std::optional<std::pair<ShotLegs, float>> recentShotLegs(std::size_t slot,
                                                            float maxAgeSeconds) const;
+  /** The last shot off a Binturong body as it left him (shot block plan
+   * step 3), before anything after (a clear-behind): velocity (m/s, up as
+   * z), spin, and when (ball clock, s; negative: none yet). For drills. */
+  struct ShotBounce
+  {
+    Point3F velocity{};
+    BallSpin spin{};
+    double at = -1.0;
+    /** Where it met him (the part, the surface's normal). */
+    ShotBodyHit hit{};
+  };
+  const ShotBounce& lastShotBounce() const { return shotBounce; }
 
   /** Playback mode used by advancePlayback(); FULL_MATCH by default. */
   void setPlaybackMode(MatchPlaybackMode mode);
@@ -2971,7 +3011,10 @@ class MatchEngine
   /** Each player's legs as a shot passing him met them (shot block plan
    * §3c, §3d). */
   std::vector<ShotLegs> shotLegPoses;
+  ShotBounce shotBounce;
   float substepStretchSeconds = 0.0f;
+  /** How much of the sub-step had gone (share) when this stretch began. */
+  float substepStretchFromShare = 0.0f;
   /** Whether the ball is still on the path the physics read for the
    * stretch (no parry or woodwork has turned it since). */
   bool substepPathKnown = true;

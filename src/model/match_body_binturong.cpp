@@ -4004,6 +4004,8 @@ struct GoalLineCrossing
 {
   float sideways = 0.0f;
   float height = 0.0f;
+  /** It gets there (rather than stopping short or going the other way). */
+  bool reaches = false;
 };
 GoalLineCrossing predictGoalLineCrossing(const MatchEngine& engine,
                                          Vector2F origin, Vector2F heading,
@@ -4046,6 +4048,7 @@ GoalLineCrossing predictGoalLineCrossing(const MatchEngine& engine,
       crossing.sideways = sidewaysAtOrigin + y + (nextY - y) * share;
       crossing.height =
           previousHeight + (flight.height - previousHeight) * share;
+      crossing.reaches = true;
       return crossing;
     }
     x = nextX;
@@ -4515,39 +4518,47 @@ std::optional<float> uprightEntry(Point3F from, Point3F to, float radius, float 
   return low;
 }
 
-/** Where along the path (share 0-1) the ball first enters a box lying
- * flat, `facing` along its length (metric, unit), of half sizes `half`
- * (length, width, height). */
-std::optional<float> boxEntry(Point3F from, Point3F to, Point3F centre, Vector2F facing,
-                              Point3F half)
+/** Where along the path (share 0-1) a ball of `radius` first touches a box
+ * lying flat (`facing` along its length, metric unit; half sizes `half`
+ * without the ball): the box grown by the ball with rounded edges and
+ * corners, so a ball skimming an edge meets it where it really would. */
+std::optional<float> roundedBoxEntry(Point3F from, Point3F to, Point3F centre, Vector2F facing,
+                                     Point3F half, float radius)
 {
-  const auto local = [&](Point3F point)
+  const auto gap = [&](float share)
   {
-    const Point3F offset = minus(point, centre);
-    return Point3F{offset.x * facing.x + offset.y * facing.y,
-                   -offset.x * facing.y + offset.y * facing.x, offset.z};
+    const Point3F offset = minus(along3(from, to, share), centre);
+    const Point3F local{offset.x * facing.x + offset.y * facing.y,
+                        -offset.x * facing.y + offset.y * facing.x, offset.z};
+    const float x = std::max(std::abs(local.x) - half.x, 0.0f);
+    const float y = std::max(std::abs(local.y) - half.y, 0.0f);
+    const float z = std::max(std::abs(local.z) - half.z, 0.0f);
+    return std::sqrt(x * x + y * y + z * z);
   };
-  const Point3F start = local(from);
-  const Point3F end = local(to);
+  // The distance to a box along a line is convex: its least by thirds,
+  // then where it first came within reach by halving.
   float low = 0.0f;
   float high = 1.0f;
-  const std::array<float, 3> starts{start.x, start.y, start.z};
-  const std::array<float, 3> moves{end.x - start.x, end.y - start.y, end.z - start.z};
-  const std::array<float, 3> halves{half.x, half.y, half.z};
-  for (std::size_t axis = 0; axis < 3; ++axis)
+  for (int iteration = 0; iteration < 40; ++iteration)
   {
-    if (std::abs(moves[axis]) <= EPSILON)
-    {
-      if (std::abs(starts[axis]) > halves[axis]) return std::nullopt;
-      continue;
-    }
-    const float first = (-halves[axis] - starts[axis]) / moves[axis];
-    const float second = (halves[axis] - starts[axis]) / moves[axis];
-    low = std::max(low, std::min(first, second));
-    high = std::min(high, std::max(first, second));
-    if (low > high) return std::nullopt;
+    const float first = low + (high - low) / 3.0f;
+    const float second = high - (high - low) / 3.0f;
+    if (gap(first) <= gap(second))
+      high = second;
+    else
+      low = first;
   }
-  return low;
+  const float closest = 0.5f * (low + high);
+  if (gap(closest) > radius) return std::nullopt;
+  if (gap(0.0f) <= radius) return 0.0f;
+  float outside = 0.0f;
+  float inside = closest;
+  for (int iteration = 0; iteration < 20; ++iteration)
+  {
+    const float middle = 0.5f * (outside + inside);
+    (gap(middle) <= radius ? inside : outside) = middle;
+  }
+  return inside;
 }
 
 /** The ball's line along the ground as it passes him (shot block plan
@@ -4586,28 +4597,66 @@ std::optional<PassingLine> passingLineOf(Point3F start, Point3F end, float secon
 }
 }  // namespace
 
-std::optional<std::pair<float, ShotBodyPart>> MatchEngine::shotMeetsBodyBinturong(
-    const MatchPlayer& player, std::size_t slot, Point3F from, Point3F to)
+std::optional<ShotBodyHit> MatchEngine::shotMeetsBodyBinturong(const MatchPlayer& player,
+                                                               std::size_t slot, Point3F from,
+                                                               Point3F to)
 {
   using S = MatchTuning::Stride;
   const float ballRadius = MatchTuning::Units::BALL_RADIUS_METRES;
   const float scale = player.heightMetres / S::REFERENCE_HEIGHT_METRES;
-  // From his centre on the ground (off it in a jump).
-  const Vector2F centre = toMetres(player.position);
-  const Point3F base{centre.x, centre.y, player.feetHeight};
+  // From his centre on the ground (off it in a jump), part-way along his
+  // move over the step: the ball's path is read against him as he moves
+  // through this stretch (from where he is as it starts to where he is as
+  // it ends), so it meets him where he is when it gets there.
+  const Vector2F was =
+      slot < previousPlayerPositions.size() ? previousPlayerPositions[slot] : player.position;
+  const auto baseAt = [&](float stepShare)
+  {
+    const Vector2F centre = toMetres({was.x + (player.position.x - was.x) * stepShare,
+                                      was.y + (player.position.y - was.y) * stepShare});
+    return Point3F{centre.x, centre.y,
+                   feetAtBinturong(player, ballStepSeconds * (1.0f - stepShare))};
+  };
+  const auto [fromShare, toShare] = stretchStepSharesBinturong();
+  const Point3F base = baseAt(toShare);
+  // Against him where he is at the stretch's end (his reach and his leg's
+  // aim reckon his own motion themselves); and against him as he moves, for
+  // where it meets him.
   const Point3F start = minus(from, base);
   const Point3F end = minus(to, base);
+  const Point3F moving = minus(from, baseAt(fromShare));
 
-  std::optional<std::pair<float, ShotBodyPart>> first;
-  const auto take = [&](std::optional<float> share, ShotBodyPart part)
+  // The first surface it meets, and its shape, for the normal there: his
+  // torso (an upright cylinder), a rod from `a` to `b` (thigh, shin) or a
+  // foot box (centre `a`, its length along `facing`, half sizes `half`
+  // without the ball); `leg` for a leg's own motion.
+  enum class Shape : std::uint8_t { TORSO, ROD, BOX };
+  struct Candidate
   {
-    if (share && (!first || *share < first->first)) first = std::pair{*share, part};
+    float share = 0.0f;
+    ShotBodyPart part = ShotBodyPart::TORSO;
+    Shape shape = Shape::TORSO;
+    Point3F a{};
+    Point3F b{};
+    Vector2F facing{};
+    Point3F half{};
+    std::size_t leg = 0;
+  };
+  // Every surface its path reaches on this stretch (torso, and each leg's
+  // thigh, shin and foot).
+  std::array<Candidate, 7> candidates{};
+  std::size_t candidateCount = 0;
+  const auto take = [&](std::optional<float> share, Candidate candidate)
+  {
+    if (!share || candidateCount >= candidates.size()) return;
+    candidate.share = *share;
+    candidates[candidateCount++] = candidate;
   };
   // His torso: solid, 50 cm across, from his hip to the top of his head.
   const float hip = bodyLines(player).chest;
-  take(uprightEntry(start, end, MatchTuning::Body::RADIUS_METRES + ballRadius,
-                    hip - ballRadius, player.heightMetres + ballRadius),
-       ShotBodyPart::TORSO);
+  const float torsoReach = MatchTuning::Body::RADIUS_METRES + ballRadius;
+  take(uprightEntry(moving, end, torsoReach, hip - ballRadius, player.heightMetres + ballRadius),
+       {});
 
   // Below it, his legs where his stride has them: rolled once for this
   // path, as he moves (in a jump, as he stands).
@@ -4662,22 +4711,285 @@ std::optional<std::pair<float, ShotBodyPart>> MatchEngine::shotMeetsBodyBinturon
     legs.pose = legs.stride;
   }
   legs.rolledAt = ballNow();
-  const Point3F foot{0.5f * S::FOOT_LENGTH * scale + ballRadius,
-                     0.5f * S::FOOT_WIDTH * scale + ballRadius,
-                     0.5f * S::FOOT_HEIGHT * scale + ballRadius};
   const float footAhead = (0.5f * S::FOOT_LENGTH - S::HEEL_BEHIND_ANKLE) * scale;
-  for (const LegPose::Leg& leg : legs.pose.legs)
+  const Point3F footHalf{0.5f * S::FOOT_LENGTH * scale, 0.5f * S::FOOT_WIDTH * scale,
+                         0.5f * S::FOOT_HEIGHT * scale};
+  for (std::size_t index = 0; index < legs.pose.legs.size(); ++index)
   {
-    take(rodEntry(start, end, leg.hip, leg.knee, S::THIGH_RADIUS * scale + ballRadius),
-         ShotBodyPart::THIGH);
-    take(rodEntry(start, end, leg.knee, leg.ankle, S::SHIN_RADIUS * scale + ballRadius),
-         ShotBodyPart::SHIN);
+    const LegPose::Leg& leg = legs.pose.legs[index];
+    take(rodEntry(moving, end, leg.hip, leg.knee, S::THIGH_RADIUS * scale + ballRadius),
+         {0.0f, ShotBodyPart::THIGH, Shape::ROD, leg.hip, leg.knee, {}, {}, index});
+    take(rodEntry(moving, end, leg.knee, leg.ankle, S::SHIN_RADIUS * scale + ballRadius),
+         {0.0f, ShotBodyPart::SHIN, Shape::ROD, leg.knee, leg.ankle, {}, {}, index});
     const Point3F footCentre{leg.ankle.x + leg.footFacing.x * footAhead,
                              leg.ankle.y + leg.footFacing.y * footAhead,
                              leg.ankle.z - 0.5f * S::FOOT_HEIGHT * scale};
-    take(boxEntry(start, end, footCentre, leg.footFacing, foot), ShotBodyPart::FOOT);
+    take(roundedBoxEntry(moving, end, footCentre, leg.footFacing, footHalf, ballRadius),
+         {0.0f, ShotBodyPart::FOOT, Shape::BOX, footCentre, {}, leg.footFacing, footHalf, index});
   }
-  return first;
+  // The first surface along its path that it is coming into, against that
+  // surface's own motion (a ball on its way out of one meets nothing
+  // there).
+  std::sort(candidates.begin(), candidates.begin() + static_cast<std::ptrdiff_t>(candidateCount),
+            [](const Candidate& a, const Candidate& b) { return a.share < b.share; });
+  const auto unit = [](Point3F v, Point3F fallback)
+  {
+    const float size = std::hypot(v.x, v.y, v.z);
+    return size > 1e-5f ? Point3F{v.x / size, v.y / size, v.z / size} : fallback;
+  };
+  const Point3F back = unit(minus(start, end), {0.0f, 0.0f, 1.0f});
+  const Point3F ballVelocity =
+      substepStretchSeconds > EPSILON
+          ? Point3F{(end.x - start.x) / substepStretchSeconds,
+                    (end.y - start.y) / substepStretchSeconds,
+                    (end.z - start.z) / substepStretchSeconds}
+          : Point3F{};
+  for (std::size_t index = 0; index < candidateCount; ++index)
+  {
+    const Candidate& first = candidates[index];
+    // The normal where it meets it: from the nearest point of that surface
+    // to the ball's centre (a box's edges and corners rounded by the ball).
+    const Point3F at = along3(moving, end, first.share);
+    ShotBodyHit hit;
+    hit.share = first.share;
+    hit.part = first.part;
+    switch (first.shape)
+    {
+      case Shape::TORSO:
+      {
+        // Its side, or under the hip, or the top of his head: whichever it
+        // is nearest (already inside him: the way out it is least deep).
+        const float side = torsoReach - std::hypot(at.x, at.y);
+        const float under = at.z - (hip - ballRadius);
+        const float over = player.heightMetres + ballRadius - at.z;
+        if (side <= std::min(under, over))
+          hit.normal = unit({at.x, at.y, 0.0f}, back);
+        else
+          hit.normal = under < over ? Point3F{0.0f, 0.0f, -1.0f} : Point3F{0.0f, 0.0f, 1.0f};
+        break;
+      }
+      case Shape::ROD:
+      {
+        const Point3F axis = minus(first.b, first.a);
+        const float axisSquared = dot3(axis, axis);
+        const float t = axisSquared > EPSILON
+                            ? std::clamp(dot3(minus(at, first.a), axis) / axisSquared, 0.0f, 1.0f)
+                            : 0.0f;
+        hit.normal = unit(minus(at, along3(first.a, first.b, t)), back);
+        break;
+      }
+      case Shape::BOX:
+      {
+        const Vector2F f = first.facing;
+        const Point3F offset = minus(at, first.a);
+        const Point3F local{offset.x * f.x + offset.y * f.y, -offset.x * f.y + offset.y * f.x,
+                            offset.z};
+        const Point3F out{local.x - std::clamp(local.x, -first.half.x, first.half.x),
+                          local.y - std::clamp(local.y, -first.half.y, first.half.y),
+                          local.z - std::clamp(local.z, -first.half.z, first.half.z)};
+        const Point3F localNormal = unit(out, {0.0f, 0.0f, 1.0f});
+        hit.normal = unit({localNormal.x * f.x - localNormal.y * f.y,
+                           localNormal.x * f.y + localNormal.y * f.x, localNormal.z},
+                          back);
+        break;
+      }
+    }
+    // The surface's motion: his own, and a leg put out still going out (its
+    // foot at the ankle's pace, the shin most of it, the thigh a little).
+    hit.surfaceVelocity = {player.velocity.x, player.velocity.y, 0.0f};
+    if (legs.blocking && first.part != ShotBodyPart::TORSO && first.leg == legs.leg &&
+        legs.outShare < 1.0f && legs.legSeconds > EPSILON)
+    {
+      const Point3F under{legs.pose.legs[legs.leg].hip.x, legs.pose.legs[legs.leg].hip.y,
+                          S::FOOT_HEIGHT * scale};
+      const float share = first.part == ShotBodyPart::FOOT   ? 1.0f
+                          : first.part == ShotBodyPart::SHIN ? 0.75f
+                                                             : 0.25f;
+      const float rate = share / legs.legSeconds;
+      hit.surfaceVelocity.x += (legs.aim.x - under.x) * rate;
+      hit.surfaceVelocity.y += (legs.aim.y - under.y) * rate;
+      hit.surfaceVelocity.z += (legs.aim.z - under.z) * rate;
+    }
+    const float into = dot3(minus(ballVelocity, hit.surfaceVelocity), hit.normal);
+    if (into >= 0.0f) continue;
+    // Inside it already at the start (he moved into its path over his
+    // step, or two bodies closer than their width): it meets him only if
+    // they are clearly coming together.
+    if (first.share <= 1e-6f && into > -MatchTuning::ShotBlock::INSIDE_MEETS_SPEED) continue;
+    hit.blockFoot = legs.blocking && first.part == ShotBodyPart::FOOT && first.leg == legs.leg;
+    return hit;
+  }
+  return std::nullopt;
+}
+
+std::pair<float, float> MatchEngine::stretchStepSharesBinturong() const
+{
+  const int substepsPerStep =
+      MatchTuning::Timing::BALL_SUBSTEPS * static_cast<int>(stepTicks);
+  const float substepSeconds = ballStepSeconds / static_cast<float>(substepsPerStep);
+  const float done = static_cast<float>(substepsPerStep - 1 - substepsLeftInStep);
+  const float stretch = substepSeconds > EPSILON ? substepStretchSeconds / substepSeconds : 1.0f;
+  const float from = (done + substepStretchFromShare) / static_cast<float>(substepsPerStep);
+  const float to = (done + substepStretchFromShare + stretch) / static_cast<float>(substepsPerStep);
+  return {std::clamp(from, 0.0f, 1.0f), std::clamp(to, 0.0f, 1.0f)};
+}
+
+void MatchEngine::checkShotThroughTorsoBinturong(const MatchPlayer& player, std::size_t slot,
+                                                 Point3F from, Point3F to)
+{
+  if (slot >= shotLegPoses.size() || shotLegPoses[slot].passedThrough) return;
+  // Where he was as the stretch began and ended (part-way along his move
+  // over the step), and the ball's path against him over it.
+  const Vector2F was =
+      slot < previousPlayerPositions.size() ? previousPlayerPositions[slot] : player.position;
+  const auto at = [&](float share)
+  {
+    return toMetres({was.x + (player.position.x - was.x) * share,
+                     was.y + (player.position.y - was.y) * share});
+  };
+  const auto [fromShare, toShare] = stretchStepSharesBinturong();
+  const Vector2F first = at(fromShare);
+  const Vector2F last = at(toShare);
+  // Well inside: 5 cm into his torso, 5 cm clear of his hip and his head.
+  constexpr float MARGIN = 0.05f;
+  const float inside =
+      MatchTuning::Body::RADIUS_METRES + MatchTuning::Units::BALL_RADIUS_METRES - MARGIN;
+  const float bottom = bodyLines(player).chest + MARGIN;
+  const float top = player.heightMetres - MARGIN;
+  constexpr int SAMPLES = 32;
+  for (int index = 0; index <= SAMPLES; ++index)
+  {
+    const float share = static_cast<float>(index) / SAMPLES;
+    const Point3F ball = along3(from, to, share);
+    const float x = ball.x - (first.x + (last.x - first.x) * share);
+    const float y = ball.y - (first.y + (last.y - first.y) * share);
+    if (ball.z < bottom || ball.z > top || std::hypot(x, y) > inside) continue;
+    shotLegPoses[slot].passedThrough = true;
+    ++stats.shotTorsoPassThroughs;
+    if (index == 0) ++stats.shotTorsoInsideAtStart;
+    return;
+  }
+}
+
+bool MatchEngine::shotStaysOnGoalBinturong()
+{
+  // Where its flight from here, spin and all, crosses the goal line the
+  // shot was going for: between the posts and under the bar, it is still a
+  // shot, and the keeper reads it afresh.
+  using P = MatchTuning::Pitch;
+  const float goalX = ball.shotByHome ? 1.0f : 0.0f;
+  const float speed = length(ball.velocity);
+  if (speed <= EPSILON) return false;
+  const Vector2F heading{ball.velocity.x / speed, ball.velocity.y / speed};
+  const GoalLineCrossing crossing = predictGoalLineCrossing(
+      *this, ball.position, heading, speed, ball.velocityZ,
+      ball.z * MatchTuning::Units::BALL_Z_METRES, goalX, ball.spin);
+  const float halfGoal = MatchTuning::Shooting::GOAL_HALF_WIDTH_METRES;
+  if (!crossing.reaches ||
+      std::abs(crossing.sideways) >= halfGoal - MatchTuning::Units::BALL_RADIUS_METRES ||
+      crossing.height >=
+          MatchTuning::Units::CROSSBAR_HEIGHT_METRES - MatchTuning::Units::BALL_RADIUS_METRES)
+    return false;
+  ball.shotOnTarget = true;
+  ball.shotSaveResolved = false;
+  ball.shotTargetY = P::CENTRE + crossing.sideways / P::WIDTH_METRES;
+  ball.shotTargetHeightMetres = crossing.height;
+  planGoalkeeperDive(!ball.shotByHome, false);
+  return true;
+}
+
+void MatchEngine::bounceShotOffBodyBinturong(const MatchPlayer& player, const ShotBodyHit& hit)
+{
+  using K = MatchTuning::ShotBlock;
+  using B = MatchTuning::Ball;
+  const auto part = static_cast<std::size_t>(hit.part);
+  const float radius = B::RADIUS_METRES;
+  const float inertia = B::BALL_INERTIA_SHARE;
+  const Point3F velocity{ball.velocity.x, ball.velocity.y, ball.velocityZ};
+  // Its spin as a turning (rad/s) about the vertical and about the
+  // horizontal across its heading (BallSpin's axes).
+  const float speed = length(ball.velocity);
+  const Vector2F heading =
+      speed > EPSILON ? Vector2F{ball.velocity.x / speed, ball.velocity.y / speed}
+                      : Vector2F{1.0f, 0.0f};
+  const Point3F spin{-heading.y * ball.spin.top, heading.x * ball.spin.top, ball.spin.side};
+  const auto cross = [](Point3F a, Point3F b)
+  { return Point3F{a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x}; };
+  const auto plus = [](Point3F a, Point3F b) { return Point3F{a.x + b.x, a.y + b.y, a.z + b.z}; };
+  const auto times = [](Point3F a, float k) { return Point3F{a.x * k, a.y * k, a.z * k}; };
+
+  // Off a surface facing `normal`: against its motion, this share of its
+  // pace into it springs back; along it, the grip takes its slip (its pace
+  // against the surface at the contact, spin included) part of the way to
+  // rolling, as the grass does, trading pace for spin.
+  struct Outcome
+  {
+    Point3F velocity;
+    Point3F spin;
+  };
+  const auto bounce = [&](Point3F normal) -> Outcome
+  {
+    const Point3F relative = minus(velocity, hit.surfaceVelocity);
+    const float into = dot3(relative, normal);
+    if (into >= 0.0f) return {velocity, spin};
+    const Point3F alongSurface = minus(relative, times(normal, into));
+    const Point3F slipAll = plus(alongSurface, cross(spin, times(normal, -radius)));
+    const Point3F slip = minus(slipAll, times(normal, dot3(slipAll, normal)));
+    const float grip = (1.0f - K::ALONG_KEPT[part]) * (1.0f + inertia);
+    const Point3F change = times(slip, -grip / (1.0f + inertia));
+    const Point3F after =
+        plus(plus(alongSurface, change), times(normal, -into * K::SPRING_BACK[part]));
+    return {plus(after, hit.surfaceVelocity),
+            minus(spin, times(cross(normal, change), 1.0f / (inertia * radius)))};
+  };
+
+  Outcome outcome = bounce(hit.normal);
+  if (hit.blockFoot)
+  {
+    // A leg put out, met with the foot: its face turned a little (Tackling)
+    // to send it away from his goal.
+    const float tackling =
+        std::clamp((player.derivedStat(DerivedStat::TACKLING) - STAT_1_RATING) /
+                       (STAT_99_RATING - STAT_1_RATING),
+                   0.0f, 1.0f);
+    const float most = (K::FOOT_AIM_DEGREES_POOR +
+                        (K::FOOT_AIM_DEGREES_BEST - K::FOOT_AIM_DEGREES_POOR) * tackling) *
+                       std::numbers::pi_v<float> / 180.0f;
+    const Vector2F at = toMetres(ball.position);
+    const Vector2F goal = toMetres({player.isHomeTeam ? 0.0f : 1.0f, 0.5f});
+    const Vector2F away = normalized({at.x - goal.x, at.y - goal.y});
+    const auto awayness = [&](const Outcome& candidate)
+    {
+      const float size = std::hypot(candidate.velocity.x, candidate.velocity.y);
+      return size > EPSILON ? (candidate.velocity.x * away.x + candidate.velocity.y * away.y) / size
+                            : -1.0f;
+    };
+    float best = awayness(outcome);
+    constexpr int TURNS = 8;
+    for (int turn = -TURNS; turn <= TURNS; ++turn)
+    {
+      const float angle = most * static_cast<float>(turn) / static_cast<float>(TURNS);
+      const Point3F turned{hit.normal.x * std::cos(angle) - hit.normal.y * std::sin(angle),
+                           hit.normal.x * std::sin(angle) + hit.normal.y * std::cos(angle),
+                           hit.normal.z};
+      const Outcome candidate = bounce(turned);
+      if (const float score = awayness(candidate); score > best)
+      {
+        best = score;
+        outcome = candidate;
+      }
+    }
+  }
+
+  ball.velocity = {outcome.velocity.x, outcome.velocity.y};
+  ball.velocityZ = outcome.velocity.z;
+  // Its spin about its new heading's axes (any about the heading itself,
+  // a spin the ball's flight doesn't have, is let go).
+  const float after = length(ball.velocity);
+  const Vector2F newHeading =
+      after > EPSILON ? Vector2F{ball.velocity.x / after, ball.velocity.y / after} : heading;
+  ball.spin = {outcome.spin.z, -newHeading.y * outcome.spin.x + newHeading.x * outcome.spin.y};
+  shotBounce = {outcome.velocity, ball.spin, ballNow(), hit};
 }
 
 void MatchEngine::planShotBlockBinturong(const MatchPlayer& player, ShotLegs& legs,

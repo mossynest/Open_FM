@@ -154,6 +154,10 @@ struct MatchSample
   int shot_body_blocks = 0;
   int shot_leg_blocks = 0;
   int shot_reaction_blocks = 0;
+  int shot_deflections = 0;
+  /** Shot block plan §3f check: shots through a torso without meeting it. */
+  int shot_torso_pass_throughs = 0;
+  int shot_torso_inside_at_start = 0;
   /** Shot block plan §3d: shots whose line passed within a defender's
    * full reach (per defender), and what came of it once he reacted
    * (ShotLegOutcome order); the rest, the ball got to him first. */

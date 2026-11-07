@@ -133,6 +133,33 @@ struct MatchTuning final
     static constexpr float ERROR_METRES_BEST = 0.05f;
     static constexpr float RUSHED_ERROR_FACTOR = 2.0f;
     static constexpr float RUSHED_SECONDS = 0.3f;
+
+    /**
+     * The meeting (shot block plan step 3, agreed for a first pass
+     * 2026-11-07): off the surface it meets, against his moving body. Of
+     * its pace straight into the surface this share springs back; of its
+     * pace along it, a ball with no spin keeps this share, the grip taking
+     * the rest as spin (as the grass does). Torso, thigh, shin, foot.
+     */
+    static constexpr float SPRING_BACK[4] = {0.35f, 0.35f, 0.50f, 0.55f};
+    static constexpr float ALONG_KEPT[4] = {0.80f, 0.80f, 0.85f, 0.85f};
+    /** A leg put out with the foot meeting it (agreed: a little aim): its
+     * face turned up to this far (degrees, about the vertical) to send it
+     * away from his goal; Tackling 1 to 99 (my placeholder). */
+    static constexpr float FOOT_AIM_DEGREES_POOR = 5.0f;
+    static constexpr float FOOT_AIM_DEGREES_BEST = 20.0f;
+
+    /** Afterwards (shot block plan step 4, agreed 2026-11-07): how long
+     * before he can play the ball again (s). Off his torso or his stride,
+     * just the ball bouncing off him; off a leg he put out, until it is
+     * back under him (as long as it took to go out) and this more. */
+    /** A ball already inside a body when a stretch begins (he stepped into
+     * its path, or two bodies closer than their width) meets it only if
+     * they are coming together at least this fast (m/s; my choice: a slow
+     * drift, as between two heads in a jump, would hold it there). */
+    static constexpr float INSIDE_MEETS_SPEED = 1.0f;
+    static constexpr float RECOVERY_BODY_SECONDS = 0.2f;
+    static constexpr float RECOVERY_LEG_EXTRA_SECONDS = 0.1f;
   };
 
   struct Pitch final
@@ -2273,6 +2300,9 @@ struct MatchTuning final
     static constexpr float TACKLE_WON = 0.13f;
     static constexpr float INTERCEPTION = 0.10f;
     static constexpr float CLEARANCE = 0.05f;
+    /** A blocked shot (shot block plan step 4): what it earned as a
+     * clearance until then (my placeholder). */
+    static constexpr float BLOCKED_SHOT = 0.05f;
     static constexpr float AERIAL_WON = 0.04f;
     static constexpr float SAVE = 0.32f;
     static constexpr float GOALKEEPER_GOAL_CONCEDED = -0.38f;

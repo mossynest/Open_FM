@@ -196,6 +196,9 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
   for (const int count : stats.shotBlocksByPart) sample.shot_body_blocks += count;
   sample.shot_leg_blocks = sample.shot_body_blocks - stats.shotBlocksByPart[0];
   sample.shot_reaction_blocks = stats.shotReactionBlocks;
+  sample.shot_deflections = stats.shotDeflections;
+  sample.shot_torso_pass_throughs = stats.shotTorsoPassThroughs;
+  sample.shot_torso_inside_at_start = stats.shotTorsoInsideAtStart;
   sample.shot_leg_chances = stats.shotLegChances;
   sample.shot_leg_outcomes = stats.shotLegOutcomes;
   sample.go_ins = stats.homeGoIns + stats.awayGoIns;
@@ -680,6 +683,12 @@ std::map<std::string, Estimate> matchMetrics(
   metrics["shot_reaction_block_share"] = ratioEstimate(
       column([](const MatchSample& s) { return s.shot_reaction_blocks; }),
       column([](const MatchSample& s) { return s.shot_body_blocks; }));
+  metrics["shot_deflections_per_shot"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.shot_deflections; }), shots);
+  metrics["shot_torso_pass_throughs_per_shot"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.shot_torso_pass_throughs; }), shots);
+  metrics["shot_torso_inside_at_start_per_shot"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.shot_torso_inside_at_start; }), shots);
   // Shot block plan §3d: defenders a shot's line passed within reach of,
   // and what came of each.
   const std::vector<double> legChances =

@@ -4206,21 +4206,19 @@ bool MatchEngine::choosesToBlockBinturong(const MatchPlayer& /*player*/)
   return true;
 }
 
-bool MatchEngine::choosesToPutBlockBehindBinturong(const MatchPlayer& player)
+bool MatchEngine::choosesToPutBlockBehindBinturong(const MatchPlayer& /*player*/)
 {
-  // Deep in his own half a blocker knocks the loose ball out of play.
-  const float ownDepth =
-      player.isHomeTeam ? player.position.x : 1.0f - player.position.x;
-  return ownDepth < MatchTuning::SetPiece::BLOCK_BEHIND_DEPTH &&
-         randomFloat(0.0f, 1.0f) < MatchTuning::SetPiece::BLOCK_BEHIND_CHANCE;
+  // No second kick after a block (shot block plan step 4): the ball goes
+  // where it comes off him.
+  return false;
 }
 
 bool MatchEngine::choosesToClearCrossBehindBinturong(
     const MatchPlayer& /*player*/)
 {
-  // Meeting a delivery close to his own goal line, he often plays safe.
-  return randomFloat(0.0f, 1.0f) <
-         MatchTuning::SetPiece::CLEARANCE_BEHIND_CHANCE;
+  // No instant kick behind on meeting a cross (shot block plan step 4): he
+  // plays it with his touch like any other ball.
+  return false;
 }
 
 Vector2F MatchEngine::chooseClearBehindTargetBinturong(

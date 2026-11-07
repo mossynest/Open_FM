@@ -3167,6 +3167,7 @@ float MatchEngine::strikeShot(MatchPlayer& shooter, float forcedXG, bool header,
   ball.shotIsHeader = header;
   ball.shotIsPenalty = penalty;
   ball.shotSaveResolved = false;
+  ball.shotBlocked = false;
   lastShooter = shooter.player;
   return xg;
 }
@@ -3345,6 +3346,7 @@ void MatchEngine::updateBall(float dt)
       // one.
       if ((ball.possessedBy && !ball.inTouch) || state != MatchState::PLAYING)
         return;
+      substepStretchFromShare = 1.0f - remaining / substep;
       const std::optional<float> along = moveBallStretch(remaining);
       if (!along) break;
       remaining *= 1.0f - *along;
@@ -3418,8 +3420,11 @@ std::optional<float> MatchEngine::moveBallPart(float seconds)
     resolveLooseBall(beforeLine);
   };
 
-  // A shot that has died (smothered, spent or trickling) is a loose ball.
+  // A shot that has died (smothered, spent or trickling) is a loose ball;
+  // against a Binturong body it stays the shot until someone controls it,
+  // played like any loose ball once slow (shot block plan step 4).
   if (ball.isShot && ball.shotElapsedSeconds > 0.3f &&
+      getBody(!ball.shotByHome) != BodyId::BINTURONG &&
       length(ball.velocity) < MatchTuning::Ball::DEAD_SHOT_SPEED)
   {
     ball.isShot = false;
@@ -3595,7 +3600,8 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
   const float ballSpeed = length(ball.velocity);
   // A ball that has slowed down can be collected by anyone again, including
   // players it flew past earlier.
-  if (!ball.isShot && ballSpeed <= B::MAX_HEAVY_TOUCH_SPEED)
+  if ((!ball.isShot || getBody(!ball.shotByHome) == BodyId::BINTURONG) &&
+      ballSpeed <= B::MAX_HEAVY_TOUCH_SPEED)
     ball.touchAttempts = 0;
   // Handling is allowed in the own area, except for a team-mate's pass.
   const auto handsAllowed = [this](const MatchPlayer& player)
@@ -3612,6 +3618,10 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     float height = 0.0f;
     float reach = 0.0f;
     ShotBodyPart part = ShotBodyPart::TORSO;
+    /** A shot meeting a Binturong body: where and how (shot block plan). */
+    ShotBodyHit hit{};
+    /** A shot he plays like any loose ball (shot block plan step 4). */
+    bool asLoose = false;
   };
   std::array<Contact, 32> contacts{};
   std::size_t contactCount = 0;
@@ -3641,11 +3651,21 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     if (position.x < boundMinX || position.x > boundMaxX ||
         position.y < boundMinY || position.y > boundMaxY)
       continue;
-    // A shot meets a Binturong body without its hands (shot block plan
-    // step 1; a keeper outside his area too): it is in the way whatever his
-    // feet are doing, on the ground or in a jump.
-    const bool shotIntoBody = ball.isShot && !handsAllowed(player) &&
-                              getBody(player.isHomeTeam) == BodyId::BINTURONG;
+    // A shot locks no Binturong player out (shot block plan step 4): once
+    // it has slowed, or (a team-mate) if it is off target, he plays it like
+    // any loose ball. Otherwise it meets his body without its hands (step
+    // 1; a keeper outside his area too, a team-mate too): in the way
+    // whatever his feet are doing, on the ground or in a jump.
+    // (Slow as it comes at him: against his own motion, so he plays a ball
+    // he is running with rather than bodying it on.)
+    const bool binturong = getBody(player.isHomeTeam) == BodyId::BINTURONG;
+    const float comingAt = length(Vector2F{ball.velocity.x - player.velocity.x,
+                                           ball.velocity.y - player.velocity.y});
+    const bool shotAsLoose =
+        ball.isShot && binturong &&
+        (comingAt <= B::MAX_HEAVY_TOUCH_SPEED ||
+         (player.isHomeTeam == ball.shotByHome && !ball.shotOnTarget));
+    const bool shotIntoBody = ball.isShot && !shotAsLoose && !handsAllowed(player) && binturong;
     // In the air (a jump), only his head plays it (headInSweep).
     if (!active(player) || (player.trapTimer > 0.0f && !shotIntoBody) ||
         (player.airborne() && !shotIntoBody) || player.fallen)
@@ -3671,13 +3691,13 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     // His foot is committed from a contest swing.
     if (&player != touchOwner && player.footCooldown > 1e-4f && !shotIntoBody)
       continue;
-    // Team-mates let a pass run to its receiver, and never block their own
-    // side's shot.
+    // Team-mates let a pass run to its receiver, and (an Aardvark body)
+    // never meet their own side's shot.
     if (ball.isPass && player.isHomeTeam == ball.passByHome &&
         player.player != ball.intendedReceiver &&
         ballSpeed > B::MAX_HEAVY_TOUCH_SPEED)
       continue;
-    if (ball.isShot && player.isHomeTeam == ball.shotByHome) continue;
+    if (ball.isShot && player.isHomeTeam == ball.shotByHome && !binturong) continue;
 
     const float along = segmentSquared > EPSILON
                             ? std::clamp(((position.x - start.x) * segment.x +
@@ -3707,13 +3727,16 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
       // met where the ball reaches it on this stretch, or not at all.
       if (const auto hit = shotMeetsBodyBinturong(
               player, slot, {start.x, start.y, startHeight}, {end.x, end.y, endHeight}))
-        contacts[contactCount++] = {slot, hit->first, 0.0f,
-                                    startHeight + (endHeight - startHeight) * hit->first,
-                                    1.0f, hit->second};
+        contacts[contactCount++] = {slot,      hit->share, 0.0f,
+                                    startHeight + (endHeight - startHeight) * hit->share,
+                                    1.0f,      hit->part,  *hit};
+      else if (!player.airborne())
+        checkShotThroughTorsoBinturong(player, slot, {start.x, start.y, startHeight},
+                                       {end.x, end.y, endHeight});
       continue;
     }
     float reach = 0.0f;
-    if (ball.isShot)
+    if (ball.isShot && !shotAsLoose)
     {
       const bool reachable =
           hands ? height <= MatchRules::goalkeeperReachMetres(
@@ -3734,7 +3757,6 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     else
     {
       const BodyLines lines = bodyLines(player);
-      const bool binturong = getBody(player.isHomeTeam) == BodyId::BINTURONG;
       // Above a Binturong body's head line it is his head's (headInSweep).
       if (height > lines.head && binturong) continue;
       if (height <= lines.feet)
@@ -3763,7 +3785,8 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
       if (ballBehindReach(player, gapX, gapY, gap)) continue;
     }
     if (reach <= 0.0f || gap > reach) continue;
-    contacts[contactCount++] = {slot, along, gap, height, reach};
+    contacts[contactCount++] = {slot, along, gap, height, reach, ShotBodyPart::TORSO, {},
+                                shotAsLoose};
   }
   // A player who let the ball come closer and now finds it out of his reach
   // waited too long (counted for the sandbox checks; should never happen).
@@ -3894,7 +3917,7 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     }
     // With the new first touch he may let the ball come closer before he
     // plays it; until he does, it is no attempt.
-    if (!ball.isShot && playsFirstTouch(player, hands, contact.height) &&
+    if ((!ball.isShot || contact.asLoose) && playsFirstTouch(player, hands, contact.height) &&
         !touchNow(player, moment))
     {
       ball.touchWaiting |= 1U << contact.slot;
@@ -3905,7 +3928,7 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     // enough to have committed to; on a path that has just changed he
     // misses it cleanly. Not an interception (an opponent's pass), a
     // contest or his own dribble.
-    if (!hands && !player.isGoalkeeper && !ball.isShot && !contest &&
+    if (!hands && !player.isGoalkeeper && (!ball.isShot || contact.asLoose) && !contest &&
         &player != touchOwner &&
         getBody(player.isHomeTeam) == BodyId::BINTURONG &&
         contact.height <= bodyLines(player).feet &&
@@ -3926,7 +3949,7 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     ball.touchAttempts |= 1U << contact.slot;
     const float stretch = contact.gap / std::max(contact.reach, EPSILON);
 
-    if (ball.isShot)
+    if (ball.isShot && !contact.asLoose)
     {
       // Saves on target are resolved at the keeper's plane; here a keeper
       // gathers a wide shot near him, or an outfielder throws his body in
@@ -3943,27 +3966,58 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
         continue;
       }
       if (!choosesToBlock(player) || !blocksShot(player, contact.gap, contact.reach)) continue;
-      if (getBody(player.isHomeTeam) == BodyId::BINTURONG && !hands)
+      const bool offBody = getBody(player.isHomeTeam) == BodyId::BINTURONG && !hands;
+      // Off a team-mate, or off anyone once it has been blocked, it is a
+      // deflection, not a block (one blocked shot per shot).
+      const bool deflection = player.isHomeTeam == ball.shotByHome || (offBody && ball.shotBlocked);
+      const ShotLegs* legs =
+          contact.slot < shotLegPoses.size() ? &shotLegPoses[contact.slot] : nullptr;
+      const bool legPutOut = legs && legs->blocking && contact.part != ShotBodyPart::TORSO;
+      if (offBody && !deflection)
       {
         ++stats.shotBlocksByPart[static_cast<std::size_t>(contact.part)];
-        if (contact.part != ShotBodyPart::TORSO && contact.slot < shotLegPoses.size() &&
-            shotLegPoses[contact.slot].blocking)
-          ++stats.shotReactionBlocks;
+        if (legPutOut) ++stats.shotReactionBlocks;
       }
       ball.lastPossessor = player.player;
       ball.kicker = player.player;
-      ball.kickerLockout = MatchTuning::Passing::KICKER_LOCKOUT_SECONDS;
+      // Afterwards (shot block plan step 4): off his torso or stride just
+      // the ball coming off him; off a leg he put out, until it is back.
+      ball.kickerLockout =
+          !offBody    ? MatchTuning::Passing::KICKER_LOCKOUT_SECONDS
+          : legPutOut ? legs->outShare * legs->legSeconds +
+                            MatchTuning::ShotBlock::RECOVERY_LEG_EXTRA_SECONDS
+                      : MatchTuning::ShotBlock::RECOVERY_BODY_SECONDS;
       ball.touchAttempts = 0;
-      ball.isShot = false;
-      ball.shotOnTarget = false;
       ball.fromThrowIn = false;
       notePathChange();
-      ball.velocity.x *= MatchTuning::Defending::DEFLECTION_SPEED_FACTOR;
-      ball.velocity.y +=
-          randomFloat(-MatchTuning::Defending::MAX_DEFLECTION_Y_SPEED,
-                      MatchTuning::Defending::MAX_DEFLECTION_Y_SPEED);
-      if (choosesToPutBlockBehind(player)) clearBehind(player);
-      ++statsOf(player).clearances;
+      if (offBody)
+      {
+        // Off the part it met (step 3); still going in, still the shot,
+        // otherwise a loose ball (step 4). No second kick after it.
+        bounceShotOffBodyBinturong(player, contact.hit);
+        if (!shotStaysOnGoalBinturong())
+        {
+          ball.isShot = false;
+          ball.shotOnTarget = false;
+        }
+      }
+      else
+      {
+        ball.isShot = false;
+        ball.shotOnTarget = false;
+        ball.velocity.x *= MatchTuning::Defending::DEFLECTION_SPEED_FACTOR;
+        ball.velocity.y +=
+            randomFloat(-MatchTuning::Defending::MAX_DEFLECTION_Y_SPEED,
+                        MatchTuning::Defending::MAX_DEFLECTION_Y_SPEED);
+        if (choosesToPutBlockBehind(player)) clearBehind(player);
+      }
+      if (offBody && deflection)
+      {
+        ++stats.shotDeflections;
+        return;
+      }
+      ball.shotBlocked = true;
+      ++(offBody ? statsOf(player).blockedShots : statsOf(player).clearances);
       logEvent(MatchEventType::SHOT_BLOCKED, player);
       return;
     }
@@ -5996,6 +6050,7 @@ void MatchEngine::clearFlightState()
   ball.shotIsPenalty = false;
   ball.shotFromSetPiece = false;
   ball.shotSaveResolved = false;
+  ball.shotBlocked = false;
   ball.shotElapsedSeconds = 0.0f;
   ball.isAerialDelivery = false;
   ball.fromThrowIn = false;

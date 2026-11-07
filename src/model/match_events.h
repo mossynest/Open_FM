@@ -144,6 +144,8 @@ struct PlayerMatchStats
   int tacklesWon = 0;
   int interceptions = 0;
   int clearances = 0;
+  /** Opponents' shots his body stopped (shot block plan step 4). */
+  int blockedShots = 0;
   int aerialDuelsWon = 0;
   int aerialDuelsLost = 0;
   int saves = 0;
