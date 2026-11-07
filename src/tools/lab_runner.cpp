@@ -193,6 +193,11 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
   sample.blocks = stats.homeBlocks + stats.awayBlocks;
   sample.blocks_committed = stats.blocksCommitted;
   sample.blocks_popped = stats.blocksPoppedUp;
+  for (const int count : stats.shotBlocksByPart) sample.shot_body_blocks += count;
+  sample.shot_leg_blocks = sample.shot_body_blocks - stats.shotBlocksByPart[0];
+  sample.shot_reaction_blocks = stats.shotReactionBlocks;
+  sample.shot_leg_chances = stats.shotLegChances;
+  sample.shot_leg_outcomes = stats.shotLegOutcomes;
   sample.go_ins = stats.homeGoIns + stats.awayGoIns;
   sample.go_ins_free_foot = stats.goInsOnFreeFoot;
   sample.holds = stats.homeHolds + stats.awayHolds;
@@ -264,6 +269,9 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
         event.period <= 1 ? minute : firstHalf + (minute - HALF_MINUTES);
     const bool goal = event.type == MatchEventType::GOAL;
     const bool ownGoal = event.type == MatchEventType::OWN_GOAL;
+    if (event.type == MatchEventType::SHOT_BLOCKED &&
+        event.detail != MatchEventDetail::WALL)
+      ++sample.shots_blocked;
     if (goal || ownGoal)
     {
       if (ownGoal) ++sample.own_goals;
@@ -664,6 +672,41 @@ std::map<std::string, Estimate> matchMetrics(
       ratioEstimate(column([](const MatchSample& s)
                            { return s.on_target[0] + s.on_target[1]; }),
                     shots);
+  metrics["blocked_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.shots_blocked; }), shots);
+  metrics["shot_leg_block_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.shot_leg_blocks; }),
+      column([](const MatchSample& s) { return s.shot_body_blocks; }));
+  metrics["shot_reaction_block_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.shot_reaction_blocks; }),
+      column([](const MatchSample& s) { return s.shot_body_blocks; }));
+  // Shot block plan §3d: defenders a shot's line passed within reach of,
+  // and what came of each.
+  const std::vector<double> legChances =
+      column([](const MatchSample& s) { return s.shot_leg_chances; });
+  metrics["shot_leg_chances_per_shot"] = ratioEstimate(legChances, shots);
+  metrics["shot_leg_too_late_share"] = ratioEstimate(
+      column(
+          [](const MatchSample& s)
+          {
+            int reacted = 0;
+            for (const int count : s.shot_leg_outcomes) reacted += count;
+            return s.shot_leg_chances - reacted;
+          }),
+      legChances);
+  static constexpr std::array<const char*, static_cast<std::size_t>(ShotLegOutcome::COUNT)>
+      LEG_OUTCOME_METRICS{"shot_leg_out_share",          "shot_leg_feet_busy_share",
+                          "shot_leg_chose_not_share",    "shot_leg_not_travelling_share",
+                          "shot_leg_past_share",         "shot_leg_above_hip_share",
+                          "shot_leg_reach_height_share", "shot_leg_reach_running_share",
+                          "shot_leg_behind_share"};
+  for (std::size_t index = 0; index < LEG_OUTCOME_METRICS.size(); ++index)
+    metrics[LEG_OUTCOME_METRICS[index]] = ratioEstimate(
+        column([index](const MatchSample& s) { return s.shot_leg_outcomes[index]; }), legChances);
+  metrics["shot_leg_out_blocks_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.shot_reaction_blocks; }),
+      column([](const MatchSample& s)
+             { return s.shot_leg_outcomes[static_cast<std::size_t>(ShotLegOutcome::LEG_OUT)]; }));
   // Mean xG of the engine's own shot model per shot.
   metrics["xg_per_shot"] = ratioEstimate(
       column([](const MatchSample& s) { return s.xg[0] + s.xg[1]; }), shots);

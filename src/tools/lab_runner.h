@@ -78,6 +78,8 @@ struct MatchSample
   int reds = 0;
   int offsides = 0;
   int own_goals = 0;
+  /** Shots blocked by a body in open play (the free-kick wall not). */
+  int shots_blocked = 0;
   /** Goals at second-half clock minute >= 90. */
   int late_goals = 0;
   std::array<int, GOAL_TIME_BINS> goal_bins{};
@@ -147,6 +149,16 @@ struct MatchSample
   int blocks = 0;
   int blocks_committed = 0;
   int blocks_popped = 0;
+  /** Open-play shots blocked by a Binturong body, those off a leg, and
+   * those off a leg he put there (a reaction block). */
+  int shot_body_blocks = 0;
+  int shot_leg_blocks = 0;
+  int shot_reaction_blocks = 0;
+  /** Shot block plan §3d: shots whose line passed within a defender's
+   * full reach (per defender), and what came of it once he reacted
+   * (ShotLegOutcome order); the rest, the ball got to him first. */
+  int shot_leg_chances = 0;
+  std::array<int, static_cast<std::size_t>(ShotLegOutcome::COUNT)> shot_leg_outcomes{};
   /** Tackling plan step 5: steps defenders went into a contest, those on
    * the carrier's free foot, steps held, and the intents chosen. */
   int go_ins = 0;

@@ -177,6 +177,13 @@ void drawBody(const Painter& paint, const Body& body, const Tuning& tuning,
               const Layers& layers, Technique technique, Detail detail,
               std::vector<Label>* labels, std::vector<Entry>* entries);
 
+/** Draws his legs as a shot met them (`legs`: a stride rolled for it,
+ * shot block plan §3c, or a leg put across its line, §3d) on `body` as a
+ * ghost: thighs and shins as rods, the feet as boxes, faded by `fade`
+ * (0-1); labels it with its `ageSeconds` when given labels. */
+void drawLegGhost(const Painter& paint, const Body& body, const ShotLegs& legs, float fade,
+                  float ageSeconds, std::vector<Label>* labels);
+
 /** Draws labels over everything, each on a dark chip. */
 void drawLabels(const Painter& paint, const std::vector<Label>& labels);
 

@@ -842,8 +842,10 @@ MatchEngine::Spill MatchEngine::parrySpillAardvark(const MatchPlayer& keeper,
   return spill;
 }
 
-bool MatchEngine::blocksShotAardvark(const MatchPlayer& player, float stretch)
+bool MatchEngine::blocksShotAardvark(const MatchPlayer& player, float gap,
+                                     float reach)
 {
+  const float stretch = gap / std::max(reach, EPSILON);
   // Getting a body in the way of a shot: easier for good defenders and
   // when it comes straight at him.
   return randomFloat(0.0f, 1.0f) <

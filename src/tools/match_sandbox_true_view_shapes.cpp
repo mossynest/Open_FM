@@ -452,19 +452,23 @@ void drawBody(const Painter& base, const Body& body, const Tuning& tuning,
     }
     if (technique == Technique::SHOT_BLOCK || technique == Technique::ALL)
     {
+      // Shot block plan §3c: his torso, solid from the hip to the top of
+      // his head; below it, his legs only where a stride rolled for a shot
+      // has them (drawn as ghosts while one is recent).
       const float alpha = technique == Technique::SHOT_BLOCK ? 1.0f : 0.3f;
-      const float block = MatchTuning::Defending::BLOCK_DISTANCE_METRES;
-      const float top = MatchRules::headerReachMetres(height, body.physicality);
-      paint.cylinder(block, z0, z0 + top, -180.0f, 180.0f, colour(230, 110, 170, alpha * 0.8f),
-                     1.0f);
-      label(paint.polar(-60.0f, block, z0 + top),
-            std::format("shot block {:.1f} m, to {:.2f} m [WIP]", block, top),
+      const float torso = radius + MatchTuning::Units::BALL_RADIUS_METRES;
+      paint.cylinder(torso, z0 + lift + lines.chest, z0 + lift + height, -180.0f, 180.0f,
+                     colour(230, 110, 170, alpha * 0.8f), 1.0f);
+      label(paint.polar(-60.0f, torso, z0 + lift + lines.chest),
+            std::format("shot block: torso {:.2f} m, hip {:.2f} m to head [WIP]", torso,
+                        lines.chest),
             colour(230, 110, 170, alpha));
-      add("Shot block: all round", std::format("{:.2f} m", block),
-          "Defending::BLOCK_DISTANCE_METRES", "old rule: all round, no dead zone, no body lines");
-      add("Shot block: up to", std::format("{:.2f} m", top),
-          "MatchRules::headerReachMetres (height + Physicality jump)",
-          "old rule: reads Physicality, not Jumping reach");
+      add("Shot block: torso", std::format("{:.2f} m, hip to head", torso),
+          "Body::RADIUS_METRES + ball radius; hip = chest line",
+          "shot block plan: where the ball goes off him is still the old bounce");
+      add("Shot block: legs", "where his stride has them",
+          "legPoseOf (MatchTuning::Stride), rolled once per shot path",
+          "natural positions only; no deliberate leg until the brain step");
     }
   }
 
@@ -755,6 +759,56 @@ void drawBody(const Painter& base, const Body& body, const Tuning& tuning,
     paint.line(tip, paint.polar(8.0f, length + 0.3f, z0 + 0.01f), tint, 2.5f);
     label(tip, "facing", tint);
   }
+}
+
+void drawLegGhost(const Painter& paint, const Body& body, const ShotLegs& legs, float fade,
+                  float ageSeconds, std::vector<Label>* labels)
+{
+  // The pose's offsets are in the engine's metric frame, as a match's
+  // painter is; from his centre, lifted with him in a jump.
+  using S = MatchTuning::Stride;
+  const float scale = body.height / S::REFERENCE_HEIGHT_METRES;
+  const auto at = [&](Point3F offset)
+  { return Vec3{body.at.x + offset.x, body.at.y + offset.y, body.at.z + body.feetHeight + offset.z}; };
+  // A stride in orange; a leg put in the way in cyan.
+  const LegPose& pose = legs.pose;
+  const bool block = legs.blocking;
+  const ImU32 thigh = block ? colour(60, 200, 255, 0.9f * fade) : colour(255, 160, 60, 0.9f * fade);
+  const ImU32 shin = block ? colour(110, 220, 255, 0.9f * fade) : colour(255, 200, 90, 0.9f * fade);
+  const ImU32 foot = block ? colour(170, 240, 255, 0.9f * fade) : colour(255, 230, 140, 0.9f * fade);
+  for (const LegPose::Leg& leg : pose.legs)
+  {
+    const Vector2F forward = leg.footFacing;
+    const Vector2F side{-forward.y, forward.x};
+    paint.line(at(leg.hip), at(leg.knee), thigh, 6.0f);
+    paint.line(at(leg.knee), at(leg.ankle), shin, 4.0f);
+    // The booted foot: a box from the heel behind the ankle, sole at its rise.
+    const float heel = -S::HEEL_BEHIND_ANKLE * scale;
+    const float toe = (S::FOOT_LENGTH - S::HEEL_BEHIND_ANKLE) * scale;
+    const float halfWidth = 0.5f * S::FOOT_WIDTH * scale;
+    const float sole = leg.ankle.z - S::FOOT_HEIGHT * scale;
+    std::array<Vec3, 8> corners{};
+    std::size_t corner = 0;
+    for (const float z : {sole, leg.ankle.z})
+      for (const float along : {heel, toe})
+        for (const float across : {-halfWidth, halfWidth})
+          corners[corner++] = at({leg.ankle.x + forward.x * along + side.x * across,
+                                  leg.ankle.y + forward.y * along + side.y * across, z});
+    // Edges between corners differing in one of the three choices.
+    for (std::size_t a = 0; a < corners.size(); ++a)
+      for (const std::size_t bit : {1U, 2U, 4U})
+        if ((a & bit) == 0U) paint.line(corners[a], corners[a | bit], foot, 1.5f);
+  }
+  paint.line(at(pose.legs[0].hip), at(pose.legs[1].hip), thigh, 3.0f);
+  if (labels)
+    labels->push_back({at({0.0f, 0.0f, 0.5f * (pose.legs[0].hip.z + pose.legs[0].ankle.z)}),
+                       block ? std::format("reaction block, leg {:.0f}% out, miss {:.2f} m, "
+                                           "{:.2f} s ago",
+                                           100.0f * legs.outShare, legs.error, ageSeconds)
+                             : std::format("stride for a shot ({}), {:.2f} s ago",
+                                           legs.reacted ? legs.noBlock : "not yet reacted",
+                                           ageSeconds),
+                       thigh});
 }
 
 void drawLabels(const Painter& paint, const std::vector<Label>& labels)

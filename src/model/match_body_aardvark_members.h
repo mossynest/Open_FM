@@ -64,8 +64,8 @@
   void settleOnBallAardvark(MatchPlayer& player, float touchSkill, bool hands);
   float keeperHoldSecondsAardvark(const MatchPlayer& keeper);
   /** Whether an outfielder in a shot's path gets his body in the way
-   * (stretch: how far he had to reach, 0-1). */
-  bool blocksShotAardvark(const MatchPlayer& player, float stretch);
+   * (gap: from his centre to the ball's path; reach: the most he had). */
+  bool blocksShotAardvark(const MatchPlayer& player, float gap, float reach);
   /** Whether he reads and reaches a ball not meant for him. */
   bool reachesBallAardvark(const MatchPlayer& player, float ballSpeed, float stretch);
   /** His first-touch skill (hands: a keeper allowed to handle it). */

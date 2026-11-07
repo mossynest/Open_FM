@@ -880,6 +880,102 @@ struct BodyLines
   float head = MatchTuning::Aerial::CONTROL_CEILING_METRES;
 };
 
+/** A point in metres: x, y over the pitch, z up. */
+struct Point3F
+{
+  float x = 0.0f;
+  float y = 0.0f;
+  float z = 0.0f;
+};
+
+/** His legs at one rolled point of his stride (shot block plan §3c), or
+ * one put in a shot's way (§3d), as offsets (m) from his centre on the
+ * ground: each leg's hip, knee and ankle, and the way its foot points
+ * (metric, unit). */
+struct LegPose
+{
+  struct Leg
+  {
+    Point3F hip;
+    Point3F knee;
+    Point3F ankle;
+    Vector2F footFacing{1.0f, 0.0f};
+  };
+  std::array<Leg, 2> legs{};
+};
+
+/** What became of a shot passing within a defender's reach once he had
+ * reacted (shot block plan §3d): a leg put out, or why not. */
+enum class ShotLegOutcome : std::uint8_t
+{
+  LEG_OUT,
+  FEET_BUSY,
+  CHOSE_NOT,
+  NOT_TRAVELLING,
+  PAST_HIM,
+  ABOVE_HIP,
+  OUT_OF_REACH_HEIGHT,
+  OUT_OF_REACH_RUNNING,
+  BEHIND_HIM,
+  COUNT,
+};
+
+/** His legs as a shot passing him met them (shot block plan §3c, §3d):
+ * the stride rolled for the ball's path, then, once he has reacted and if
+ * he can reach its line, a leg put across it. */
+struct ShotLegs
+{
+  /** The ball path (`pathSince`) this is for, and when `pose` was last set
+   * (ball clock, s). */
+  double pathFor = -1.0;
+  double rolledAt = -1.0;
+  /** As the ball last met them: the stride, or the block once he went. */
+  LegPose pose;
+  /** His natural stride for this path. */
+  LegPose stride;
+  /** Its line passed within his full reach (1.0 m, whatever its height or
+   * his speed) when it first came near him: counted for the lab. */
+  bool chance = false;
+  /** He has reacted (whether or not he could reach its line), and what
+   * came of it. */
+  bool reacted = false;
+  ShotLegOutcome outcome = ShotLegOutcome::LEG_OUT;
+  /** He put a leg across its line: which, from when (s), how long it takes
+   * to get out to `aim` (s), and how far out it had got when last met
+   * (0-1). */
+  bool blocking = false;
+  std::size_t leg = 0;
+  double legFrom = 0.0;
+  float legSeconds = 0.0f;
+  float outShare = 0.0f;
+  /** Where he aimed his ankle (from his centre; the error included), the
+   * way the foot points, how far the line passed from his centre (m), the
+   * error's radius and the miss rolled within it (m), and his spare time
+   * (s; less than none: the ball beats his leg). */
+  Point3F aim;
+  Vector2F footFacing{1.0f, 0.0f};
+  float lineGap = 0.0f;
+  /** The ball's height there (m, its centre). */
+  float lineHeight = 0.0f;
+  float errorRadius = 0.0f;
+  float error = 0.0f;
+  float spareSeconds = 0.0f;
+  /** When the ball gets to the nearest point of its line to him (ball
+   * clock, s). */
+  double ballThere = 0.0;
+  /** Why he did not go, when he reacted but did not ("" when he did). */
+  const char* noBlock = "";
+};
+
+/** What of him a shot met (shot block plan). */
+enum class ShotBodyPart : std::uint8_t
+{
+  TORSO,
+  THIGH,
+  SHIN,
+  FOOT,
+};
+
 /** One contact the body is asked for (unified kick plan): a touch, with
  * the touch profile and his First Touch, or a strike of kind `strike`,
  * with its profile and his skill for it. What he means: the direction
@@ -1249,6 +1345,18 @@ struct MatchStats
   int awayBlocks = 0;
   int blocksCommitted = 0;
   int blocksPoppedUp = 0;
+  /** Open-play shots blocked by a Binturong body, by what they met
+   * (ShotBodyPart: torso, thigh, shin, foot). */
+  std::array<int, 4> shotBlocksByPart{};
+  /** Of those off a leg, the ones off a leg he put there (shot block plan
+   * §3d: a reaction block) rather than his stride. */
+  int shotReactionBlocks = 0;
+  /** Shots whose line passed within a Binturong outfielder's full reach
+   * (shot block plan §3d), one per shot and defender; of those, what came
+   * of it once he reacted (ShotLegOutcome; the rest: the ball got to him
+   * first). */
+  int shotLegChances = 0;
+  std::array<int, static_cast<std::size_t>(ShotLegOutcome::COUNT)> shotLegOutcomes{};
   /** Collision plan: players running into each other (Binturong bodies),
    * and those where either was jolted by 2 m/s or more, and by 4 or more
    * (where a big hit becomes possible). */
@@ -1821,6 +1929,11 @@ class MatchEngine
   void simulateToEnd(MatchFidelity fidelity);
   /** Simulated seconds since kick-off, including stoppages and half-time. */
   double getSimulatedSeconds() const;
+  /** His legs as a shot last met them, player `slot` (shot block plan
+   * §3c, §3d), and how long ago (s), if within `maxAgeSeconds` (the
+   * sandbox's true view shows them; drills report them). */
+  std::optional<std::pair<ShotLegs, float>> recentShotLegs(std::size_t slot,
+                                                           float maxAgeSeconds) const;
 
   /** Playback mode used by advancePlayback(); FULL_MATCH by default. */
   void setPlaybackMode(MatchPlaybackMode mode);
@@ -2855,6 +2968,9 @@ class MatchEngine
   };
   BallMotion substepStartMotion;
   BallMotion substepEndMotion;
+  /** Each player's legs as a shot passing him met them (shot block plan
+   * §3c, §3d). */
+  std::vector<ShotLegs> shotLegPoses;
   float substepStretchSeconds = 0.0f;
   /** Whether the ball is still on the path the physics read for the
    * stretch (no parry or woodwork has turned it since). */
@@ -3563,8 +3679,8 @@ class MatchEngine
   void settleOnBall(MatchPlayer& player, float touchSkill, bool hands);
   float keeperHoldSeconds(const MatchPlayer& keeper);
   /** Whether an outfielder in a shot's path gets his body in the way
-   * (stretch: how far he had to reach, 0-1). */
-  bool blocksShot(const MatchPlayer& player, float stretch);
+   * (gap: from his centre to the ball's path; reach: the most he had). */
+  bool blocksShot(const MatchPlayer& player, float gap, float reach);
   /** Whether he reads and reaches a ball not meant for him. */
   bool reachesBall(const MatchPlayer& player, float ballSpeed, float stretch);
   /** His first-touch skill (hands: a keeper allowed to handle it). */

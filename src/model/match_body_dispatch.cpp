@@ -296,16 +296,16 @@ float MatchEngine::keeperHoldSeconds(const MatchPlayer& keeper)
   return keeperHoldSecondsAardvark(keeper);
 }
 
-bool MatchEngine::blocksShot(const MatchPlayer& player, float stretch)
+bool MatchEngine::blocksShot(const MatchPlayer& player, float gap, float reach)
 {
   switch (bodyOf(player.isHomeTeam))
   {
     case BodyId::AARDVARK:
       break;
     case BodyId::BINTURONG:
-      return blocksShotBinturong(player, stretch);
+      return blocksShotBinturong(player, gap, reach);
   }
-  return blocksShotAardvark(player, stretch);
+  return blocksShotAardvark(player, gap, reach);
 }
 
 bool MatchEngine::reachesBall(const MatchPlayer& player, float ballSpeed,

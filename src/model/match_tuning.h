@@ -40,6 +40,101 @@ struct MatchTuning final
     static constexpr float RADIUS_METRES = 0.5f * DIAMETER_METRES;
   };
 
+  /**
+   * Where his legs naturally are (shot block plan §3c, agreed for a first
+   * try 2026-11-06): no legs exist until a ball needs them ("quantum
+   * legs"); then a point of his stride is rolled by the time spent there.
+   * Lengths are for a 1.80 m player and scale with his height.
+   */
+  struct Stride final
+  {
+    static constexpr float REFERENCE_HEIGHT_METRES = 1.80f;
+    /** Movement types by speed (m/s) and his travel against his facing. */
+    static constexpr float STANDING_SPEED = 0.5f;
+    static constexpr float WALK_TOP_SPEED = 2.0f;
+    static constexpr float JOG_TOP_SPEED = 4.0f;
+    static constexpr float RUN_TOP_SPEED = 6.5f;
+    static constexpr float SHUFFLE_TOP_SPEED = 3.0f;
+    static constexpr float SIDESTEP_DEGREES = 60.0f;
+    static constexpr float BACKPEDAL_DEGREES = 120.0f;
+    /** Foot to foot at full spread (m); standing, side by side. */
+    static constexpr float STANDING_FEET_APART = 0.3f;
+    static constexpr float STEP_WALK = 0.7f;
+    static constexpr float STEP_JOG = 1.1f;
+    static constexpr float STEP_RUN = 1.6f;
+    static constexpr float STEP_SPRINT = 2.1f;
+    static constexpr float STEP_SIDESTEP = 0.6f;
+    static constexpr float STEP_BACKPEDAL = 0.6f;
+    /** Running feet land this far apart side to side (m). */
+    static constexpr float RUNNING_FEET_APART = 0.1f;
+    /** Opening or closing: this share of the full spread. */
+    static constexpr float PART_SPREAD_SHARE = 0.6f;
+    /** Sidestep feet together (centre to centre, m). */
+    static constexpr float SIDESTEP_TOGETHER = 0.12f;
+    /** The swing foot's rise (m), walk / jog / run / sprint: opening or
+     * closing, and passing under him (heel folding up). */
+    static constexpr float SWING_RISE_PART[4] = {0.02f, 0.05f, 0.1f, 0.15f};
+    static constexpr float SWING_RISE_PASSING[4] = {0.05f, 0.15f, 0.3f, 0.4f};
+    /** Passing: the swing knee this far ahead of the hip, the swing ankle
+     * this far behind it (m). */
+    static constexpr float PASSING_KNEE_AHEAD = 0.2f;
+    static constexpr float PASSING_ANKLE_BEHIND = 0.1f;
+    /** Time share at full spread and opening or closing (passing is the
+     * rest), walk / jog / run / sprint; sidestep wide / half (together the
+     * rest; my placeholder). Backpedal as a walk. */
+    static constexpr float SHARE_FULL[4] = {0.30f, 0.35f, 0.40f, 0.45f};
+    static constexpr float SHARE_PART[4] = {0.40f, 0.40f, 0.40f, 0.40f};
+    static constexpr float SIDESTEP_SHARE_WIDE = 0.35f;
+    static constexpr float SIDESTEP_SHARE_HALF = 0.40f;
+    /** Noise: on the spread (share), each foot side to side (m), the legs'
+     * direction (degrees; the user cut it from 15). */
+    static constexpr float NOISE_SPREAD = 0.1f;
+    static constexpr float NOISE_SIDEWAYS = 0.05f;
+    static constexpr float NOISE_DEGREES = 5.0f;
+    /** What a leg is (agreed 2026-11-06): hip joints apart; thigh and shin
+     * as rods of their mean thickness (thigh 0.16 m → 0.11 m, shin
+     * 0.11 m → 0.07 m); the booted foot a box, heel behind the ankle. */
+    static constexpr float HIPS_APART = 0.18f;
+    static constexpr float THIGH_RADIUS = 0.068f;
+    static constexpr float SHIN_RADIUS = 0.045f;
+    static constexpr float FOOT_LENGTH = 0.28f;
+    static constexpr float FOOT_WIDTH = 0.10f;
+    static constexpr float FOOT_HEIGHT = 0.08f;
+    static constexpr float HEEL_BEHIND_ANKLE = 0.07f;
+  };
+
+  /**
+   * A leg put in a shot's way (shot block plan §3d, agreed 2026-11-06):
+   * reaction blocks only; his reaction from Defending, the leg's speed and
+   * aim from Tackling (each poor at 1, best at 99), out from under his
+   * centre, across the ball's path. Placement error to tune in the Shot
+   * block drill.
+   */
+  struct ShotBlock final
+  {
+    /** From the strike to his leg starting to move (s). */
+    static constexpr float REACTION_SECONDS_POOR = 0.35f;
+    static constexpr float REACTION_SECONDS_BEST = 0.15f;
+    /** From under him to full reach (s); a shorter reach, a share of it. */
+    static constexpr float LEG_OUT_SECONDS_POOR = 0.45f;
+    static constexpr float LEG_OUT_SECONDS_BEST = 0.25f;
+    /** His ankle's reach from his centre (m), on the ground to his knee;
+     * above, narrowing to his body (radius + ball) at his hip. */
+    static constexpr float REACH_METRES = 1.0f;
+    /** Running: full reach up to this share of his top speed, falling to
+     * SPRINT_REACH_SHARE of it at top speed (step 2's limit). */
+    static constexpr float FULL_REACH_SPEED_SHARE = 0.4f;
+    static constexpr float SPRINT_REACH_SHARE = 0.5f;
+    /** How far his ankle lands from where he aimed it (m, at most, any
+     * direction), with time to spare; RUSHED_ERROR_FACTOR times that with
+     * none (the leg arriving just as the ball does, or not at all),
+     * straight line between over RUSHED_SECONDS of spare time. */
+    static constexpr float ERROR_METRES_POOR = 0.25f;
+    static constexpr float ERROR_METRES_BEST = 0.05f;
+    static constexpr float RUSHED_ERROR_FACTOR = 2.0f;
+    static constexpr float RUSHED_SECONDS = 0.3f;
+  };
+
   struct Pitch final
   {
     static constexpr float LENGTH_METRES = 105.0f;

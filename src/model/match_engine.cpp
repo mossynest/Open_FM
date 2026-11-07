@@ -3611,14 +3611,23 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     float gap = 0.0f;
     float height = 0.0f;
     float reach = 0.0f;
+    ShotBodyPart part = ShotBodyPart::TORSO;
   };
   std::array<Contact, 32> contacts{};
   std::size_t contactCount = 0;
   // Nobody further than the largest reach from the segment's bounding box can
   // touch the ball; the margin keeps the exact test below authoritative.
   // (The feet reach is a knob, which may be set beyond a keeper's.)
-  const float maxReach = std::max(B::GOALKEEPER_CONTROL_RADIUS_METRES,
-                                  touchKnobs[TouchKnob::FEET_REACH]);
+  // (A shot: a leg put out across its line, the foot and the ball beyond
+  // the ankle's reach, with its miss: shot block plan §3d.)
+  const float shotLegBound =
+      ball.isShot ? MatchTuning::ShotBlock::REACH_METRES +
+                        MatchTuning::ShotBlock::RUSHED_ERROR_FACTOR *
+                            MatchTuning::ShotBlock::ERROR_METRES_POOR +
+                        MatchTuning::Stride::FOOT_LENGTH + MatchTuning::Units::BALL_RADIUS_METRES
+                  : 0.0f;
+  const float maxReach = std::max({B::GOALKEEPER_CONTROL_RADIUS_METRES,
+                                   touchKnobs[TouchKnob::FEET_REACH], shotLegBound});
   const float reachBound = maxReach + 0.01f;
   const float boundMinX = std::min(start.x, end.x) - reachBound;
   const float boundMaxX = std::max(start.x, end.x) + reachBound;
@@ -3632,9 +3641,14 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     if (position.x < boundMinX || position.x > boundMaxX ||
         position.y < boundMinY || position.y > boundMaxY)
       continue;
+    // A shot meets a Binturong body without its hands (shot block plan
+    // step 1; a keeper outside his area too): it is in the way whatever his
+    // feet are doing, on the ground or in a jump.
+    const bool shotIntoBody = ball.isShot && !handsAllowed(player) &&
+                              getBody(player.isHomeTeam) == BodyId::BINTURONG;
     // In the air (a jump), only his head plays it (headInSweep).
-    if (!active(player) || player.trapTimer > 0.0f || player.airborne() ||
-        player.fallen)
+    if (!active(player) || (player.trapTimer > 0.0f && !shotIntoBody) ||
+        (player.airborne() && !shotIntoBody) || player.fallen)
       continue;
     if (touchOwner)
     {
@@ -3655,7 +3669,8 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     if (ball.kickerLockout > 0.0f && ball.kicker == player.player) continue;
     if ((ball.touchAttempts & (1U << slot)) != 0U) continue;
     // His foot is committed from a contest swing.
-    if (&player != touchOwner && player.footCooldown > 1e-4f) continue;
+    if (&player != touchOwner && player.footCooldown > 1e-4f && !shotIntoBody)
+      continue;
     // Team-mates let a pass run to its receiver, and never block their own
     // side's shot.
     if (ball.isPass && player.isHomeTeam == ball.passByHome &&
@@ -3686,6 +3701,17 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     const float gap = std::sqrt(gapSquared);
     const float height = startHeight + (endHeight - startHeight) * along;
     const bool hands = handsAllowed(player);
+    if (shotIntoBody)
+    {
+      // His torso, or a leg where his stride has it (shot block plan §3c):
+      // met where the ball reaches it on this stretch, or not at all.
+      if (const auto hit = shotMeetsBodyBinturong(
+              player, slot, {start.x, start.y, startHeight}, {end.x, end.y, endHeight}))
+        contacts[contactCount++] = {slot, hit->first, 0.0f,
+                                    startHeight + (endHeight - startHeight) * hit->first,
+                                    1.0f, hit->second};
+      continue;
+    }
     float reach = 0.0f;
     if (ball.isShot)
     {
@@ -3903,8 +3929,10 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     if (ball.isShot)
     {
       // Saves on target are resolved at the keeper's plane; here a keeper
-      // gathers a wide shot near him, or an outfielder throws his body in.
-      if (player.isGoalkeeper)
+      // gathers a wide shot near him, or an outfielder throws his body in
+      // (a Binturong keeper outside his area is a body like any other).
+      if (player.isGoalkeeper &&
+          (hands || getBody(player.isHomeTeam) != BodyId::BINTURONG))
       {
         if (!ball.shotOnTarget)
         {
@@ -3914,7 +3942,14 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
         }
         continue;
       }
-      if (!choosesToBlock(player) || !blocksShot(player, stretch)) continue;
+      if (!choosesToBlock(player) || !blocksShot(player, contact.gap, contact.reach)) continue;
+      if (getBody(player.isHomeTeam) == BodyId::BINTURONG && !hands)
+      {
+        ++stats.shotBlocksByPart[static_cast<std::size_t>(contact.part)];
+        if (contact.part != ShotBodyPart::TORSO && contact.slot < shotLegPoses.size() &&
+            shotLegPoses[contact.slot].blocking)
+          ++stats.shotReactionBlocks;
+      }
       ball.lastPossessor = player.player;
       ball.kicker = player.player;
       ball.kickerLockout = MatchTuning::Passing::KICKER_LOCKOUT_SECONDS;
@@ -5173,6 +5208,16 @@ void MatchEngine::notePathChange()
 {
   ball.pathSince = ballNow();
   ball.commitMisses = 0;
+}
+
+std::optional<std::pair<ShotLegs, float>> MatchEngine::recentShotLegs(
+    std::size_t slot, float maxAgeSeconds) const
+{
+  if (slot >= shotLegPoses.size() || shotLegPoses[slot].rolledAt < 0.0) return std::nullopt;
+  // (Met during this step: its ball clock runs ahead of the step's.)
+  const float age = std::max(static_cast<float>(ballNow() - shotLegPoses[slot].rolledAt), 0.0f);
+  if (age > maxAgeSeconds) return std::nullopt;
+  return std::pair{shotLegPoses[slot], age};
 }
 
 double MatchEngine::ballNow() const

@@ -272,8 +272,19 @@
   void settleOnBallBinturong(MatchPlayer& player, float touchSkill, bool hands);
   float keeperHoldSecondsBinturong(const MatchPlayer& keeper);
   /** Whether an outfielder in a shot's path gets his body in the way
-   * (stretch: how far he had to reach, 0-1). */
-  bool blocksShotBinturong(const MatchPlayer& player, float stretch);
+   * (gap: from his centre to the ball's path; reach: the most he had). */
+  bool blocksShotBinturong(const MatchPlayer& player, float gap, float reach);
+  /** Where on the ball's path from `from` to `to` (metres; share 0-1) a
+   * shot first meets his torso or a leg, and what it meets: his stride
+   * (shot block plan §3c, rolled once per path) until he has reacted, then
+   * a leg put across its line if he can reach it (§3d). */
+  std::optional<std::pair<float, ShotBodyPart>> shotMeetsBodyBinturong(
+      const MatchPlayer& player, std::size_t slot, Point3F from, Point3F to);
+  /** Once he has reacted to a shot (shot block plan §3d): whether he puts
+   * a leg across its line, seen on the path from `start` to `end` (from his
+   * centre on the ground, metres), and where; fills `legs`. */
+  void planShotBlockBinturong(const MatchPlayer& player, ShotLegs& legs, Point3F start,
+                              Point3F end);
   /** Whether he reads and reaches a ball not meant for him. */
   bool reachesBallBinturong(const MatchPlayer& player, float ballSpeed, float stretch);
   /** His first-touch skill (hands: a keeper allowed to handle it). */

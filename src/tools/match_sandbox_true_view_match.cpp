@@ -30,6 +30,8 @@ using P = MatchTuning::Pitch;
 
 /** A click picks the player whose centre is within this many pixels. */
 constexpr float PICK_PIXELS = 40.0f;
+/** A stride rolled for a shot shows this long (ball-clock seconds). */
+constexpr float LEG_GHOST_SECONDS = 1.5f;
 
 /** An engine angle (normalised pitch space) as a compass angle in the
  * engine's metric frame. */
@@ -256,6 +258,18 @@ PlayerID MatchTrueView::drawOverlay(const IMatchRenderer& renderer, const MatchE
     if (drawn[index] && pickedSlot(index) >= 0)
       TrueView::drawBody(paint, bodies[index], tuning, layers, technique, TrueView::Detail::FULL,
                          &labels, pickedSlot(index) == 0 ? &entries : nullptr);
+  // Anyone a shot passed lately: his legs as it met them, the stride rolled
+  // for it (shot block plan §3c) or a leg put across its line (§3d),
+  // fading out.
+  for (std::size_t index = 0; index < players.size(); ++index)
+  {
+    if (!drawn[index]) continue;
+    const auto recent = engine.recentShotLegs(index, LEG_GHOST_SECONDS);
+    if (!recent) continue;
+    TrueView::drawLegGhost(paint, bodies[index], recent->first,
+                           1.0f - recent->second / LEG_GHOST_SECONDS, recent->second,
+                           layers.labels ? &labels : nullptr);
+  }
   TrueView::drawLabels(paint, labels);
 
   // Who they are and what they are doing, top left of the view.
