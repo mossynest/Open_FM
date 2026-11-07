@@ -1563,6 +1563,7 @@ void MatchEngine::startShootout()
     if (player.isGoalkeeper)
     {
       keepers[side].state = GoalkeeperState::SET_POSITION;
+      keepers[side].dive = {};
       player.position = {player.isHomeTeam ? MatchTuning::Pitch::PLAYER_MIN_X
                                            : MatchTuning::Pitch::PLAYER_MAX_X,
                          MatchTuning::Pitch::CENTRE};
@@ -1883,7 +1884,7 @@ void MatchEngine::updateMovement(float dt)
     for (auto& player : players)
     {
       if (!active(player) || !player.isGoalkeeper ||
-          keepers[player.isHomeTeam ? 0 : 1].state == GoalkeeperState::DIVE)
+          keeperInDive(player))
         continue;
       if (!(ball.isPass && ball.intendedReceiver == player.player))
       {
@@ -1910,7 +1911,7 @@ void MatchEngine::updateMovement(float dt)
     MatchPlayer& player = players[slot];
     if (!active(player)) continue;
     if (player.isGoalkeeper &&
-        keepers[player.isHomeTeam ? 0 : 1].state == GoalkeeperState::DIVE)
+        keeperInDive(player))
       diveGoalkeeper(player, dt);
     else if (player.fallen)
       fallenBinturong(player, dt);
@@ -3294,6 +3295,30 @@ void MatchEngine::planGoalkeeperDive(bool defendingHome, bool penalty)
   // Down on the floor (a collision), he can't dive.
   if (!keeper || keeper->fallen) return;
   GoalkeeperControl& control = keepers[defendingHome ? 0 : 1];
+  if (getBody(defendingHome) == BodyId::BINTURONG)
+  {
+    // Goalkeeper plan step 3: set for it; he reacts and dives (or not) in
+    // diveGoalkeeper. Already in a dive, he is committed to it.
+    if (control.dive.active) return;
+    control.state = GoalkeeperState::DIVE;
+    control.timer = 0.0f;
+    if (penalty)
+    {
+      // From 11 m he guesses at the kick: a dive to that side at once; or
+      // he stays, and reacts as to any shot.
+      const float guess = choosePenaltyGuess(*keeper);
+      if (guess != 0.0f)
+      {
+        const Vector2F side = normalized({0.0f, guess});
+        control.dive.decidedFor = ball.pathSince;
+        planKeeperDiveBinturong(*keeper, control.dive, getSimulatedSeconds(),
+                                Point3F{side.x * MatchTuning::KeeperDive::PENALTY_SIDE_METRES,
+                                        side.y * MatchTuning::KeeperDive::PENALTY_SIDE_METRES,
+                                        MatchTuning::KeeperDive::PENALTY_HEIGHT_METRES});
+      }
+    }
+    return;
+  }
   control.state = GoalkeeperState::DIVE;
   control.timer = 0.0f;
   control.lateralVelocity = 0.0f;
@@ -3435,7 +3460,10 @@ std::optional<float> MatchEngine::moveBallPart(float seconds)
   {
     ball.shotElapsedSeconds += seconds;
     MatchPlayer* keeper = findGoalkeeper(!ball.shotByHome);
-    if (!ball.shotSaveResolved && keeper && !keeper->fallen)
+    // A Binturong keeper has no save roll: his body and hands meet it in
+    // the sweep (goalkeeper plan steps 1 and 2).
+    if (!ball.shotSaveResolved && keeper && !keeper->fallen &&
+        getBody(keeper->isHomeTeam) != BodyId::BINTURONG)
     {
       // Resolve the save when the ball reaches the keeper's plane.
       const float before = substepBallPosition.x - keeper->position.x;
@@ -3627,6 +3655,9 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     bool asLoose = false;
     /** Any other ball meeting his body, not played (pass block plan). */
     bool body = false;
+    /** A shot meeting his body (a keeper's in his area too: goalkeeper
+     * plan step 1). */
+    bool shotBody = false;
   };
   std::array<Contact, 32> contacts{};
   std::size_t contactCount = 0;
@@ -3688,14 +3719,17 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
   {
     const MatchPlayer& player = players[slot];
     const Vector2F position = toMetres(player.position);
-    if (position.x < boundMinX || position.x > boundMaxX ||
-        position.y < boundMinY || position.y > boundMaxY)
+    // (A diving keeper reaches well beyond it: goalkeeper plan step 3.)
+    const bool diving = keeperDiving(player);
+    if ((position.x < boundMinX || position.x > boundMaxX ||
+         position.y < boundMinY || position.y > boundMaxY) &&
+        !diving)
       continue;
     // A shot locks no Binturong player out (shot block plan step 4): once
     // it has slowed, or (a team-mate) if it is off target, he plays it like
-    // any loose ball. Otherwise it meets his body without its hands (step
-    // 1; a keeper outside his area too, a team-mate too): in the way
-    // whatever his feet are doing, on the ground or in a jump.
+    // any loose ball. Otherwise it meets his body (step 1; a keeper too, in
+    // his area or out of it: goalkeeper plan step 1; a team-mate too): in
+    // the way whatever his feet are doing, on the ground or in a jump.
     // (Slow as it comes at him: against his own motion, so he plays a ball
     // he is running with rather than bodying it on.)
     const bool binturong = getBody(player.isHomeTeam) == BodyId::BINTURONG;
@@ -3705,13 +3739,16 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
         ball.isShot && binturong &&
         (comingAt <= B::MAX_HEAVY_TOUCH_SPEED ||
          (player.isHomeTeam == ball.shotByHome && !ball.shotOnTarget));
-    const bool shotIntoBody = ball.isShot && !shotAsLoose && !handsAllowed(player) && binturong;
+    // (A keeper in a dive meets even a slow one with his body only.)
+    const bool shotIntoBody = ball.isShot && (!shotAsLoose || diving) && binturong;
     // Any other moving ball (pass block plan): it meets his torso and his
     // stride (an opponent's, also a leg put out once he has reacted)
     // whatever he is doing, unless it is his own ball, it has just left his
     // foot, it is his hands' (a keeper in his area) or it comes at him slow
     // enough to play like any loose ball (as a shot does).
-    if (!ball.isShot && binturong && active(player) && !player.fallen && !handsAllowed(player) &&
+    // (A keeper in a dive: his body, whatever his hands may do.)
+    if (!ball.isShot && binturong && active(player) && !player.fallen &&
+        (!handsAllowed(player) || diving) &&
         comingAt > B::MAX_HEAVY_TOUCH_SPEED &&
         !(touchOwner && (ownerHasIt || &player == touchOwner)) &&
         !(ball.kickerLockout > 0.0f && ball.kicker == player.player) &&
@@ -3746,7 +3783,7 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
                    feetAtBinturong(player, ballStepSeconds * (1.0f - share)))
             .has_value();
       };
-      if (bodyGap <= shotLegBound)
+      if (bodyGap <= shotLegBound || diving)
         if (const auto hit = shotMeetsBodyBinturong(player, slot, {start.x, start.y, startHeight},
                                                     {end.x, end.y, endHeight}, !teammate);
             hit && !headCanHeadAt(*hit) &&
@@ -3768,8 +3805,9 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
       continue;
     }
     // In the air (a jump), only his head plays it (headInSweep).
+    // In a dive, a keeper plays nothing: only his body meets it.
     if (!active(player) || (player.trapTimer > 0.0f && !shotIntoBody) ||
-        (player.airborne() && !shotIntoBody) || player.fallen)
+        (player.airborne() && !shotIntoBody) || player.fallen || (diving && !shotIntoBody))
       continue;
     if (touchOwner)
     {
@@ -3788,7 +3826,9 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
       }
     }
     if (ball.kickerLockout > 0.0f && ball.kicker == player.player) continue;
-    if ((ball.touchAttempts & (1U << slot)) != 0U) continue;
+    // (A shot meets his body even after his touch had its go: a keeper's
+    // hands that left an on-target shot to his plane.)
+    if ((ball.touchAttempts & (1U << slot)) != 0U && !shotIntoBody) continue;
     // His foot is committed from a contest swing.
     if (&player != touchOwner && player.footCooldown > 1e-4f && !shotIntoBody)
       continue;
@@ -3824,14 +3864,16 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     const bool hands = handsAllowed(player);
     if (shotIntoBody)
     {
-      // His torso, or a leg where his stride has it (shot block plan §3c):
-      // met where the ball reaches it on this stretch, or not at all.
+      // His torso, or a leg where his stride has it (shot block plan §3c),
+      // or a keeper's arm or hand (goalkeeper plan step 2): met where the
+      // ball reaches it on this stretch, or not at all.
       if (const auto hit = shotMeetsBodyBinturong(
               player, slot, {start.x, start.y, startHeight}, {end.x, end.y, endHeight}, true))
-        contacts[contactCount++] = {slot,      hit->share, 0.0f,
+        contacts[contactCount++] = {slot,  hit->share, 0.0f,
                                     startHeight + (endHeight - startHeight) * hit->share,
-                                    1.0f,      hit->part,  *hit};
-      else if (!player.airborne())
+                                    1.0f,  hit->part,  *hit,
+                                    false, false,      true};
+      else if (!player.airborne() && !diving)
         checkShotThroughTorsoBinturong(player, slot, {start.x, start.y, startHeight},
                                        {end.x, end.y, endHeight});
       continue;
@@ -4099,8 +4141,9 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     {
       // Saves on target are resolved at the keeper's plane; here a keeper
       // gathers a wide shot near him, or an outfielder throws his body in
-      // (a Binturong keeper outside his area is a body like any other).
-      if (player.isGoalkeeper &&
+      // (a Binturong keeper's body is a body like any other, in his area
+      // too: goalkeeper plan step 1).
+      if (player.isGoalkeeper && !contact.shotBody &&
           (hands || getBody(player.isHomeTeam) != BodyId::BINTURONG))
       {
         if (!ball.shotOnTarget)
@@ -4112,14 +4155,19 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
         continue;
       }
       if (!choosesToBlock(player) || !blocksShot(player, contact.gap, contact.reach)) continue;
-      const bool offBody = getBody(player.isHomeTeam) == BodyId::BINTURONG && !hands;
+      const bool offBody =
+          getBody(player.isHomeTeam) == BodyId::BINTURONG && (!hands || contact.shotBody);
+      // Off his own keeper's body in his area: a save if it no longer goes
+      // in, never a block (goalkeeper plan step 1).
+      const bool keeperBody = offBody && hands;
+      const bool wasOnTarget = ball.shotOnTarget;
       // Off a team-mate, or off anyone once it has been blocked, it is a
       // deflection, not a block (one blocked shot per shot).
       const bool deflection = player.isHomeTeam == ball.shotByHome || (offBody && ball.shotBlocked);
       const ShotLegs* legs =
           contact.slot < shotLegPoses.size() ? &shotLegPoses[contact.slot] : nullptr;
       const bool legPutOut = legs && legs->blocking && isLegPart(contact.part);
-      if (offBody && !deflection)
+      if (offBody && !deflection && !keeperBody)
       {
         ++stats.shotBlocksByPart[static_cast<std::size_t>(contact.part)];
         if (legPutOut) ++stats.shotReactionBlocks;
@@ -4156,6 +4204,23 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
             randomFloat(-MatchTuning::Defending::MAX_DEFLECTION_Y_SPEED,
                         MatchTuning::Defending::MAX_DEFLECTION_Y_SPEED);
         if (choosesToPutBlockBehind(player)) clearBehind(player);
+      }
+      if (keeperBody && player.isHomeTeam != ball.shotByHome)
+      {
+        ++stats.keeperBodyHitsByPart[static_cast<std::size_t>(contact.part)];
+        if (ball.isShot) ++stats.keeperBodyStillOnGoal;
+        if (wasOnTarget && !ball.isShot)
+        {
+          MatchPlayer* shooter = findMatchPlayer(lastShooter);
+          ++(player.isHomeTeam ? stats.homeSaves : stats.awaySaves);
+          ++(player.isHomeTeam ? stats.awayOnTarget : stats.homeOnTarget);
+          ++statsOf(player).saves;
+          if (shooter) ++statsOf(*shooter).shotsOnTarget;
+          MatchEvent& event = logEvent(MatchEventType::SAVE, player);
+          event.detail = MatchEventDetail::PARRIED;
+          event.secondaryPlayerId = lastShooter ? lastShooter->getId() : 0;
+        }
+        return;
       }
       if (offBody && deflection)
       {
@@ -4326,7 +4391,7 @@ bool MatchEngine::resolveAerialContest()
   // A goalkeeper in his own box claims first when he can reach the ball.
   for (auto& player : players)
   {
-    if (!active(player) || !player.isGoalkeeper || player.fallen ||
+    if (!active(player) || !player.isGoalkeeper || player.fallen || keeperDiving(player) ||
         (ball.kickerLockout > 0.0f && ball.kicker == player.player) ||
         !inPenaltyArea(player.position, player.isHomeTeam) ||
         distance(player.position, ball.position) >

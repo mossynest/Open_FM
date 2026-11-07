@@ -1692,7 +1692,7 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
       player.intent = PlayerIntent::GOALKEEP;
       targetVelocity = {0.0f, 0.0f};
       pinned = false;
-      if (keepers[player.isHomeTeam ? 0 : 1].state == GoalkeeperState::DIVE)
+      if (keeperInDive(player))
         continue;
       // A keeper receiving a team-mate's pass steps onto the ball's path.
       if (!receivingBackPass)

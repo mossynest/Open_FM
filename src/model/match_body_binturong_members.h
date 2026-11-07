@@ -307,6 +307,28 @@
    * centre on the ground, metres), and where; fills `legs`. */
   void planShotBlockBinturong(const MatchPlayer& player, ShotLegs& legs, Point3F start,
                               Point3F end);
+  /** Once a keeper has reacted to a shot (goalkeeper plan step 2): where
+   * his hands go, seen on the path from `start` to `end` (from his centre
+   * on the ground, metres), his centre on the pitch `centre` (metres);
+   * fills `hands`. */
+  void planKeeperHandsBinturong(const MatchPlayer& player, ShotHands& hands, Point3F start,
+                                Point3F end, Vector2F centre);
+  /** Once a keeper has reacted to a shot on target (goalkeeper plan step
+   * 3): whether he dives (its line beyond his standing reach) and how;
+   * fills `dive`. A penalty guess gives `forced` (from his centre, m). */
+  void planKeeperDiveBinturong(MatchPlayer& keeper, KeeperDive& dive, double from,
+                               std::optional<Point3F> forced = std::nullopt);
+  /** A diving keeper's shape at `when` (simulated s). */
+  KeeperDivePose keeperDivePoseBinturong(const MatchPlayer& keeper, const KeeperDive& dive,
+                                         double when) const;
+  /** Where on the ball's path from `from` to `to` (pitch metres) it first
+   * meets a diving keeper, and what it meets. */
+  std::optional<ShotBodyHit> diveMeetsBallBinturong(const MatchPlayer& keeper, Point3F from,
+                                                    Point3F to);
+  /** Where a keeper's hand `index` can be: `wanted` (from his centre)
+   * brought inside its reach from its shoulder (goalkeeper plan step 2). */
+  Point3F keeperHandReachBinturong(const MatchPlayer& player, std::size_t index,
+                                   Point3F wanted) const;
   /** Whether he reads and reaches a ball not meant for him. */
   bool reachesBallBinturong(const MatchPlayer& player, float ballSpeed, float stretch);
   /** His first-touch skill (hands: a keeper allowed to handle it). */

@@ -199,6 +199,16 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
       sample.shot_leg_blocks += stats.shotBlocksByPart[part];
   sample.shot_reaction_blocks = stats.shotReactionBlocks;
   sample.shot_deflections = stats.shotDeflections;
+  for (const int count : stats.keeperBodyHitsByPart) sample.keeper_body_hits += count;
+  sample.keeper_body_still_on_goal = stats.keeperBodyStillOnGoal;
+  sample.keeper_hand_hits =
+      stats.keeperBodyHitsByPart[static_cast<std::size_t>(ShotBodyPart::HAND)] +
+      stats.keeperBodyHitsByPart[static_cast<std::size_t>(ShotBodyPart::ARM)];
+  sample.keeper_hands_went = stats.keeperHandsWent;
+  sample.keeper_hands_together = stats.keeperHandsTogether;
+  sample.keeper_hands_late = stats.keeperHandsLate;
+  sample.keeper_dives = stats.keeperDives;
+  sample.keeper_dives_late = stats.keeperDivesLate;
   for (const int count : stats.ballBodyHitsByPart) sample.ball_body_hits += count;
   for (std::size_t part = 0; part < stats.ballBodyHitsByPart.size(); ++part)
     if (isLegPart(static_cast<ShotBodyPart>(part)))
@@ -699,6 +709,24 @@ std::map<std::string, Estimate> matchMetrics(
       column([](const MatchSample& s) { return s.shot_body_blocks; }));
   metrics["shot_deflections_per_shot"] = ratioEstimate(
       column([](const MatchSample& s) { return s.shot_deflections; }), shots);
+  metrics["keeper_body_hits_per_shot"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.keeper_body_hits; }), shots);
+  metrics["keeper_body_still_on_goal_per_shot"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.keeper_body_still_on_goal; }), shots);
+  metrics["keeper_hand_hit_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.keeper_hand_hits; }),
+      column([](const MatchSample& s) { return s.keeper_body_hits; }));
+  const std::vector<double> handsWent =
+      column([](const MatchSample& s) { return s.keeper_hands_went; });
+  metrics["keeper_hands_went_per_shot"] = ratioEstimate(handsWent, shots);
+  metrics["keeper_hands_together_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.keeper_hands_together; }), handsWent);
+  metrics["keeper_hands_late_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.keeper_hands_late; }), handsWent);
+  const std::vector<double> dives = column([](const MatchSample& s) { return s.keeper_dives; });
+  metrics["keeper_dives_per_shot"] = ratioEstimate(dives, shots);
+  metrics["keeper_dives_late_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.keeper_dives_late; }), dives);
   // Pass block plan: other balls off a body.
   const std::vector<double> ballBodyHits =
       column([](const MatchSample& s) { return s.ball_body_hits; });

@@ -62,6 +62,9 @@ enum class DerivedStat : std::uint8_t
   TACKLING,
   STRENGTH,
   BALANCE,
+  REFLEXES,
+  HANDLING,
+  AERIAL_REACH,
   // Match-engine-only stats.
   ENDURANCE,
   BURST_CAPACITY,
@@ -69,7 +72,7 @@ enum class DerivedStat : std::uint8_t
   RECOVERY_RATE,
   FAST_RECOVERY,
 };
-inline constexpr std::size_t DERIVED_STAT_COUNT = 14;
+inline constexpr std::size_t DERIVED_STAT_COUNT = 17;
 
 enum class DerivedLayer : std::uint8_t
 {
@@ -201,6 +204,23 @@ inline constexpr std::array<DerivedStatInfo, DERIVED_STAT_COUNT> DERIVED_STATS{{
      "Resisting a knock: how far a collision can take him past what he can "
      "run in that direction, or how suddenly, before he stumbles or falls.",
      "", 0.0f, 0.0f, 0.0f, 0.0f},
+    // The goalkeeper plan (step 2): FM's keeper attributes; Goalkeeping
+    // stands in until the game carries them.
+    {DerivedLayer::FUTURE_GAME_STAT, "Reflexes", "Ref",
+     "A keeper's reaction to a struck ball: how soon his hands start to "
+     "move (0.28 s at 1 to 0.16 s at 99), and how close to its line they "
+     "land.",
+     "", 0.0f, 0.0f, 0.0f, 0.0f},
+    {DerivedLayer::FUTURE_GAME_STAT, "Handling", "Han",
+     "A keeper's hands on the ball: how firmly a parry springs off them "
+     "(later, whether it sticks).",
+     "", 0.0f, 0.0f, 0.0f, 0.0f},
+    // The goalkeeper plan (step 3): Jumping reach's range (1.60 m and
+    // 2.00 m men) plus about 0.6 m of arm above the head.
+    {DerivedLayer::FUTURE_GAME_STAT, "Aerial reach", "Aer",
+     "How high a keeper can get his fingertips at the top of his jump: his "
+     "height plus his arm and his jump.",
+     "m", 2.45f, 3.35f, 2.40f, 3.40f, STAT_1_RATING, STAT_99_RATING},
     // ---- Match-engine-only stats ------------------------------------------
     // The fatigue plan (4.1): from the research ranges, a little wider.
     {DerivedLayer::MATCH_ENGINE_ONLY, "Endurance", "End",
@@ -300,6 +320,16 @@ constexpr DerivedRecipe jumpingReachRecipe()
   return recipe;
 }
 
+constexpr DerivedRecipe aerialReachRecipe()
+{
+  // His height plus his arm and jump: Goalkeeping stands in for the part
+  // on top of his height (0.85 m at 1 to 1.35 m at 99).
+  DerivedRecipe recipe = only(BaseAttribute::GOALKEEPING);
+  recipe.heightPartLow = 0.85f;
+  recipe.heightPartHigh = 1.35f;
+  return recipe;
+}
+
 constexpr DerivedRecipe balanceRecipe()
 {
   // A stand-in until the game carries Balance: half Physicality (how solid
@@ -330,7 +360,8 @@ constexpr DerivedRecipe burstRecipe()
  * touch Dribbling and Passing, technique Passing, Dribbling and Shooting,
  * heading Shooting and Defending, jumping reach his height plus a jump from
  * Pace and Physicality, tackling Defending, strength Physicality, balance
- * half Physicality and half Agility's blend. Match-engine-only: the
+ * half Physicality and half Agility's blend, reflexes and handling
+ * Goalkeeping. Match-engine-only: the
  * endurance stats echo Stamina, except burst capacity (half Stamina, half
  * Acceleration). */
 inline constexpr DerivedRecipes DEFAULT_DERIVED_RECIPES{{
@@ -343,6 +374,9 @@ inline constexpr DerivedRecipes DEFAULT_DERIVED_RECIPES{{
     DerivedStats::only(BaseAttribute::DEFENDING),
     DerivedStats::only(BaseAttribute::PHYSICALITY),
     DerivedStats::balanceRecipe(),
+    DerivedStats::only(BaseAttribute::GOALKEEPING),
+    DerivedStats::only(BaseAttribute::GOALKEEPING),
+    DerivedStats::aerialReachRecipe(),
     DerivedStats::only(BaseAttribute::STAMINA),
     DerivedStats::burstRecipe(),
     DerivedStats::only(BaseAttribute::STAMINA),

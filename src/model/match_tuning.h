@@ -143,8 +143,8 @@ struct MatchTuning final
      * (the head's as the heading model's spring, Aerial::HEADER_SPRING; its
      * along-kept as a shin's, my placeholder).
      */
-    static constexpr float SPRING_BACK[5] = {0.35f, 0.35f, 0.50f, 0.55f, 0.60f};
-    static constexpr float ALONG_KEPT[5] = {0.80f, 0.80f, 0.85f, 0.85f, 0.85f};
+    static constexpr float SPRING_BACK[7] = {0.35f, 0.35f, 0.50f, 0.55f, 0.60f, 0.35f, 0.35f};
+    static constexpr float ALONG_KEPT[7] = {0.80f, 0.80f, 0.85f, 0.85f, 0.85f, 0.80f, 0.80f};
     /** A leg put out with the foot meeting it (agreed: a little aim): its
      * face turned up to this far (degrees, about the vertical) to send it
      * away from his goal; Tackling 1 to 99 (my placeholder). */
@@ -162,6 +162,84 @@ struct MatchTuning final
     static constexpr float INSIDE_MEETS_SPEED = 1.0f;
     static constexpr float RECOVERY_BODY_SECONDS = 0.2f;
     static constexpr float RECOVERY_LEG_EXTRA_SECONDS = 0.1f;
+  };
+
+  /**
+   * A keeper's reaction hands (goalkeeper plan step 2, agreed 2026-11-07 as
+   * a first pass): standing saves only, no dive yet. Each stat poor at 1,
+   * best at 99. Marked placeholders are mine.
+   */
+  struct KeeperHands final
+  {
+    /** From the strike to his hands starting to move (s; Reflexes): pure
+     * reaction, no reading of the striker. */
+    static constexpr float REACTION_SECONDS_POOR = 0.28f;
+    static constexpr float REACTION_SECONDS_BEST = 0.16f;
+    /** How fast a hand moves out (m/s; Agility). */
+    static constexpr float HAND_SPEED_POOR = 4.0f;
+    static constexpr float HAND_SPEED_BEST = 7.0f;
+    /** Sideways reach from his centre to the hand's centre, as a share of
+     * his height (half his span plus a lean), from the ground up to his
+     * standing fingertip reach (Aerial::GOALKEEPER_ARM_REACH_RATIO). */
+    static constexpr float REACH_HEIGHT_SHARE = 0.65f;
+    /** Each shoulder off his centre line (share of height) and its height
+     * (Goalkeeper::SHOULDER_HEIGHT_SHARE); a hand reaches from its own
+     * shoulder, so the far hand reaches less (placeholder). */
+    static constexpr float SHOULDER_OFF_CENTRE_SHARE = 0.11f;
+    /** No further behind his centre than this (m; Agility, user 2026-11-07;
+     * the figures are my placeholders). */
+    static constexpr float BEHIND_METRES_POOR = 0.05f;
+    static constexpr float BEHIND_METRES_BEST = 0.25f;
+    /** A gloved hand as a ball (m radius), the two side by side this far
+     * apart (centres, m), an arm as a rod (m radius). Placeholders. */
+    static constexpr float HAND_RADIUS_METRES = 0.09f;
+    static constexpr float HANDS_APART_METRES = 0.15f;
+    static constexpr float ARM_RADIUS_METRES = 0.045f;
+    /** Ready: in front of him at this share of his height, this far ahead
+     * and this far either side (m). Placeholders. */
+    static constexpr float READY_HEIGHT_SHARE = 0.55f;
+    static constexpr float READY_AHEAD_METRES = 0.25f;
+    static constexpr float READY_SIDE_METRES = 0.2f;
+    /** Where the hand lands from where he aimed it (m at most, any
+     * direction; Reflexes), with time to spare; ShotBlock's rushed factor
+     * with none. */
+    static constexpr float MISS_METRES_POOR = 0.15f;
+    static constexpr float MISS_METRES_BEST = 0.03f;
+    /** Of its pace straight into a hand, this share springs back
+     * (Handling: soft hands to firm wrists). */
+    static constexpr float SPRING_BACK_POOR = 0.25f;
+    static constexpr float SPRING_BACK_BEST = 0.45f;
+    /** Standing fingertip reach, arm straight up, as a share of his height
+     * (the step 3 anchors: Aerial Reach is this plus his jump). */
+    static constexpr float STANDING_REACH_HEIGHT_SHARE = 1.33f;
+  };
+
+  /**
+   * A keeper's dive (goalkeeper plan step 3, agreed 2026-11-07 as a first
+   * pass): only for a shot on target whose line passes beyond his standing
+   * reach, aimed as his hands are (its real line plus the Reflexes miss).
+   * Marked placeholders are mine.
+   */
+  struct KeeperDive final
+  {
+    /** Fingertips' reach to the side from where he stood: this share of his
+     * height plus up to this much more (m, Agility). */
+    static constexpr float REACH_HEIGHT_SHARE = 1.35f;
+    static constexpr float REACH_AGILITY_METRES = 0.4f;
+    /** Push-off to full stretch (s; Agility); a shorter dive takes its
+     * share of it, never less than this share (placeholder). */
+    static constexpr float STRETCH_SECONDS_POOR = 0.75f;
+    static constexpr float STRETCH_SECONDS_BEST = 0.55f;
+    static constexpr float SHORTEST_STRETCH_SHARE = 0.5f;
+    /** On the floor, from landing to back on his feet (s; Agility). */
+    static constexpr float DOWN_SECONDS_POOR = 3.0f;
+    static constexpr float DOWN_SECONDS_BEST = 0.8f;
+    /** His legs together as a rod (m radius; placeholder). */
+    static constexpr float LEGS_RADIUS_METRES = 0.1f;
+    /** A penalty guess: he dives for a spot this far to the side and this
+     * high (m; placeholders). */
+    static constexpr float PENALTY_SIDE_METRES = 2.5f;
+    static constexpr float PENALTY_HEIGHT_METRES = 0.8f;
   };
 
   struct Pitch final

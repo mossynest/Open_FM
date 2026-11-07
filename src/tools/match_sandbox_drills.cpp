@@ -4113,7 +4113,8 @@ class ShotBlockDrill final : public Drill
                     ? turnDegrees(shotLine, {off.velocity.x / offSpeed, off.velocity.y / offSpeed})
                     : 0.0f;
       const MatchStats& stats = engine.getStats();
-      static constexpr std::array<const char*, 5> PARTS{"torso", "thigh", "shin", "foot", "head"};
+      static constexpr std::array<const char*, 7> PARTS{"torso", "thigh", "shin", "foot",
+                                                        "head",  "hand",  "arm"};
       const bool pass = ballKind > 0.5f;
       for (std::size_t index = 0; index < PARTS.size(); ++index)
         if ((pass ? stats.ballBodyHitsByPart[index] - bodyHitsBefore[index]

@@ -155,6 +155,17 @@ struct MatchSample
   int shot_leg_blocks = 0;
   int shot_reaction_blocks = 0;
   int shot_deflections = 0;
+  /** Shots meeting the defending keeper's body in his area (goalkeeper plan
+   * step 1). */
+  int keeper_body_hits = 0;
+  int keeper_body_still_on_goal = 0;
+  /** Of keeper_body_hits, off a hand or an arm (step 2). */
+  int keeper_hand_hits = 0;
+  int keeper_hands_went = 0;
+  int keeper_hands_together = 0;
+  int keeper_hands_late = 0;
+  int keeper_dives = 0;
+  int keeper_dives_late = 0;
   /** Shot block plan §3f check: shots through a torso without meeting it. */
   /** Pass block plan: other balls off a body (all, off a leg put out, an
    * opponent's pass blocked, a deflection off a team-mate or nobody's). */

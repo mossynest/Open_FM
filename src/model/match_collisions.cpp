@@ -332,7 +332,7 @@ void MatchEngine::collidePlayers(float dt)
           player.player && bodyOf(player.isHomeTeam) == BodyId::BINTURONG &&
           !player.fallen && !deepInTunnel(player.position) &&
           !(player.onPitch && player.isGoalkeeper &&
-            keepers[player.isHomeTeam ? 0 : 1].state == GoalkeeperState::DIVE);
+            keeperInDive(player));
       if (!path.takesPart) continue;
       const Vector2F end = toMetres(player.position);
       if (!player.onPitch)

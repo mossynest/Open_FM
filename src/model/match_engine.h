@@ -411,8 +411,8 @@ struct MatchPlayer
    * above when he is loaded. */
   std::array<float, DERIVED_STAT_COUNT> derived{};
   /** Bit per derived stat set by a drill (kept when the rest re-derive). */
-  std::uint16_t derivedOverrides = 0;
-  static_assert(DERIVED_STAT_COUNT <= 16);
+  std::uint32_t derivedOverrides = 0;
+  static_assert(DERIVED_STAT_COUNT <= 32, "derivedOverrides holds a bit per derived stat");
   float derivedStat(DerivedStat stat) const
   {
     return derived[static_cast<std::size_t>(stat)];
@@ -920,11 +920,93 @@ enum class ShotLegOutcome : std::uint8_t
   COUNT,
 };
 
+/** A keeper's hands as a shot met them (goalkeeper plan step 2): held ready
+ * in front of him, then, once he has reacted, both side by side to where
+ * its line passes him (the nearer one alone when the other can't reach),
+ * with a miss. Positions are metres from his centre (x, y) and up from the
+ * ground (z); targets are on the pitch (metres). Index 0 is his left hand. */
+struct ShotHands
+{
+  /** A keeper in his area against this shot: he has hands. */
+  bool active = false;
+  bool reacted = false;
+  /** Going for its line (reacted, and it is not past him). */
+  bool going = false;
+  /** Both hands together (else the nearer one, `near`, alone). */
+  bool together = false;
+  std::size_t near = 0;
+  /** When they start to move (ball clock, s), where from, where to, how
+   * long each takes (s) and how far each has got (0-1). */
+  double from = 0.0;
+  std::array<Point3F, 2> start{};
+  std::array<Point3F, 2> target{};
+  std::array<float, 2> seconds{};
+  std::array<float, 2> share{};
+  /** Where they were when the ball last met them (from his centre). */
+  std::array<Point3F, 2> at{};
+  /** The miss's radius and the miss rolled (m); his spare time (s; less
+   * than none: the ball beats his hand). */
+  float errorRadius = 0.0f;
+  float error = 0.0f;
+  float spareSeconds = 0.0f;
+};
+
+/** A keeper's dive (goalkeeper plan step 3): committed at push-off, then
+ * stretching out in the air, falling to the floor, down, and getting up.
+ * Pitch positions in metres; the body tilts in the upright plane along
+ * `along`. Index 0 of a pair is his left hand. */
+struct KeeperDive
+{
+  /** Committed: from push-off until he is back on his feet. */
+  bool active = false;
+  /** The ball path (`pathSince`) he last decided on. */
+  double decidedFor = -1.0;
+  /** Push-off (simulated s), his feet there (m), the way he goes (metric
+   * unit) and its left. */
+  double from = 0.0;
+  Vector2F origin{};
+  Vector2F along{1.0f, 0.0f};
+  Vector2F across{0.0f, 1.0f};
+  /** At full stretch: his feet this far along and this high (m), his body
+   * tilted this far from upright (rad), and his hands (pitch metres, z up). */
+  float feetOut = 0.0f;
+  float feetUp = 0.0f;
+  float tilt = 0.0f;
+  std::array<Point3F, 2> handEnd{};
+  /** Where his hands started (from his feet at push-off). */
+  std::array<Point3F, 2> handStart{};
+  bool together = false;
+  std::size_t near = 0;
+  /** Push-off to full stretch, full stretch to the floor, on the floor
+   * until up (s); how far he drops after full stretch (m). */
+  float stretchSeconds = 0.0f;
+  float fallSeconds = 0.0f;
+  float dropMetres = 0.0f;
+  float downSeconds = 0.0f;
+  /** The miss's radius and the miss (m), his spare time (s). */
+  float errorRadius = 0.0f;
+  float error = 0.0f;
+  float spareSeconds = 0.0f;
+};
+
+/** A diving keeper's shape at a moment (pitch metres, z up). */
+struct KeeperDivePose
+{
+  Point3F feet{};
+  Point3F hip{};
+  Point3F neck{};
+  Point3F top{};
+  std::array<Point3F, 2> shoulders{};
+  std::array<Point3F, 2> hands{};
+};
+
 /** His legs as a shot passing him met them (shot block plan §3c, §3d):
  * the stride rolled for the ball's path, then, once he has reacted and if
  * he can reach its line, a leg put across it. */
 struct ShotLegs
 {
+  /** A keeper's hands (goalkeeper plan step 2). */
+  ShotHands hands;
   /** The ball path (`pathSince`) this is for, and when `pose` was last set
    * (ball clock, s). */
   double pathFor = -1.0;
@@ -978,6 +1060,9 @@ enum class ShotBodyPart : std::uint8_t
   FOOT,
   /** The upright body above the top of his shoulders (his head line). */
   HEAD,
+  /** A keeper's gloved hand and his arm (goalkeeper plan step 2). */
+  HAND,
+  ARM,
   COUNT,
 };
 
@@ -1379,6 +1464,21 @@ struct MatchStats
   /** Open-play shots blocked by a Binturong body, by what they met
    * (ShotBodyPart: torso, thigh, shin, foot). */
   std::array<int, static_cast<std::size_t>(ShotBodyPart::COUNT)> shotBlocksByPart{};
+  /** Shots meeting the defending keeper's body, arms or hands in his area
+   * (goalkeeper plan steps 1 and 2), by what they met. */
+  std::array<int, static_cast<std::size_t>(ShotBodyPart::COUNT)> keeperBodyHitsByPart{};
+  /** Of those, still going in afterwards. */
+  int keeperBodyStillOnGoal = 0;
+  /** Shots a keeper's hands went for once he had reacted (goalkeeper plan
+   * step 2); of those, both hands together, and the ball there before his
+   * hand could be. */
+  int keeperHandsWent = 0;
+  int keeperHandsTogether = 0;
+  int keeperHandsLate = 0;
+  /** Shots a keeper dived for (goalkeeper plan step 3); of those, the ball
+   * there before his full stretch. */
+  int keeperDives = 0;
+  int keeperDivesLate = 0;
   /** Of those off a leg, the ones off a leg he put there (shot block plan
    * §3d: a reaction block) rather than his stride. */
   int shotReactionBlocks = 0;
@@ -2990,7 +3090,19 @@ class MatchEngine
     float reactionRemaining = 0.0f;
     float diveTargetY = MatchTuning::Pitch::CENTRE;
     float lateralVelocity = 0.0f;
+    /** A Binturong keeper's dive (goalkeeper plan step 3). */
+    KeeperDive dive;
   };
+  /** Whether this keeper is diving or down from a dive (or set for a shot):
+   * his body is the dive's, not the brain's. */
+  [[nodiscard]] bool keeperInDive(const MatchPlayer& player) const
+  {
+    if (!player.isGoalkeeper) return false;
+    const GoalkeeperControl& control = keepers[player.isHomeTeam ? 0 : 1];
+    return control.state == GoalkeeperState::DIVE || control.dive.active;
+  }
+  /** Whether this keeper has pushed off into a dive and is not yet up. */
+  [[nodiscard]] bool keeperDiving(const MatchPlayer& player) const;
   /** Index 0 is the home keeper, 1 the away keeper. */
   std::array<GoalkeeperControl, 2> keepers{};
   MatchState state = MatchState::KICK_OFF;
