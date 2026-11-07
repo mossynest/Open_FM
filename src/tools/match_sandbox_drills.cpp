@@ -3881,6 +3881,12 @@ class ShotBlockDrill final : public Drill
     list.push_back(setting("Power (share)", &power, 0.3f, 1.0f, false,
                            "Share of his shot power."));
     list.push_back(setting("Shooting", &shooting, 1.0f, 100.0f, true));
+    DrillParameter kind = setting("Ball", &ballKind, 0.0f, 1.0f, true,
+                                  "Shot: at the goal.\nPass: along the ground to the same "
+                                  "spot, nobody there (pass block plan): the defender "
+                                  "intercepts it (today's touch) or it meets his body.");
+    kind.choices = {"Shot", "Pass"};
+    list.push_back(kind);
     DrillParameter defender = setting("Defender distance (m)", &distance, 0.5f, 25.0f,
                                       false, "From the shooter along the shot's line.");
     defender.section = "Defender";
@@ -3998,6 +4004,9 @@ class ShotBlockDrill final : public Drill
     part.clear();
     blocksBefore = engine.getStats().shotBlocksByPart;
     reactionBefore = engine.getStats().shotReactionBlocks;
+    bodyHitsBefore = engine.getStats().ballBodyHitsByPart;
+    ballReactionBefore = engine.getStats().ballReactionBlocks;
+    noTouchBefore = noTouchNow = engine.getStats().ballBodyAfterNoTouch;
     throughBefore = throughNow = engine.getStats().shotTorsoPassThroughs;
     insideBefore = insideNow = engine.getStats().shotTorsoInsideAtStart;
   }
@@ -4019,6 +4028,35 @@ class ShotBlockDrill final : public Drill
       const float ahead = (at.x + defender->velocity.x * lead - mark.x) * runLeft.x +
                           (at.y + defender->velocity.y * lead - mark.y) * runLeft.y;
       if (ahead >= 0.0f) shoot(engine);
+    }
+    // A pass: on its way once it has left him; then off his body, his
+    // ball (intercepted), or past him.
+    if (ballKind > 0.5f && shotAimed && defender)
+    {
+      const MatchBall& ball = engine.getBall();
+      if (!shotAt && ball.isPass && !(ball.possessedBy && ball.possessedBy->getId() == shooterId))
+      {
+        shotAt = now;
+        speedAtShot = speedOf(*defender);
+        const Vector2F at = toMetres(defender->position);
+        const Vector2F from = toMetres(spot);
+        offLineAtShot = (at.x - from.x) * runLeft.x + (at.y - from.y) * runLeft.y;
+        seenEvents = engine.getEvents().size();
+      }
+      if (shotAt && outcome.empty())
+      {
+        const MatchStats& stats = engine.getStats();
+        noTouchNow = stats.ballBodyAfterNoTouch;
+        int hits = 0;
+        for (std::size_t index = 0; index < 4; ++index)
+          hits += stats.ballBodyHitsByPart[index] - bodyHitsBefore[index];
+        if (hits > 0)
+          outcome = "blocked";
+        else if (ball.possessedBy && ball.possessedBy->getId() == defenderId)
+          outcome = "intercepted";
+        else if (now >= *shotAt + 4.0)
+          outcome = "past him";
+      }
     }
     const auto& events = engine.getEvents();
     for (; seenEvents < events.size() && outcome.empty(); ++seenEvents)
@@ -4076,10 +4114,16 @@ class ShotBlockDrill final : public Drill
                     : 0.0f;
       const MatchStats& stats = engine.getStats();
       static constexpr std::array<const char*, 4> PARTS{"torso", "thigh", "shin", "foot"};
+      const bool pass = ballKind > 0.5f;
       for (std::size_t index = 0; index < PARTS.size(); ++index)
-        if (stats.shotBlocksByPart[index] > blocksBefore[index]) part = PARTS[index];
+        if ((pass ? stats.ballBodyHitsByPart[index] - bodyHitsBefore[index]
+                  : stats.shotBlocksByPart[index] - blocksBefore[index]) > 0)
+          part = PARTS[index];
       if (!part.empty() && part != "torso")
-        part += stats.shotReactionBlocks > reactionBefore ? " (reaction block)" : " (stride)";
+        part += (pass ? stats.ballReactionBlocks > ballReactionBefore
+                      : stats.shotReactionBlocks > reactionBefore)
+                    ? " (reaction block)"
+                    : " (stride)";
       // Still going in off him: still the shot (shot block plan step 4).
       stillShot = engine.getBall().isShot;
     }
@@ -4217,6 +4261,8 @@ class ShotBlockDrill final : public Drill
         {"Surface facing up", blocked ? offNormalUp : 0.0},
         {"Part hit", blocked ? static_cast<double>(offPart) : -1.0},
         {"Goal", outcome == "goal" ? 1.0 : 0.0},
+        {"Intercepted", outcome == "intercepted" ? 1.0 : 0.0},
+        {"Body after no touch", static_cast<double>(noTouchNow - noTouchBefore)},
         {"Through torso unmet", static_cast<double>(throughNow - throughBefore)},
         {"Inside at sub-step start", static_cast<double>(insideNow - insideBefore)},
     };
@@ -4235,7 +4281,10 @@ class ShotBlockDrill final : public Drill
   void shoot(MatchEngine& engine)
   {
     engine.keepBall(shooterId, false);
-    engine.forceShot(shooterId, Vector2F{aimAcross, aimHeight}, power);
+    if (ballKind > 0.5f)
+      engine.forcePassTo(shooterId, {1.0f, 0.5f + aimAcross / WIDTH}, ForcedPassStyle::GROUND);
+    else
+      engine.forceShot(shooterId, Vector2F{aimAcross, aimHeight}, power);
     shotAimed = true;
   }
   [[nodiscard]] std::string settingsKey() const
@@ -4244,7 +4293,7 @@ class ShotBlockDrill final : public Drill
                        "{:.0f}|{:.0f}|{:.0f}",
                        line, side, aimAcross, aimHeight, power, shooting, distance, offLine,
                        moving, runUp, defending, tackling, height) +
-           std::format("|{:.0f}|{:.0f}", keeperChoice, goalkeeping);
+           std::format("|{:.0f}|{:.0f}|{:.0f}", keeperChoice, goalkeeping, ballKind);
   }
   void tally()
   {
@@ -4273,6 +4322,11 @@ class ShotBlockDrill final : public Drill
   float runUp = 12.0f;
   float keeperChoice = 0.0f;
   float goalkeeping = 70.0f;
+  float ballKind = 0.0f;
+  std::array<int, 4> bodyHitsBefore{};
+  int ballReactionBefore = 0;
+  int noTouchBefore = 0;
+  int noTouchNow = 0;
   float offLineAtShot = 0.0f;
   float offSpeed = 0.0f;
   float offTurn = 0.0f;

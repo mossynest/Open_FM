@@ -4599,7 +4599,7 @@ std::optional<PassingLine> passingLineOf(Point3F start, Point3F end, float secon
 
 std::optional<ShotBodyHit> MatchEngine::shotMeetsBodyBinturong(const MatchPlayer& player,
                                                                std::size_t slot, Point3F from,
-                                                               Point3F to)
+                                                               Point3F to, bool canPutLegOut)
 {
   using S = MatchTuning::Stride;
   const float ballRadius = MatchTuning::Units::BALL_RADIUS_METRES;
@@ -4673,9 +4673,10 @@ std::optional<ShotBodyHit> MatchEngine::shotMeetsBodyBinturong(const MatchPlayer
     legs.stride = legPoseOf(player.heightMetres,
                             player.airborne() ? Vector2F{} : player.velocity, facing, rolls);
     legs.pathFor = ball.pathSince;
-    // For the lab: does its line pass within his full reach?
+    // For the lab: does a shot's line pass within his full reach?
     if (const auto line = passingLineOf(start, end, substepStretchSeconds, player.velocity);
-        line && line->toNearest > 0.0f && line->gap <= MatchTuning::ShotBlock::REACH_METRES)
+        ball.isShot && line && line->toNearest > 0.0f &&
+        line->gap <= MatchTuning::ShotBlock::REACH_METRES)
     {
       legs.chance = true;
       ++stats.shotLegChances;
@@ -4690,11 +4691,16 @@ std::optional<ShotBodyHit> MatchEngine::shotMeetsBodyBinturong(const MatchPlayer
        MatchTuning::ShotBlock::REACTION_SECONDS_POOR) *
           std::clamp((player.defending - STAT_1_RATING) / (STAT_99_RATING - STAT_1_RATING), 0.0f,
                      1.0f);
+  // (A team-mate's pass: no leg; getting out of its way is his brain's,
+  // later. Pass block plan.)
   if (!legs.reacted && now >= ball.pathSince + reaction)
   {
     legs.reacted = true;
     legs.legFrom = ball.pathSince + reaction;
-    planShotBlockBinturong(player, legs, start, end);
+    if (canPutLegOut)
+      planShotBlockBinturong(player, legs, start, end);
+    else
+      legs.noBlock = "a team-mate's ball";
     if (legs.chance) ++stats.shotLegOutcomes[static_cast<std::size_t>(legs.outcome)];
   }
   if (legs.blocking)
@@ -4992,6 +4998,38 @@ void MatchEngine::bounceShotOffBodyBinturong(const MatchPlayer& player, const Sh
   shotBounce = {outcome.velocity, ball.spin, ballNow(), hit};
 }
 
+void MatchEngine::ballMeetsBodyBinturong(MatchPlayer& player, std::size_t slot,
+                                         const ShotBodyHit& hit)
+{
+  // Whose ball it was: an opponent's pass he blocks; off a team-mate's (or
+  // nobody's) ball it is a deflection.
+  const MatchPlayer* lastPlayedBy = findMatchPlayer(ball.lastPossessor);
+  const bool opponents = lastPlayedBy && lastPlayedBy->isHomeTeam != player.isHomeTeam;
+  const ShotLegs* legs = slot < shotLegPoses.size() ? &shotLegPoses[slot] : nullptr;
+  const bool legPutOut = legs && legs->blocking && hit.part != ShotBodyPart::TORSO;
+  ++stats.ballBodyHitsByPart[static_cast<std::size_t>(hit.part)];
+  if (legPutOut) ++stats.ballReactionBlocks;
+  if (!opponents)
+    ++stats.ballDeflections;
+  else if (ball.isPass)
+  {
+    ++stats.passesBlocked;
+    ++statsOf(player).blockedPasses;
+  }
+  // A loose ball now, nobody's pass; him kept off it while it comes off
+  // him (off a leg put out, until it is back), as after a shot block.
+  if (ball.inTouch) clearPossession();
+  clearFlightState();
+  ball.lastPossessor = player.player;
+  ball.kicker = player.player;
+  ball.kickerLockout = legPutOut ? legs->outShare * legs->legSeconds +
+                                       MatchTuning::ShotBlock::RECOVERY_LEG_EXTRA_SECONDS
+                                 : MatchTuning::ShotBlock::RECOVERY_BODY_SECONDS;
+  ball.touchAttempts = 0;
+  notePathChange();
+  bounceShotOffBodyBinturong(player, hit);
+}
+
 void MatchEngine::planShotBlockBinturong(const MatchPlayer& player, ShotLegs& legs,
                                          Point3F start, Point3F end)
 {
@@ -5091,19 +5129,13 @@ void MatchEngine::planShotBlockBinturong(const MatchPlayer& player, ShotLegs& le
   legs.legSeconds = legOutSeconds * outFrom(aim) / K::REACH_METRES;
 }
 
-bool MatchEngine::reachesBallBinturong(const MatchPlayer& player,
-                                       float ballSpeed, float stretch)
+bool MatchEngine::reachesBallBinturong(const MatchPlayer& /*player*/,
+                                       float /*ballSpeed*/, float /*stretch*/)
 {
-  // A ball not meant for him has to be read and reached: close balls are
-  // met, fast wide ones fly past.
-  using B = MatchTuning::Ball;
-  const float reaction =
-      std::clamp(B::INTERCEPT_BASE_CHANCE +
-                     player.defending * B::INTERCEPT_DEFENDING_BONUS -
-                     ballSpeed * B::INTERCEPT_SPEED_PENALTY,
-                 B::INTERCEPT_MIN_CHANCE, 1.0f);
-  const float closeness = (1.0f - stretch) * (1.0f - stretch);
-  return randomFloat(0.0f, 1.0f) < reaction + (1.0f - reaction) * closeness;
+  // No dice (pass block plan): a ball in his reach is his to play. Whether
+  // he had time to judge it and set himself is the brain's, later; a ball
+  // he doesn't play meets his body.
+  return true;
 }
 
 float MatchEngine::touchSkillBinturong(const MatchPlayer& player,

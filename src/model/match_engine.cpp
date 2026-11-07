@@ -3622,6 +3622,8 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     ShotBodyHit hit{};
     /** A shot he plays like any loose ball (shot block plan step 4). */
     bool asLoose = false;
+    /** Any other ball meeting his body, not played (pass block plan). */
+    bool body = false;
   };
   std::array<Contact, 32> contacts{};
   std::size_t contactCount = 0;
@@ -3630,12 +3632,19 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
   // (The feet reach is a knob, which may be set beyond a keeper's.)
   // (A shot: a leg put out across its line, the foot and the ball beyond
   // the ankle's reach, with its miss: shot block plan §3d.)
-  const float shotLegBound =
-      ball.isShot ? MatchTuning::ShotBlock::REACH_METRES +
-                        MatchTuning::ShotBlock::RUSHED_ERROR_FACTOR *
-                            MatchTuning::ShotBlock::ERROR_METRES_POOR +
-                        MatchTuning::Stride::FOOT_LENGTH + MatchTuning::Units::BALL_RADIUS_METRES
-                  : 0.0f;
+  // (Any moving ball meets a Binturong body too: pass block plan.)
+  const float shotLegBound = MatchTuning::ShotBlock::REACH_METRES +
+                             MatchTuning::ShotBlock::RUSHED_ERROR_FACTOR *
+                                 MatchTuning::ShotBlock::ERROR_METRES_POOR +
+                             MatchTuning::Stride::FOOT_LENGTH +
+                             MatchTuning::Units::BALL_RADIUS_METRES;
+  // Pass block plan: where each player's body meets a ball he doesn't play
+  // (not a shot); those with a touch on it meet it only if the touch is no
+  // attempt after all (bodyInstead below).
+  std::array<std::optional<ShotBodyHit>, 32> bodyHits{};
+  std::uint32_t touchCandidates = 0;
+  std::uint32_t bodyOnlyIfDeclined = 0;
+  const MatchPlayer* lastPlayedBy = findMatchPlayer(ball.lastPossessor);
   const float maxReach = std::max({B::GOALKEEPER_CONTROL_RADIUS_METRES,
                                    touchKnobs[TouchKnob::FEET_REACH], shotLegBound});
   const float reachBound = maxReach + 0.01f;
@@ -3666,6 +3675,38 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
         (comingAt <= B::MAX_HEAVY_TOUCH_SPEED ||
          (player.isHomeTeam == ball.shotByHome && !ball.shotOnTarget));
     const bool shotIntoBody = ball.isShot && !shotAsLoose && !handsAllowed(player) && binturong;
+    // Any other moving ball (pass block plan): it meets his torso and his
+    // stride (an opponent's, also a leg put out once he has reacted)
+    // whatever he is doing, unless it is his own ball, it has just left his
+    // foot, it is his hands' (a keeper in his area) or it comes at him slow
+    // enough to play like any loose ball (as a shot does).
+    if (!ball.isShot && binturong && active(player) && !player.fallen && !handsAllowed(player) &&
+        comingAt > B::MAX_HEAVY_TOUCH_SPEED &&
+        !(touchOwner && (ownerHasIt || &player == touchOwner)) &&
+        !(ball.kickerLockout > 0.0f && ball.kicker == player.player))
+    {
+      const float bodyAlong =
+          segmentSquared > EPSILON
+              ? std::clamp(((position.x - start.x) * segment.x + (position.y - start.y) * segment.y) /
+                               segmentSquared,
+                           0.0f, 1.0f)
+              : 0.0f;
+      const float bodyGap = std::hypot(position.x - (start.x + segment.x * bodyAlong),
+                                       position.y - (start.y + segment.y * bodyAlong));
+      const bool teammate = lastPlayedBy && lastPlayedBy->isHomeTeam == player.isHomeTeam;
+      if (bodyGap <= shotLegBound)
+        if (const auto hit = shotMeetsBodyBinturong(player, slot, {start.x, start.y, startHeight},
+                                                    {end.x, end.y, endHeight}, !teammate);
+            hit && (!beforeLine || ballInPlayAt(toPitch({start.x + segment.x * hit->share,
+                                                         start.y + segment.y * hit->share}))))
+          bodyHits[slot] = *hit;
+      // Meant for him, or a ball he is letting come closer to play: only if
+      // his touch turns out no attempt.
+      const bool intendedHere = ball.isPass && ball.intendedReceiver == player.player &&
+                                ball.passByHome == player.isHomeTeam;
+      if (intendedHere || (ball.touchWaiting & (1U << slot)) != 0U)
+        bodyOnlyIfDeclined |= 1U << slot;
+    }
     // In the air (a jump), only his head plays it (headInSweep).
     if (!active(player) || (player.trapTimer > 0.0f && !shotIntoBody) ||
         (player.airborne() && !shotIntoBody) || player.fallen)
@@ -3726,7 +3767,7 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
       // His torso, or a leg where his stride has it (shot block plan §3c):
       // met where the ball reaches it on this stretch, or not at all.
       if (const auto hit = shotMeetsBodyBinturong(
-              player, slot, {start.x, start.y, startHeight}, {end.x, end.y, endHeight}))
+              player, slot, {start.x, start.y, startHeight}, {end.x, end.y, endHeight}, true))
         contacts[contactCount++] = {slot,      hit->share, 0.0f,
                                     startHeight + (endHeight - startHeight) * hit->share,
                                     1.0f,      hit->part,  *hit};
@@ -3787,6 +3828,19 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     if (reach <= 0.0f || gap > reach) continue;
     contacts[contactCount++] = {slot, along, gap, height, reach, ShotBodyPart::TORSO, {},
                                 shotAsLoose};
+    touchCandidates |= 1U << slot;
+  }
+  // Bodies in the way that no touch of theirs plays it first.
+  for (std::size_t slot = 0; slot < bodyHits.size() && contactCount < contacts.size(); ++slot)
+  {
+    const std::uint32_t bit = 1U << slot;
+    if (!bodyHits[slot] || (touchCandidates & bit) != 0U || (bodyOnlyIfDeclined & bit) != 0U)
+      continue;
+    const ShotBodyHit& hit = *bodyHits[slot];
+    contacts[contactCount++] = {slot,      hit.share, 0.0f,
+                                startHeight + (endHeight - startHeight) * hit.share,
+                                1.0f,      hit.part,  hit,
+                                false,     true};
   }
   // A player who let the ball come closer and now finds it out of his reach
   // waited too long (counted for the sandbox checks; should never happen).
@@ -3854,6 +3908,37 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
                              ballStepSeconds /
                                  static_cast<float>(substepsPerStep),
                              ballStepSeconds};
+    // Pass block plan: a ball he doesn't play meets his body where it gets
+    // there, and comes off it.
+    if (contact.body)
+    {
+      if (!atContact) continue;
+      // (Counted: after his touch was no attempt, marked by a gap of -1.)
+      if (contact.gap < 0.0f) ++stats.ballBodyAfterNoTouch;
+      ballMeetsBodyBinturong(player, contact.slot, contact.hit);
+      return;
+    }
+    // His touch was no attempt after all: if its path meets his body
+    // further on, it meets it there.
+    const auto bodyInstead = [&]
+    {
+      const std::size_t slot = contact.slot;
+      if (!bodyHits[slot] || contactCount >= contacts.size()) return;
+      Contact body = contact;
+      body.along = std::max(contact.along, bodyHits[slot]->share);
+      body.height = startHeight + (endHeight - startHeight) * body.along;
+      body.hit = *bodyHits[slot];
+      body.part = body.hit.part;
+      body.asLoose = false;
+      body.body = true;
+      body.gap = -1.0f;
+      bodyHits[slot].reset();
+      std::size_t at = index + 1;
+      while (at < contactCount && contacts[at].along <= body.along) ++at;
+      for (std::size_t move = contactCount; move > at; --move) contacts[move] = contacts[move - 1];
+      contacts[at] = body;
+      ++contactCount;
+    };
     // Tackling plan step 5: in a contest he goes in only when his brain
     // says so; holding, he leaves it (no swing, no cooldown).
     if (contest && !goesIntoContest(player, *touchOwner, moment.contactPoint))
@@ -3943,6 +4028,7 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
         ball.commitMisses |= bit;
         ++(player.isHomeTeam ? stats.homeCommitMisses : stats.awayCommitMisses);
       }
+      bodyInstead();
       continue;
     }
     ball.touchWaiting &= ~(1U << contact.slot);
@@ -4030,6 +4116,7 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     {
       // Row 6: he went for it and missed; his foot is committed.
       if (contest) player.footCooldown = dribbleTouchIntervalBinturong(player);
+      bodyInstead();
       continue;
     }
     if (!hands && !player.isGoalkeeper &&

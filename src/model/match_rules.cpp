@@ -143,6 +143,7 @@ float computeMatchRating(const PlayerMatchStats& stats, bool goalkeeper,
                  static_cast<float>(stats.interceptions) * R::INTERCEPTION +
                  static_cast<float>(stats.clearances) * R::CLEARANCE +
                  static_cast<float>(stats.blockedShots) * R::BLOCKED_SHOT +
+                 static_cast<float>(stats.blockedPasses) * R::BLOCKED_PASS +
                  static_cast<float>(stats.aerialDuelsWon) * R::AERIAL_WON +
                  static_cast<float>(stats.saves) * R::SAVE +
                  static_cast<float>(stats.foulsCommitted) * R::FOUL +

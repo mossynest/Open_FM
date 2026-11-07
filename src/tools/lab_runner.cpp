@@ -197,6 +197,11 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
   sample.shot_leg_blocks = sample.shot_body_blocks - stats.shotBlocksByPart[0];
   sample.shot_reaction_blocks = stats.shotReactionBlocks;
   sample.shot_deflections = stats.shotDeflections;
+  for (const int count : stats.ballBodyHitsByPart) sample.ball_body_hits += count;
+  sample.ball_leg_hits = sample.ball_body_hits - stats.ballBodyHitsByPart[0];
+  sample.ball_reaction_blocks = stats.ballReactionBlocks;
+  sample.passes_blocked = stats.passesBlocked;
+  sample.ball_deflections = stats.ballDeflections;
   sample.shot_torso_pass_throughs = stats.shotTorsoPassThroughs;
   sample.shot_torso_inside_at_start = stats.shotTorsoInsideAtStart;
   sample.shot_leg_chances = stats.shotLegChances;
@@ -685,6 +690,18 @@ std::map<std::string, Estimate> matchMetrics(
       column([](const MatchSample& s) { return s.shot_body_blocks; }));
   metrics["shot_deflections_per_shot"] = ratioEstimate(
       column([](const MatchSample& s) { return s.shot_deflections; }), shots);
+  // Pass block plan: other balls off a body.
+  const std::vector<double> ballBodyHits =
+      column([](const MatchSample& s) { return s.ball_body_hits; });
+  metrics["ball_body_hits_per_match"] = meanEstimate(ballBodyHits);
+  metrics["ball_leg_hit_share"] =
+      ratioEstimate(column([](const MatchSample& s) { return s.ball_leg_hits; }), ballBodyHits);
+  metrics["ball_reaction_block_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.ball_reaction_blocks; }), ballBodyHits);
+  metrics["passes_blocked_per_match"] =
+      meanEstimate(column([](const MatchSample& s) { return s.passes_blocked; }));
+  metrics["ball_deflections_per_match"] =
+      meanEstimate(column([](const MatchSample& s) { return s.ball_deflections; }));
   metrics["shot_torso_pass_throughs_per_shot"] = ratioEstimate(
       column([](const MatchSample& s) { return s.shot_torso_pass_throughs; }), shots);
   metrics["shot_torso_inside_at_start_per_shot"] = ratioEstimate(

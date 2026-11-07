@@ -2303,6 +2303,9 @@ struct MatchTuning final
     /** A blocked shot (shot block plan step 4): what it earned as a
      * clearance until then (my placeholder). */
     static constexpr float BLOCKED_SHOT = 0.05f;
+    /** A blocked pass (pass block plan): as a blocked shot (my
+     * placeholder). */
+    static constexpr float BLOCKED_PASS = 0.05f;
     static constexpr float AERIAL_WON = 0.04f;
     static constexpr float SAVE = 0.32f;
     static constexpr float GOALKEEPER_GOAL_CONCEDED = -0.38f;

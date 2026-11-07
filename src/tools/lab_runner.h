@@ -156,6 +156,13 @@ struct MatchSample
   int shot_reaction_blocks = 0;
   int shot_deflections = 0;
   /** Shot block plan §3f check: shots through a torso without meeting it. */
+  /** Pass block plan: other balls off a body (all, off a leg put out, an
+   * opponent's pass blocked, a deflection off a team-mate or nobody's). */
+  int ball_body_hits = 0;
+  int ball_leg_hits = 0;
+  int ball_reaction_blocks = 0;
+  int passes_blocked = 0;
+  int ball_deflections = 0;
   int shot_torso_pass_throughs = 0;
   int shot_torso_inside_at_start = 0;
   /** Shot block plan §3d: shots whose line passed within a defender's

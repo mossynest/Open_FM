@@ -279,7 +279,12 @@
    * (shot block plan §3c, rolled once per path) until he has reacted, then
    * a leg put across its line if he can reach it (§3d). */
   std::optional<ShotBodyHit> shotMeetsBodyBinturong(const MatchPlayer& player,
-                                                    std::size_t slot, Point3F from, Point3F to);
+                                                    std::size_t slot, Point3F from, Point3F to,
+                                                    bool canPutLegOut);
+  /** Any other moving ball meeting his body, not played (pass block plan):
+   * off the part it met as a shot comes off it (step 3), a loose ball after
+   * (his ball no longer, if it was anyone's), him kept off it a moment. */
+  void ballMeetsBodyBinturong(MatchPlayer& player, std::size_t slot, const ShotBodyHit& hit);
   /** The check (shot block plan §3f): a shot that met nothing on him, but
    * whose path against his own move over the sub-step went well inside his
    * torso, is counted. */

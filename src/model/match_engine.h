@@ -1377,6 +1377,17 @@ struct MatchStats
    * own move over the sub-step, went well inside a Binturong torso without
    * meeting him (one per shot and player; should be none), and of those,
    * the ones already inside at a sub-step's start. */
+  /** Pass block plan: any other moving ball meeting a Binturong body it
+   * wasn't played by, by part (ShotBodyPart order); of those, off a leg he
+   * put out; an opponent's pass blocked; off a team-mate's or nobody's ball
+   * (a deflection). */
+  std::array<int, 4> ballBodyHitsByPart{};
+  int ballReactionBlocks = 0;
+  int passesBlocked = 0;
+  int ballDeflections = 0;
+  /** Of the body hits, those after his touch on it turned out no attempt
+   * (the commit rule, the reach dice). */
+  int ballBodyAfterNoTouch = 0;
   int shotTorsoPassThroughs = 0;
   int shotTorsoInsideAtStart = 0;
   /** Shots whose line passed within a Binturong outfielder's full reach
