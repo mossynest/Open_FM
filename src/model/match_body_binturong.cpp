@@ -4772,6 +4772,9 @@ std::optional<ShotBodyHit> MatchEngine::shotMeetsBodyBinturong(const MatchPlayer
           hit.normal = unit({at.x, at.y, 0.0f}, back);
         else
           hit.normal = under < over ? Point3F{0.0f, 0.0f, -1.0f} : Point3F{0.0f, 0.0f, 1.0f};
+        // Above the top of his shoulders, his head: it comes off it as off
+        // a header.
+        if (at.z > bodyLines(player).head) hit.part = ShotBodyPart::HEAD;
         break;
       }
       case Shape::ROD:
@@ -4803,7 +4806,7 @@ std::optional<ShotBodyHit> MatchEngine::shotMeetsBodyBinturong(const MatchPlayer
     // The surface's motion: his own, and a leg put out still going out (its
     // foot at the ankle's pace, the shin most of it, the thigh a little).
     hit.surfaceVelocity = {player.velocity.x, player.velocity.y, 0.0f};
-    if (legs.blocking && first.part != ShotBodyPart::TORSO && first.leg == legs.leg &&
+    if (legs.blocking && isLegPart(first.part) && first.leg == legs.leg &&
         legs.outShare < 1.0f && legs.legSeconds > EPSILON)
     {
       const Point3F under{legs.pose.legs[legs.leg].hip.x, legs.pose.legs[legs.leg].hip.y,
@@ -5006,7 +5009,7 @@ void MatchEngine::ballMeetsBodyBinturong(MatchPlayer& player, std::size_t slot,
   const MatchPlayer* lastPlayedBy = findMatchPlayer(ball.lastPossessor);
   const bool opponents = lastPlayedBy && lastPlayedBy->isHomeTeam != player.isHomeTeam;
   const ShotLegs* legs = slot < shotLegPoses.size() ? &shotLegPoses[slot] : nullptr;
-  const bool legPutOut = legs && legs->blocking && hit.part != ShotBodyPart::TORSO;
+  const bool legPutOut = legs && legs->blocking && isLegPart(hit.part);
   ++stats.ballBodyHitsByPart[static_cast<std::size_t>(hit.part)];
   if (legPutOut) ++stats.ballReactionBlocks;
   if (!opponents)
@@ -5589,11 +5592,14 @@ std::optional<HeadPart> MatchEngine::headMeetBinturong(const MatchPlayer& player
   // Heading technique plan step 4: within a lean of the neck of his centre.
   // Up and down, where his head is then (aerial challenge plan step 1):
   // from a duck below his forehead (never below his head line, the top of
-  // his shoulders where he is then) up to the top of his head.
+  // his shoulders where he is then) up to the top of his head, a ball
+  // touching it included (shot block plan §3i: if his head can reach it,
+  // he can head it).
   using A = MatchTuning::Aerial;
   const HeadBand band = headBandOf(player.heightMetres, feetHeight);
   const float forehead = band.forehead;
-  if (gap > A::HEAD_REACH_METRES || heightMetres < band.lowest || heightMetres > band.top)
+  if (gap > A::HEAD_REACH_METRES || heightMetres < band.lowest ||
+      heightMetres > band.top + MatchTuning::Units::BALL_RADIUS_METRES)
     return std::nullopt;
   const Vector2F facing = normalized(
       {std::cos(player.facingAngle) * MatchTuning::Pitch::LENGTH_METRES,

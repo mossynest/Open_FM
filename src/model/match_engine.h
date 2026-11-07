@@ -976,7 +976,17 @@ enum class ShotBodyPart : std::uint8_t
   THIGH,
   SHIN,
   FOOT,
+  /** The upright body above the top of his shoulders (his head line). */
+  HEAD,
+  COUNT,
 };
+
+/** A thigh, shin or foot. */
+constexpr bool isLegPart(ShotBodyPart part)
+{
+  return part == ShotBodyPart::THIGH || part == ShotBodyPart::SHIN ||
+         part == ShotBodyPart::FOOT;
+}
 
 /** Where a shot meets his body (shot block plan §3c-3): how far along the
  * ball's stretch (0-1), the part, the surface's outward normal there (unit,
@@ -1368,7 +1378,7 @@ struct MatchStats
   int blocksPoppedUp = 0;
   /** Open-play shots blocked by a Binturong body, by what they met
    * (ShotBodyPart: torso, thigh, shin, foot). */
-  std::array<int, 4> shotBlocksByPart{};
+  std::array<int, static_cast<std::size_t>(ShotBodyPart::COUNT)> shotBlocksByPart{};
   /** Of those off a leg, the ones off a leg he put there (shot block plan
    * §3d: a reaction block) rather than his stride. */
   int shotReactionBlocks = 0;
@@ -1383,14 +1393,13 @@ struct MatchStats
    * wasn't played by, by part (ShotBodyPart order); of those, off a leg he
    * put out; an opponent's pass blocked; off a team-mate's or nobody's ball
    * (a deflection). */
-  std::array<int, 4> ballBodyHitsByPart{};
+  std::array<int, static_cast<std::size_t>(ShotBodyPart::COUNT)> ballBodyHitsByPart{};
   int ballReactionBlocks = 0;
   int passesBlocked = 0;
   int ballDeflections = 0;
   /** Of the body hits, those after his touch on it turned out no attempt
    * (the commit rule, the reach dice). */
-  int ballBodyAfterNoTouch = 0;
-  /** Direct free kicks (Binturong body): taken, on target as struck,
+  int ballBodyAfterNoTouch = 0;  /** Direct free kicks (Binturong body): taken, on target as struck,
    * blocked by a body, scored from. */
   int directFreeKicks = 0;
   int directFreeKicksOnTarget = 0;

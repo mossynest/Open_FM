@@ -160,7 +160,7 @@ struct MatchSample
    * opponent's pass blocked, a deflection off a team-mate or nobody's). */
   int ball_body_hits = 0;
   int ball_leg_hits = 0;
-  int ball_reaction_blocks = 0;
+  int ball_head_hits = 0;  int ball_reaction_blocks = 0;
   int passes_blocked = 0;
   int ball_deflections = 0;
   /** Direct free kicks: taken, on target as struck, blocked, scored. */

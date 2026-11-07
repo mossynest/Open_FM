@@ -3576,12 +3576,15 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
   // Each player's head line is his own (a Binturong body's, from his
   // height: chest and thigh control plan step 1).
   const auto [lowestHead, highestHead] = headLineRange();
-  if (!ball.isShot && endHeight > highestHead)
+  // Above every head line, only a head plays it; one that doesn't still
+  // meets his body below (shot block plan §3i).
+  const bool bodiesOnly = !ball.isShot && endHeight > highestHead;
+  if (bodiesOnly)
   {
     // In the air it is claimed or contested at the line's far side, as
     // ever; a lone side's header is met where it passes his head.
-    if (!beforeLine && !resolveAerialContest()) headInSweep();
-    return;
+    if (!beforeLine && (resolveAerialContest() || headInSweep())) return;
+    if (state != MatchState::PLAYING || (ball.possessedBy && !ball.inTouch)) return;
   }
   // Above someone's head line on this stretch: his head may meet it.
   if (!ball.isShot && !beforeLine &&
@@ -3645,6 +3648,34 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
   std::uint32_t touchCandidates = 0;
   std::uint32_t bodyOnlyIfDeclined = 0;
   const MatchPlayer* lastPlayedBy = findMatchPlayer(ball.lastPossessor);
+  // A ball his head can meet on this stretch is his head's (headInSweep,
+  // which may let it come closer first): not his body's.
+  const int substepsPerStepHere =
+      MatchTuning::Timing::BALL_SUBSTEPS * static_cast<int>(stepTicks);
+  const float stepShareHere =
+      1.0f - static_cast<float>(substepsLeftInStep) / static_cast<float>(substepsPerStepHere);
+  const auto headHasIt = [&](const MatchPlayer& player, std::size_t slot)
+  {
+    if (player.isGoalkeeper || player.trapTimer > 0.0f ||
+        (ball.inTouch && ball.possessedBy == player.player))
+      return false;
+    const Vector2F was =
+        slot < previousPlayerPositions.size() ? previousPlayerPositions[slot] : player.position;
+    const Vector2F at = toMetres({was.x + (player.position.x - was.x) * stepShareHere,
+                                  was.y + (player.position.y - was.y) * stepShareHere});
+    const float along = segmentSquared > EPSILON
+                            ? std::clamp(((at.x - start.x) * segment.x + (at.y - start.y) * segment.y) /
+                                             segmentSquared,
+                                         0.0f, 1.0f)
+                            : 0.0f;
+    const Vector2F toBall{start.x + segment.x * along - at.x, start.y + segment.y * along - at.y};
+    const float gap = length(toBall);
+    return headMeetBinturong(player,
+                             gap > EPSILON ? Vector2F{toBall.x / gap, toBall.y / gap} : Vector2F{},
+                             gap, startHeight + (endHeight - startHeight) * along,
+                             feetAtBinturong(player, ballStepSeconds * (1.0f - stepShareHere)))
+        .has_value();
+  };
   const float maxReach = std::max({B::GOALKEEPER_CONTROL_RADIUS_METRES,
                                    touchKnobs[TouchKnob::FEET_REACH], shotLegBound});
   const float reachBound = maxReach + 0.01f;
@@ -3683,7 +3714,8 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     if (!ball.isShot && binturong && active(player) && !player.fallen && !handsAllowed(player) &&
         comingAt > B::MAX_HEAVY_TOUCH_SPEED &&
         !(touchOwner && (ownerHasIt || &player == touchOwner)) &&
-        !(ball.kickerLockout > 0.0f && ball.kicker == player.player))
+        !(ball.kickerLockout > 0.0f && ball.kicker == player.player) &&
+        !headHasIt(player, slot))
     {
       const float bodyAlong =
           segmentSquared > EPSILON
@@ -3694,11 +3726,32 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
       const float bodyGap = std::hypot(position.x - (start.x + segment.x * bodyAlong),
                                        position.y - (start.y + segment.y * bodyAlong));
       const bool teammate = lastPlayedBy && lastPlayedBy->isHomeTeam == player.isHomeTeam;
+      // (Met on his head where his head could head it: his head's.)
+      const auto headCanHeadAt = [&](const ShotBodyHit& hit)
+      {
+        if (hit.part != ShotBodyPart::HEAD || player.isGoalkeeper || player.trapTimer > 0.0f)
+          return false;
+        const auto [fromShare, toShare] = stretchStepSharesBinturong();
+        const float share = fromShare + (toShare - fromShare) * hit.share;
+        const Vector2F was = slot < previousPlayerPositions.size() ? previousPlayerPositions[slot]
+                                                                   : player.position;
+        const Vector2F him = toMetres({was.x + (player.position.x - was.x) * share,
+                                       was.y + (player.position.y - was.y) * share});
+        const Vector2F toBall{start.x + segment.x * hit.share - him.x,
+                              start.y + segment.y * hit.share - him.y};
+        const float gap = length(toBall);
+        return headMeetBinturong(
+                   player, gap > EPSILON ? Vector2F{toBall.x / gap, toBall.y / gap} : Vector2F{},
+                   gap, startHeight + (endHeight - startHeight) * hit.share,
+                   feetAtBinturong(player, ballStepSeconds * (1.0f - share)))
+            .has_value();
+      };
       if (bodyGap <= shotLegBound)
         if (const auto hit = shotMeetsBodyBinturong(player, slot, {start.x, start.y, startHeight},
                                                     {end.x, end.y, endHeight}, !teammate);
-            hit && (!beforeLine || ballInPlayAt(toPitch({start.x + segment.x * hit->share,
-                                                         start.y + segment.y * hit->share}))))
+            hit && !headCanHeadAt(*hit) &&
+            (!beforeLine || ballInPlayAt(toPitch({start.x + segment.x * hit->share,
+                                                  start.y + segment.y * hit->share}))))
           bodyHits[slot] = *hit;
       // Meant for him, or a ball he is letting come closer to play: only if
       // his touch turns out no attempt.
@@ -3706,6 +3759,13 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
                                 ball.passByHome == player.isHomeTeam;
       if (intendedHere || (ball.touchWaiting & (1U << slot)) != 0U)
         bodyOnlyIfDeclined |= 1U << slot;
+    }
+    // Above every head line: his body only (his head has had its chance),
+    // the receiver's too.
+    if (bodiesOnly)
+    {
+      bodyOnlyIfDeclined &= ~(1U << slot);
+      continue;
     }
     // In the air (a jump), only his head plays it (headInSweep).
     if (!active(player) || (player.trapTimer > 0.0f && !shotIntoBody) ||
@@ -4058,7 +4118,7 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
       const bool deflection = player.isHomeTeam == ball.shotByHome || (offBody && ball.shotBlocked);
       const ShotLegs* legs =
           contact.slot < shotLegPoses.size() ? &shotLegPoses[contact.slot] : nullptr;
-      const bool legPutOut = legs && legs->blocking && contact.part != ShotBodyPart::TORSO;
+      const bool legPutOut = legs && legs->blocking && isLegPart(contact.part);
       if (offBody && !deflection)
       {
         ++stats.shotBlocksByPart[static_cast<std::size_t>(contact.part)];

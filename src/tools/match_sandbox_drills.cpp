@@ -4048,7 +4048,7 @@ class ShotBlockDrill final : public Drill
         const MatchStats& stats = engine.getStats();
         noTouchNow = stats.ballBodyAfterNoTouch;
         int hits = 0;
-        for (std::size_t index = 0; index < 4; ++index)
+        for (std::size_t index = 0; index < bodyHitsBefore.size(); ++index)
           hits += stats.ballBodyHitsByPart[index] - bodyHitsBefore[index];
         if (hits > 0)
           outcome = "blocked";
@@ -4113,13 +4113,13 @@ class ShotBlockDrill final : public Drill
                     ? turnDegrees(shotLine, {off.velocity.x / offSpeed, off.velocity.y / offSpeed})
                     : 0.0f;
       const MatchStats& stats = engine.getStats();
-      static constexpr std::array<const char*, 4> PARTS{"torso", "thigh", "shin", "foot"};
+      static constexpr std::array<const char*, 5> PARTS{"torso", "thigh", "shin", "foot", "head"};
       const bool pass = ballKind > 0.5f;
       for (std::size_t index = 0; index < PARTS.size(); ++index)
         if ((pass ? stats.ballBodyHitsByPart[index] - bodyHitsBefore[index]
                   : stats.shotBlocksByPart[index] - blocksBefore[index]) > 0)
           part = PARTS[index];
-      if (!part.empty() && part != "torso")
+      if (!part.empty() && part != "torso" && part != "head")
         part += (pass ? stats.ballReactionBlocks > ballReactionBefore
                       : stats.shotReactionBlocks > reactionBefore)
                     ? " (reaction block)"
@@ -4230,7 +4230,8 @@ class ShotBlockDrill final : public Drill
     return {
         {"Blocked", blocked ? 1.0 : 0.0},
         {"Torso block", blocked && part == "torso" ? 1.0 : 0.0},
-        {"Stride block", blocked && !reaction && part != "torso" ? 1.0 : 0.0},
+        {"Stride block", blocked && !reaction && part != "torso" && part != "head" ? 1.0 : 0.0},
+        {"Head block", blocked && part == "head" ? 1.0 : 0.0},
         {"Reaction block", blocked && reaction ? 1.0 : 0.0},
         {"Line gap (m)", reacted ? legs->lineGap : 0.0},
         {"Ball height (m)", reacted ? legs->lineHeight : 0.0},
@@ -4302,7 +4303,7 @@ class ShotBlockDrill final : public Drill
     ++t.shots;
     if (outcome != "blocked") return;
     ++t.blocked;
-    if (part == "torso")
+    if (part == "torso" || part == "head")
       ++t.torso;
     else if (part.find("reaction") != std::string::npos)
       ++t.reaction;
@@ -4323,7 +4324,7 @@ class ShotBlockDrill final : public Drill
   float keeperChoice = 0.0f;
   float goalkeeping = 70.0f;
   float ballKind = 0.0f;
-  std::array<int, 4> bodyHitsBefore{};
+  std::array<int, static_cast<std::size_t>(ShotBodyPart::COUNT)> bodyHitsBefore{};
   int ballReactionBefore = 0;
   int noTouchBefore = 0;
   int noTouchNow = 0;
@@ -4358,7 +4359,7 @@ class ShotBlockDrill final : public Drill
   std::string part;
   std::optional<double> endAt;
   std::optional<ShotLegs> legs;
-  std::array<int, 4> blocksBefore{};
+  std::array<int, static_cast<std::size_t>(ShotBodyPart::COUNT)> blocksBefore{};
   int reactionBefore = 0;
   int throughBefore = 0;
   int throughNow = 0;

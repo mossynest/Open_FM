@@ -194,11 +194,16 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
   sample.blocks_committed = stats.blocksCommitted;
   sample.blocks_popped = stats.blocksPoppedUp;
   for (const int count : stats.shotBlocksByPart) sample.shot_body_blocks += count;
-  sample.shot_leg_blocks = sample.shot_body_blocks - stats.shotBlocksByPart[0];
+  for (std::size_t part = 0; part < stats.shotBlocksByPart.size(); ++part)
+    if (isLegPart(static_cast<ShotBodyPart>(part)))
+      sample.shot_leg_blocks += stats.shotBlocksByPart[part];
   sample.shot_reaction_blocks = stats.shotReactionBlocks;
   sample.shot_deflections = stats.shotDeflections;
   for (const int count : stats.ballBodyHitsByPart) sample.ball_body_hits += count;
-  sample.ball_leg_hits = sample.ball_body_hits - stats.ballBodyHitsByPart[0];
+  for (std::size_t part = 0; part < stats.ballBodyHitsByPart.size(); ++part)
+    if (isLegPart(static_cast<ShotBodyPart>(part)))
+      sample.ball_leg_hits += stats.ballBodyHitsByPart[part];
+  sample.ball_head_hits = stats.ballBodyHitsByPart[static_cast<std::size_t>(ShotBodyPart::HEAD)];
   sample.ball_reaction_blocks = stats.ballReactionBlocks;
   sample.passes_blocked = stats.passesBlocked;
   sample.ball_deflections = stats.ballDeflections;
@@ -700,6 +705,8 @@ std::map<std::string, Estimate> matchMetrics(
   metrics["ball_body_hits_per_match"] = meanEstimate(ballBodyHits);
   metrics["ball_leg_hit_share"] =
       ratioEstimate(column([](const MatchSample& s) { return s.ball_leg_hits; }), ballBodyHits);
+  metrics["ball_head_hit_share"] =
+      ratioEstimate(column([](const MatchSample& s) { return s.ball_head_hits; }), ballBodyHits);
   metrics["ball_reaction_block_share"] = ratioEstimate(
       column([](const MatchSample& s) { return s.ball_reaction_blocks; }), ballBodyHits);
   metrics["passes_blocked_per_match"] =

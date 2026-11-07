@@ -139,10 +139,12 @@ struct MatchTuning final
      * 2026-11-07): off the surface it meets, against his moving body. Of
      * its pace straight into the surface this share springs back; of its
      * pace along it, a ball with no spin keeps this share, the grip taking
-     * the rest as spin (as the grass does). Torso, thigh, shin, foot.
+     * the rest as spin (as the grass does). Torso, thigh, shin, foot, head
+     * (the head's as the heading model's spring, Aerial::HEADER_SPRING; its
+     * along-kept as a shin's, my placeholder).
      */
-    static constexpr float SPRING_BACK[4] = {0.35f, 0.35f, 0.50f, 0.55f};
-    static constexpr float ALONG_KEPT[4] = {0.80f, 0.80f, 0.85f, 0.85f};
+    static constexpr float SPRING_BACK[5] = {0.35f, 0.35f, 0.50f, 0.55f, 0.60f};
+    static constexpr float ALONG_KEPT[5] = {0.80f, 0.80f, 0.85f, 0.85f, 0.85f};
     /** A leg put out with the foot meeting it (agreed: a little aim): its
      * face turned up to this far (degrees, about the vertical) to send it
      * away from his goal; Tackling 1 to 99 (my placeholder). */
