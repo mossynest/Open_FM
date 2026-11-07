@@ -1187,6 +1187,8 @@ struct MatchBall
   /** An opponent's body has blocked this shot already (shot block plan
    * step 4: one blocked shot per shot; after, a deflection). */
   bool shotBlocked = false;
+  /** This shot is a direct free kick (counted for the lab). */
+  bool shotFromDirectFreeKick = false;
   /** Lofted delivery (cross, corner, long ball) that can be contested. */
   bool isAerialDelivery = false;
   /** Thrown in and untouched since: it cannot score directly. */
@@ -1388,6 +1390,12 @@ struct MatchStats
   /** Of the body hits, those after his touch on it turned out no attempt
    * (the commit rule, the reach dice). */
   int ballBodyAfterNoTouch = 0;
+  /** Direct free kicks (Binturong body): taken, on target as struck,
+   * blocked by a body, scored from. */
+  int directFreeKicks = 0;
+  int directFreeKicksOnTarget = 0;
+  int directFreeKicksBlocked = 0;
+  int directFreeKickGoals = 0;
   int shotTorsoPassThroughs = 0;
   int shotTorsoInsideAtStart = 0;
   /** Shots whose line passed within a Binturong outfielder's full reach

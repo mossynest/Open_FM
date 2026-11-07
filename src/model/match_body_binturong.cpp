@@ -5880,58 +5880,14 @@ void MatchEngine::recoverFromTakeOnBinturong(MatchPlayer& defender)
 
 void MatchEngine::takeDirectFreeKickBinturong(MatchPlayer& taker)
 {
-  // The wall blocks a share of attempts; the rest are struck over it with
-  // a little less precision, and the keeper's view is partly screened.
-  const float wallChance =
-      std::clamp(MatchTuning::SetPiece::WALL_BLOCK_BASE -
-                     taker.shooting * MatchTuning::SetPiece::WALL_BLOCK_SKILL,
-                 0.05f, 0.6f);
-  if (randomFloat(0.0f, 1.0f) < wallChance)
-  {
-    takeShot(taker);
-    const float outward = taker.isHomeTeam ? -1.0f : 1.0f;
-    const float speed =
-        length(ball.velocity) * MatchTuning::SetPiece::WALL_REBOUND_SPEED_SHARE;
-    ball.touchAttempts = 0;
-    MatchPlayer* wallPlayer = nullptr;
-    float best = std::numeric_limits<float>::max();
-    for (auto& player : players)
-    {
-      if (!active(player) || player.isHomeTeam == taker.isHomeTeam ||
-          player.isGoalkeeper || player.fallen)
-        continue;
-      const float d = distance(player.position, ball.position);
-      if (d < best)
-      {
-        best = d;
-        wallPlayer = &player;
-      }
-    }
-    ball.isShot = false;
-    ball.shotOnTarget = false;
-    ball.shotSaveResolved = true;
-    notePathChange();
-    ball.velocity = {outward * speed * randomFloat(0.3f, 1.0f),
-                     speed * randomFloat(-0.8f, 0.8f)};
-    ball.velocityZ = randomFloat(0.0f, MatchTuning::Aerial::HEADER_LIFT);
-    if (wallPlayer)
-    {
-      ball.position = wallPlayer->position;
-      ball.lastPossessor = wallPlayer->player;
-      ball.kicker = wallPlayer->player;
-      ball.kickerLockout = MatchTuning::Passing::KICKER_LOCKOUT_SECONDS;
-      ++statsOf(*wallPlayer).clearances;
-      logEvent(MatchEventType::SHOT_BLOCKED, *wallPlayer).detail =
-          MatchEventDetail::WALL;
-    }
-    return;
-  }
+  // A shot like any other, struck from a dead ball: it goes where his
+  // strike sends it, and meets whatever bodies are in its way (no wall dice,
+  // no screening delay; a real wall comes later). The xG is a label for the
+  // statistics only.
   takeShot(taker, MatchTuning::SetPiece::DIRECT_FREE_KICK_XG, false, true);
-  if (MatchPlayer* keeper = findGoalkeeper(!taker.isHomeTeam))
-  {
-    keepers[keeper->isHomeTeam ? 0 : 1].reactionRemaining +=
-        MatchTuning::SetPiece::WALL_SCREEN_SECONDS;
-  }
+  ball.shotFromDirectFreeKick = true;
+  ++stats.directFreeKicks;
+  if (ball.shotOnTarget) ++stats.directFreeKicksOnTarget;
 }
 
 bool MatchEngine::playsFirstTouchBinturong(const MatchPlayer& player,

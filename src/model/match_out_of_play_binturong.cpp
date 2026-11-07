@@ -214,6 +214,7 @@ void MatchEngine::scoreGoalBinturong(bool homeTeam)
   event.secondaryPlayerId = assisterId;
   event.position = scorer ? scorer->position : ball.position;
   event.xg = fromShot ? ball.shotXG : 0.0f;
+  if (fromShot && ball.shotFromDirectFreeKick) ++stats.directFreeKickGoals;
 
   goalScoredByHome = homeTeam;
   goalCelebrationRemaining = playHalfMinutes > 0

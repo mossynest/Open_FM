@@ -163,6 +163,11 @@ struct MatchSample
   int ball_reaction_blocks = 0;
   int passes_blocked = 0;
   int ball_deflections = 0;
+  /** Direct free kicks: taken, on target as struck, blocked, scored. */
+  int direct_free_kicks = 0;
+  int direct_free_kicks_on_target = 0;
+  int direct_free_kicks_blocked = 0;
+  int direct_free_kick_goals = 0;
   int shot_torso_pass_throughs = 0;
   int shot_torso_inside_at_start = 0;
   /** Shot block plan §3d: shots whose line passed within a defender's

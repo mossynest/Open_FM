@@ -202,6 +202,10 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
   sample.ball_reaction_blocks = stats.ballReactionBlocks;
   sample.passes_blocked = stats.passesBlocked;
   sample.ball_deflections = stats.ballDeflections;
+  sample.direct_free_kicks = stats.directFreeKicks;
+  sample.direct_free_kicks_on_target = stats.directFreeKicksOnTarget;
+  sample.direct_free_kicks_blocked = stats.directFreeKicksBlocked;
+  sample.direct_free_kick_goals = stats.directFreeKickGoals;
   sample.shot_torso_pass_throughs = stats.shotTorsoPassThroughs;
   sample.shot_torso_inside_at_start = stats.shotTorsoInsideAtStart;
   sample.shot_leg_chances = stats.shotLegChances;
@@ -702,6 +706,17 @@ std::map<std::string, Estimate> matchMetrics(
       meanEstimate(column([](const MatchSample& s) { return s.passes_blocked; }));
   metrics["ball_deflections_per_match"] =
       meanEstimate(column([](const MatchSample& s) { return s.ball_deflections; }));
+  // Direct free kicks.
+  const std::vector<double> directFreeKicks =
+      column([](const MatchSample& s) { return s.direct_free_kicks; });
+  metrics["direct_free_kicks_per_match"] = meanEstimate(directFreeKicks);
+  metrics["direct_free_kick_on_target_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.direct_free_kicks_on_target; }),
+      directFreeKicks);
+  metrics["direct_free_kick_blocked_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.direct_free_kicks_blocked; }), directFreeKicks);
+  metrics["direct_free_kick_goal_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.direct_free_kick_goals; }), directFreeKicks);
   metrics["shot_torso_pass_throughs_per_shot"] = ratioEstimate(
       column([](const MatchSample& s) { return s.shot_torso_pass_throughs; }), shots);
   metrics["shot_torso_inside_at_start_per_shot"] = ratioEstimate(

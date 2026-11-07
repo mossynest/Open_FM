@@ -4103,6 +4103,7 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
         return;
       }
       ball.shotBlocked = true;
+      if (ball.shotFromDirectFreeKick) ++stats.directFreeKicksBlocked;
       ++(offBody ? statsOf(player).blockedShots : statsOf(player).clearances);
       logEvent(MatchEventType::SHOT_BLOCKED, player);
       return;
@@ -6138,6 +6139,7 @@ void MatchEngine::clearFlightState()
   ball.shotFromSetPiece = false;
   ball.shotSaveResolved = false;
   ball.shotBlocked = false;
+  ball.shotFromDirectFreeKick = false;
   ball.shotElapsedSeconds = 0.0f;
   ball.isAerialDelivery = false;
   ball.fromThrowIn = false;
