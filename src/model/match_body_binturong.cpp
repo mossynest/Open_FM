@@ -2403,6 +2403,33 @@ bool MatchEngine::updateDribbleBinturong(MatchPlayer& carrier, float dt)
     ball.dribbleTouchLength = R::MAX_TOUCH_METRES;
     return true;
   }
+  if (inHands && ball.inKeeperHands)
+  {
+    // In his hands (goalkeeper plan step 5): in a dive, between his hands
+    // as the dive moves them; else brought to his chest and held there.
+    ball.dribbleExposure = 0.0f;
+    ball.dribbleTouchLength = 0.0f;
+    if (keeperDiving(carrier))
+    {
+      const KeeperDivePose pose = keeperDivePoseBinturong(
+          carrier, keepers[carrier.isHomeTeam ? 0 : 1].dive, getSimulatedSeconds());
+      const Vector2F centre = toMetres(carrier.position);
+      ball.heldFrom = {0.5f * (pose.hands[0].x + pose.hands[1].x) - centre.x,
+                       0.5f * (pose.hands[0].y + pose.hands[1].y) - centre.y,
+                       std::max(0.5f * (pose.hands[0].z + pose.hands[1].z),
+                                MatchTuning::Units::BALL_RADIUS_METRES)};
+      ball.heldSince = getSimulatedSeconds();
+    }
+    const Point3F held = heldBallBinturong(carrier);
+    ball.position = {std::clamp(toPitch({held.x, held.y}).x, 0.001f, 0.999f),
+                     std::clamp(toPitch({held.x, held.y}).y, 0.001f, 0.999f)};
+    ball.z = held.z / MatchTuning::Units::BALL_Z_METRES;
+    ball.velocity = carrier.velocity;
+    ball.velocityZ = 0.0f;
+    return true;
+  }
+  // Out of his area with it in his hands: at his feet from here.
+  ball.inKeeperHands = false;
   if (inHands)
   {
     ball.dribbleExposure = 0.0f;
@@ -2846,10 +2873,15 @@ float MatchEngine::strikeSkillBinturong(const MatchPlayer& striker,
       return striker.derivedStat(DerivedStat::HEADING);
     case StrikeKind::CLEARANCE:
       return striker.defending;
+    case StrikeKind::THROW:
+      // A keeper's roll or throw from his hands: Throwing (goalkeeper plan
+      // step 5); a throw-in, Passing.
+      if (ball.heldRelease == HeldRelease::ROLL || ball.heldRelease == HeldRelease::OVERARM)
+        return striker.derivedStat(DerivedStat::THROWING);
+      break;
     case StrikeKind::GROUND_PASS:
     case StrikeKind::LOFTED_PASS:
     case StrikeKind::CROSS:
-    case StrikeKind::THROW:
     case StrikeKind::DRIVEN_PASS:
     case StrikeKind::CHIP:
       break;
@@ -3814,10 +3846,20 @@ MatchEngine::Kick MatchEngine::kickPassBinturong(const MatchPlayer& passer,
   // Every pass is a contact (contact plan step 3), struck where the ball
   // lies. A kick: a ground pass, a lofted pass, a cross, a driven pass or a
   // chip; a keeper's punt from his hands is a lofted kick. A throw: a
-  // throw-in, or a keeper rolling it out.
-  const bool fromHands =
-      passer.isGoalkeeper && inPenaltyArea(passer.position, passer.isHomeTeam);
+  // throw-in, or a keeper rolling it out or throwing it overarm (goalkeeper
+  // plan step 5: a ground pass up to 25 m rolled, beyond thrown; only a ball
+  // in his hands, not one at his feet).
+  const bool fromHands = passer.isGoalkeeper && ball.inKeeperHands &&
+                         ball.possessedBy == passer.player &&
+                         inPenaltyArea(passer.position, passer.isHomeTeam);
   const bool thrown = state == MatchState::THROW_IN || (fromHands && !lofted);
+  const bool overarm = fromHands && !lofted &&
+                       distance(ball.position, target) > MatchTuning::KeeperHeld::ROLL_LONGEST_METRES;
+  if (fromHands)
+  {
+    ball.heldRelease = lofted ? HeldRelease::PUNT : overarm ? HeldRelease::OVERARM : HeldRelease::ROLL;
+    ++(lofted ? stats.keeperPunts : overarm ? stats.keeperThrows : stats.keeperRolls);
+  }
   const PassTechnique how = technique.value_or(
       lofted ? PassTechnique::LOFTED : PassTechnique::GROUND);
   const StrikeKind kind = thrown ? StrikeKind::THROW
@@ -3865,7 +3907,33 @@ MatchEngine::Kick MatchEngine::kickPassBinturong(const MatchPlayer& passer,
       thrown ? kickPowerBinturong(passer)
              : incomingPowerBudgetBinturong(kickPowerBinturong(passer),
                                             metricDirection(ball.position, target));
-  const float startMetres = ball.z * MatchTuning::Units::BALL_Z_METRES;
+  // From his hands, where he lets it go (goalkeeper plan step 5).
+  const float startMetres = fromHands ? heldReleaseBinturong(passer, ball.heldRelease).second
+                                      : ball.z * MatchTuning::Units::BALL_Z_METRES;
+  if (overarm)
+  {
+    // Overarm (goalkeeper plan step 5): launched to drop at the target as a
+    // lofted pass is (chest height to a team-mate), at no more than his
+    // fastest throw (Throwing); beyond it, as flat as gets it there, or as
+    // far as he can, short. Mine: the lofted pass's speeds stand in for how
+    // a keeper picks his throw's pace.
+    const float throwing = std::clamp((passer.derivedStat(DerivedStat::THROWING) - STAT_1_RATING) /
+                                          (STAT_99_RATING - STAT_1_RATING),
+                                      0.0f, 1.0f);
+    const float most = MatchTuning::KeeperHeld::THROW_SPEED_POOR +
+                       (MatchTuning::KeeperHeld::THROW_SPEED_BEST -
+                        MatchTuning::KeeperHeld::THROW_SPEED_POOR) *
+                           throwing;
+    const float arrivalMetres = receiver ? P::LOFTED_ARRIVAL_HEIGHT_METRES : 0.0f;
+    float along = std::min(P::LOFTED_BASE_SPEED + passDistance * P::LOFTED_SPEED_PER_METRE, most);
+    float up = loftVerticalSpeed(passDistance, along, startMetres, arrivalMetres, meant);
+    if (std::hypot(along, up) > most)
+      std::tie(along, up) =
+          fullPowerLoftBinturong(passDistance, most, startMetres, arrivalMetres, meant);
+    return strikeContactBinturong(
+        passer, kind, curlAimBinturong(target, curlAngle(passDistance, along, up, startMetres, meant)),
+        along, up, 1.0f, meant, spinCapacity);
+  }
   // Struck at, and aimed off for its curl; it curls by accident as a
   // ground pass does, or (`moreCurl`) as a lofted one.
   const auto strike = [&](float along, float up, bool moreCurl)
@@ -5713,6 +5781,64 @@ bool MatchEngine::keeperHandsHoldShotBinturong(MatchPlayer& keeper, ShotBodyHit&
   return true;
 }
 
+void MatchEngine::takeInHandsBinturong(const MatchPlayer& keeper, Vector2F wasAt, float wasMetres)
+{
+  if (getBody(keeper.isHomeTeam) != BodyId::BINTURONG || !keeper.isGoalkeeper ||
+      ball.possessedBy != keeper.player || !inPenaltyArea(keeper.position, keeper.isHomeTeam))
+    return;
+  const Vector2F centre = toMetres(keeper.position);
+  const Vector2F at = toMetres(wasAt);
+  ball.inKeeperHands = true;
+  ball.heldFrom = {at.x - centre.x, at.y - centre.y, std::max(wasMetres, 0.0f)};
+  ball.heldSince = getSimulatedSeconds();
+  const Point3F held = heldBallBinturong(keeper);
+  ball.position = toPitch({held.x, held.y});
+  ball.z = held.z / MatchTuning::Units::BALL_Z_METRES;
+  ++stats.keeperBallsInHands;
+}
+
+Point3F MatchEngine::heldBallBinturong(const MatchPlayer& keeper) const
+{
+  // From where he took it (or, after a dive, where it was as he got up) to
+  // his chest, in front of him, over the gather; then there, moving with
+  // him.
+  using K = MatchTuning::KeeperHeld;
+  const Vector2F centre = toMetres(keeper.position);
+  const Vector2F facing = normalized(
+      {std::cos(keeper.facingAngle) * MatchTuning::Pitch::LENGTH_METRES,
+       std::sin(keeper.facingAngle) * MatchTuning::Pitch::WIDTH_METRES});
+  const Point3F chest{centre.x + facing.x * K::AHEAD_METRES, centre.y + facing.y * K::AHEAD_METRES,
+                      K::HEIGHT_SHARE * keeper.heightMetres};
+  const Point3F from{centre.x + ball.heldFrom.x, centre.y + ball.heldFrom.y, ball.heldFrom.z};
+  const float share = std::clamp(
+      static_cast<float>(getSimulatedSeconds() - ball.heldSince) / K::GATHER_SECONDS, 0.0f, 1.0f);
+  return along3(from, chest, share);
+}
+
+std::pair<Vector2F, float> MatchEngine::heldReleaseBinturong(const MatchPlayer& keeper,
+                                                             HeldRelease how) const
+{
+  using K = MatchTuning::KeeperHeld;
+  const Vector2F centre = toMetres(keeper.position);
+  const Vector2F facing = normalized(
+      {std::cos(keeper.facingAngle) * MatchTuning::Pitch::LENGTH_METRES,
+       std::sin(keeper.facingAngle) * MatchTuning::Pitch::WIDTH_METRES});
+  const auto at = [&](float ahead)
+  { return toPitch({centre.x + facing.x * ahead, centre.y + facing.y * ahead}); };
+  switch (how)
+  {
+    case HeldRelease::ROLL:
+      return {at(K::AHEAD_METRES), K::ROLL_RELEASE_METRES};
+    case HeldRelease::OVERARM:
+      return {at(-K::OVERARM_BEHIND_METRES), K::OVERARM_HEIGHT_SHARE * keeper.heightMetres};
+    case HeldRelease::PUNT:
+      return {at(K::AHEAD_METRES), K::PUNT_STRIKE_METRES};
+    case HeldRelease::NONE:
+      break;
+  }
+  return {ball.position, ball.z * MatchTuning::Units::BALL_Z_METRES};
+}
+
 void MatchEngine::planKeeperHandsBinturong(const MatchPlayer& player, ShotHands& hands,
                                            Point3F start, Point3F end, Vector2F centre)
 {
@@ -6659,7 +6785,16 @@ MatchEngine::BallRelease MatchEngine::releaseFromBinturong(const MatchPlayer& ki
   switch (kind)
   {
     case ReleaseKind::PASS:
-      // From where the ball is, at its height.
+      // From his hands as he lets it go (goalkeeper plan step 5); else from
+      // where the ball is, at its height.
+      if (ball.heldRelease != HeldRelease::NONE)
+      {
+        const auto [at, metres] = heldReleaseBinturong(kicker, ball.heldRelease);
+        from.position = at;
+        from.heightMetres = metres;
+        from.z = metres / Z_METRES;
+        break;
+      }
       from.position = ball.position;
       from.z = ball.z;
       from.heightMetres = ball.z * Z_METRES;

@@ -1155,6 +1155,15 @@ struct ContactResult
  * (z * MatchTuning::Units::BALL_Z_METRES = metres) for renderers. Velocities
  * are in m/s and `spin` in rad/s (BallSpin).
  */
+/** How a keeper lets go of a ball in his hands (goalkeeper plan step 5). */
+enum class HeldRelease : std::uint8_t
+{
+  NONE,
+  ROLL,
+  OVERARM,
+  PUNT,
+};
+
 struct MatchBall
 {
   Vector2F position{MatchTuning::Pitch::CENTRE, MatchTuning::Pitch::CENTRE};
@@ -1162,6 +1171,15 @@ struct MatchBall
   Vector2F velocity{0.0f, 0.0f};
   float velocityZ = 0.0f;
   BallSpin spin{};
+
+  /** In its owner's hands, a Binturong keeper's (goalkeeper plan step 5):
+   * where it was against him when he took it (metres from his centre, z
+   * up) and when (simulated s), to bring it to his chest; and, as he lets
+   * it go, how. The possession helpers clear it. */
+  bool inKeeperHands = false;
+  Point3F heldFrom{};
+  double heldSince = 0.0;
+  HeldRelease heldRelease = HeldRelease::NONE;
 
   const Player* possessedBy = nullptr;
   /** Owned but rolling free (a claimed ball): a first touch has played it,
@@ -1494,6 +1512,12 @@ struct MatchStats
   int keeperHeld = 0;
   int keeperFumbles = 0;
   int keeperParries = 0;
+  /** Balls a keeper took in his hands (goalkeeper plan step 5), and how he
+   * let them go: rolled, thrown overarm, punted. */
+  int keeperBallsInHands = 0;
+  int keeperRolls = 0;
+  int keeperThrows = 0;
+  int keeperPunts = 0;
   /** Of those off a leg, the ones off a leg he put there (shot block plan
    * §3d: a reaction block) rather than his stride. */
   int shotReactionBlocks = 0;

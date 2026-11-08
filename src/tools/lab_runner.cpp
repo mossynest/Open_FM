@@ -215,6 +215,10 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
   sample.keeper_held = stats.keeperHeld;
   sample.keeper_fumbles = stats.keeperFumbles;
   sample.keeper_parries = stats.keeperParries;
+  sample.keeper_balls_in_hands = stats.keeperBallsInHands;
+  sample.keeper_rolls = stats.keeperRolls;
+  sample.keeper_throws = stats.keeperThrows;
+  sample.keeper_punts = stats.keeperPunts;
   for (const int count : stats.ballBodyHitsByPart) sample.ball_body_hits += count;
   for (std::size_t part = 0; part < stats.ballBodyHitsByPart.size(); ++part)
     if (isLegPart(static_cast<ShotBodyPart>(part)))
@@ -748,6 +752,18 @@ std::map<std::string, Estimate> matchMetrics(
       column([](const MatchSample& s) { return s.keeper_fumbles; }), catches);
   metrics["keeper_parry_share"] = ratioEstimate(
       column([](const MatchSample& s) { return s.keeper_parries; }), handShots);
+  // Goalkeeper plan step 5: the ball in his hands, and how it leaves them.
+  metrics["keeper_balls_in_hands_per_match"] =
+      meanEstimate(column([](const MatchSample& s) { return s.keeper_balls_in_hands; }));
+  const std::vector<double> rolls = column([](const MatchSample& s) { return s.keeper_rolls; });
+  const std::vector<double> throws = column([](const MatchSample& s) { return s.keeper_throws; });
+  const std::vector<double> punts = column([](const MatchSample& s) { return s.keeper_punts; });
+  std::vector<double> releases(rolls.size());
+  for (std::size_t index = 0; index < releases.size(); ++index)
+    releases[index] = rolls[index] + throws[index] + punts[index];
+  metrics["keeper_roll_share"] = ratioEstimate(rolls, releases);
+  metrics["keeper_throw_share"] = ratioEstimate(throws, releases);
+  metrics["keeper_punt_share"] = ratioEstimate(punts, releases);
   // Pass block plan: other balls off a body.
   const std::vector<double> ballBodyHits =
       column([](const MatchSample& s) { return s.ball_body_hits; });

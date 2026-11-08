@@ -338,6 +338,17 @@
    * (true: he holds it, unless it is fumbled); otherwise `hit` is marked to
    * parry, the face turned away from goal. False: it bounces off. */
   bool keeperHandsHoldShotBinturong(MatchPlayer& keeper, ShotBodyHit& hit);
+  /** A Binturong keeper in his area has just been given the ball with his
+   * hands (goalkeeper plan step 5): it was at `wasAt` (pitch), `wasMetres`
+   * up; from there it is brought to his chest and held. Others: nothing. */
+  void takeInHandsBinturong(const MatchPlayer& keeper, Vector2F wasAt, float wasMetres);
+  /** Where a ball in his hands is now (pitch metres, z up): brought from
+   * where he took it to his chest; in a dive, between his hands. */
+  Point3F heldBallBinturong(const MatchPlayer& keeper) const;
+  /** Where he lets go of the ball in his hands for `how` (pitch, and
+   * metres up). */
+  std::pair<Vector2F, float> heldReleaseBinturong(const MatchPlayer& keeper,
+                                                  HeldRelease how) const;
   /** Whether he reads and reaches a ball not meant for him. */
   bool reachesBallBinturong(const MatchPlayer& player, float ballSpeed, float stretch);
   /** His first-touch skill (hands: a keeper allowed to handle it). */

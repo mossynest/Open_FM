@@ -263,6 +263,35 @@ struct MatchTuning final
     static constexpr float PENALTY_HEIGHT_METRES = 0.8f;
   };
 
+  /**
+   * A ball in a keeper's hands (goalkeeper plan step 5, agreed 2026-11-08):
+   * saves, claims and gathers; back-passes and goal kicks stay at his feet.
+   * Marked placeholders are mine.
+   */
+  struct KeeperHeld final
+  {
+    /** Held this share of his height up, this far in front (m). Brought
+     * there from where he took it over this long (s; placeholder). */
+    static constexpr float HEIGHT_SHARE = 0.55f;
+    static constexpr float AHEAD_METRES = 0.25f;
+    static constexpr float GATHER_SECONDS = 0.3f;
+    /** A ground pass up to this long is rolled, beyond it thrown overarm
+     * (m; placeholder). */
+    static constexpr float ROLL_LONGEST_METRES = 25.0f;
+    /** Released: a roll this high (m), in front; an overarm throw at this
+     * share of his height, this far behind his centre (m); a punt struck
+     * this high (m), in front (the drop from his hands not played out). */
+    static constexpr float ROLL_RELEASE_METRES = 0.15f;
+    static constexpr float OVERARM_HEIGHT_SHARE = 1.15f;
+    static constexpr float OVERARM_BEHIND_METRES = 0.3f;
+    static constexpr float PUNT_STRIKE_METRES = 0.5f;
+    /** His fastest overarm throw (m/s; Throwing): the speeds that carry
+     * 20 m (1) and 50 m (99) launched at 30 degrees from 2.1 m, without
+     * drag (mine, from the agreed distances). */
+    static constexpr float THROW_SPEED_POOR = 13.8f;
+    static constexpr float THROW_SPEED_BEST = 23.0f;
+  };
+
   struct Pitch final
   {
     static constexpr float LENGTH_METRES = 105.0f;

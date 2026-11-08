@@ -174,6 +174,11 @@ struct MatchSample
   int keeper_held = 0;
   int keeper_fumbles = 0;
   int keeper_parries = 0;
+  /** Goalkeeper plan step 5: balls in his hands; rolled, thrown, punted. */
+  int keeper_balls_in_hands = 0;
+  int keeper_rolls = 0;
+  int keeper_throws = 0;
+  int keeper_punts = 0;
   /** Shot block plan §3f check: shots through a torso without meeting it. */
   /** Pass block plan: other balls off a body (all, off a leg put out, an
    * opponent's pass blocked, a deflection off a team-mate or nobody's). */

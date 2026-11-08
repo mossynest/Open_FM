@@ -4148,7 +4148,9 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
       {
         if (!ball.shotOnTarget)
         {
+          const Vector2F wasAt = ball.position;
           setPossession(player);
+          if (hands) takeInHandsBinturong(player, wasAt, contact.height);
           player.actionCooldown = keeperHoldSeconds(player);
           return;
         }
@@ -4199,7 +4201,10 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
           }
           else
           {
+            const Vector2F wasAt = ball.position;
+            const float wasMetres = ball.z * MatchTuning::Units::BALL_Z_METRES;
             setPossession(player);
+            takeInHandsBinturong(player, wasAt, wasMetres);
             player.actionCooldown = keeperHoldSeconds(player);
           }
           // No old dive freeze; in a dive he keeps it until he is up.
@@ -4408,8 +4413,10 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     if (whistledOffside()) return;
 
     recordPassCompletion(player);
+    const Vector2F wasAt = ball.position;
     setPossession(player);
     settleOnBall(player, skill, hands);
+    if (hands) takeInHandsBinturong(player, wasAt, contact.height);
     return;
   }
   // Nobody played it: it ran the whole stretch.
@@ -4456,7 +4463,9 @@ bool MatchEngine::resolveAerialContest()
     {
       ++(player.isHomeTeam ? stats.homeKeeperClaims : stats.awayKeeperClaims);
       recordPassCompletion(player);
+      const Vector2F wasAt = ball.position;
       setPossession(player);
+      takeInHandsBinturong(player, wasAt, heightMetres);
       player.actionCooldown =
           randomFloat(MatchTuning::Ball::MIN_KEEPER_HOLD_SECONDS,
                       MatchTuning::Ball::MAX_KEEPER_HOLD_SECONDS);
@@ -5346,6 +5355,8 @@ void MatchEngine::settleTackle(bool homeTeam)
 
 void MatchEngine::clearPossession()
 {
+  ball.inKeeperHands = false;
+  ball.heldRelease = HeldRelease::NONE;
   ball.possessedBy = nullptr;
   ball.nudgedBy = nullptr;
   ball.inTouch = false;
@@ -5357,6 +5368,8 @@ void MatchEngine::clearPossession()
 
 void MatchEngine::handBallTo(const Player* holder)
 {
+  ball.inKeeperHands = false;
+  ball.heldRelease = HeldRelease::NONE;
   ball.possessedBy = holder;
   ball.inTouch = false;
   ball.touchCollected = false;
@@ -6323,7 +6336,10 @@ void MatchEngine::makeSave(MatchPlayer& goalkeeper)
   const PlayerID shooterId = lastShooter ? lastShooter->getId() : 0;
   goalkeeper.isDiving = true;
   goalkeeper.diveTimer = MatchTuning::Ball::SAVE_DIVE_TIME;
+  const Vector2F wasAt = ball.position;
+  const float wasMetres = ball.z * MatchTuning::Units::BALL_Z_METRES;
   setPossession(goalkeeper);
+  takeInHandsBinturong(goalkeeper, wasAt, wasMetres);
   goalkeeper.actionCooldown = keeperHoldSeconds(goalkeeper);
   state = MatchState::PLAYING;
   keepers[goalkeeper.isHomeTeam ? 0 : 1].state = GoalkeeperState::HOLD;
