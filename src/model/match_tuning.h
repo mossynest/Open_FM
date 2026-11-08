@@ -212,6 +212,27 @@ struct MatchTuning final
     /** Standing fingertip reach, arm straight up, as a share of his height
      * (the step 3 anchors: Aerial Reach is this plus his jump). */
     static constexpr float STANDING_REACH_HEIGHT_SHARE = 1.33f;
+    /** Step 4 (user 2026-11-07): only both hands hold a shot. The fastest
+     * shot he holds at his chest (m/s of the ball against his hands;
+     * Handling), falling in a straight line with his stretch to this share
+     * at full stretch. */
+    static constexpr float HOLD_SPEED_POOR = 12.0f;
+    static constexpr float HOLD_SPEED_BEST = 28.0f;
+    static constexpr float HOLD_FULL_STRETCH_SHARE = 0.4f;
+    /** Both hands on it: the other hand's centre within reach of the ball's
+     * surface by this much (m; placeholder). */
+    static constexpr float BOTH_HANDS_SLACK_METRES = 0.03f;
+    /** A fumble on any catch (user: very small, more near his limit, still
+     * low): this chance, rising in a straight line from this share of his
+     * limit to the chance at it (placeholders). */
+    static constexpr float FUMBLE_CHANCE = 0.01f;
+    static constexpr float FUMBLE_CHANCE_AT_LIMIT = 0.06f;
+    static constexpr float FUMBLE_RISES_FROM_SHARE = 0.7f;
+    /** A parry: the hand's face turned at most this far (degrees;
+     * Handling) to send it as far from the goal frame as it can
+     * (placeholders). */
+    static constexpr float PARRY_AIM_DEGREES_POOR = 10.0f;
+    static constexpr float PARRY_AIM_DEGREES_BEST = 35.0f;
   };
 
   /**

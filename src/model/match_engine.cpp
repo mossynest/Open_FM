@@ -4186,9 +4186,41 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
       notePathChange();
       if (offBody)
       {
+        // Off his own keeper's hand (goalkeeper plan step 4): held in both
+        // hands within his Handling limit, else a parry, the face turned.
+        ShotBodyHit hit = contact.hit;
+        if (keeperBody && player.isHomeTeam != ball.shotByHome &&
+            hit.part == ShotBodyPart::HAND && keeperHandsHoldShotBinturong(player, hit))
+        {
+          ++stats.keeperBodyHitsByPart[static_cast<std::size_t>(hit.part)];
+          if (wasOnTarget)
+          {
+            makeSave(player);
+          }
+          else
+          {
+            setPossession(player);
+            player.actionCooldown = keeperHoldSeconds(player);
+          }
+          // No old dive freeze; in a dive he keeps it until he is up.
+          const KeeperDive& dive = keepers[player.isHomeTeam ? 0 : 1].dive;
+          if (dive.active)
+          {
+            const double up = dive.from + static_cast<double>(dive.stretchSeconds +
+                                                              dive.fallSeconds + dive.downSeconds);
+            player.actionCooldown +=
+                std::max(0.0f, static_cast<float>(up - getSimulatedSeconds()));
+          }
+          else
+          {
+            player.isDiving = false;
+            player.diveTimer = 0.0f;
+          }
+          return;
+        }
         // Off the part it met (step 3); still going in, still the shot,
         // otherwise a loose ball (step 4). No second kick after it.
-        bounceShotOffBodyBinturong(player, contact.hit);
+        bounceShotOffBodyBinturong(player, hit);
         if (!shotStaysOnGoalBinturong())
         {
           ball.isShot = false;

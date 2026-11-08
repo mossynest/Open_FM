@@ -209,6 +209,12 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
   sample.keeper_hands_late = stats.keeperHandsLate;
   sample.keeper_dives = stats.keeperDives;
   sample.keeper_dives_late = stats.keeperDivesLate;
+  sample.keeper_hand_shots = stats.keeperHandShots;
+  sample.keeper_both_hands = stats.keeperBothHands;
+  sample.keeper_catches = stats.keeperCatches;
+  sample.keeper_held = stats.keeperHeld;
+  sample.keeper_fumbles = stats.keeperFumbles;
+  sample.keeper_parries = stats.keeperParries;
   for (const int count : stats.ballBodyHitsByPart) sample.ball_body_hits += count;
   for (std::size_t part = 0; part < stats.ballBodyHitsByPart.size(); ++part)
     if (isLegPart(static_cast<ShotBodyPart>(part)))
@@ -727,6 +733,21 @@ std::map<std::string, Estimate> matchMetrics(
   metrics["keeper_dives_per_shot"] = ratioEstimate(dives, shots);
   metrics["keeper_dives_late_share"] = ratioEstimate(
       column([](const MatchSample& s) { return s.keeper_dives_late; }), dives);
+  // Goalkeeper plan step 4: off his hands.
+  const std::vector<double> handShots =
+      column([](const MatchSample& s) { return s.keeper_hand_shots; });
+  const std::vector<double> catches =
+      column([](const MatchSample& s) { return s.keeper_catches; });
+  metrics["keeper_hand_shots_per_shot"] = ratioEstimate(handShots, shots);
+  metrics["keeper_both_hands_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.keeper_both_hands; }), handShots);
+  metrics["keeper_catch_share"] = ratioEstimate(catches, handShots);
+  metrics["keeper_held_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.keeper_held; }), handShots);
+  metrics["keeper_fumble_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.keeper_fumbles; }), catches);
+  metrics["keeper_parry_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.keeper_parries; }), handShots);
   // Pass block plan: other balls off a body.
   const std::vector<double> ballBodyHits =
       column([](const MatchSample& s) { return s.ball_body_hits; });

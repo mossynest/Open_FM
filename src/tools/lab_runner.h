@@ -166,6 +166,14 @@ struct MatchSample
   int keeper_hands_late = 0;
   int keeper_dives = 0;
   int keeper_dives_late = 0;
+  /** Goalkeeper plan step 4: shots off a hand; both hands; catches; held;
+   * fumbled; parried. */
+  int keeper_hand_shots = 0;
+  int keeper_both_hands = 0;
+  int keeper_catches = 0;
+  int keeper_held = 0;
+  int keeper_fumbles = 0;
+  int keeper_parries = 0;
   /** Shot block plan §3f check: shots through a torso without meeting it. */
   /** Pass block plan: other balls off a body (all, off a leg put out, an
    * opponent's pass blocked, a deflection off a team-mate or nobody's). */

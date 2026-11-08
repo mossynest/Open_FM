@@ -329,6 +329,15 @@
    * brought inside its reach from its shoulder (goalkeeper plan step 2). */
   Point3F keeperHandReachBinturong(const MatchPlayer& player, std::size_t index,
                                    Point3F wanted) const;
+  /** How far a keeper is stretched with his hand at `hand` (goalkeeper plan
+   * step 4): from his chest where he stood (`stood`, pitch metres) to the
+   * hand, against his longest reach; 0 to 1. */
+  float keeperStretchBinturong(const MatchPlayer& keeper, Vector2F stood, Point3F hand) const;
+  /** A shot meets a keeper's hand (goalkeeper plan step 4): both hands on
+   * it and within his Handling limit for its pace and his stretch, a catch
+   * (true: he holds it, unless it is fumbled); otherwise `hit` is marked to
+   * parry, the face turned away from goal. False: it bounces off. */
+  bool keeperHandsHoldShotBinturong(MatchPlayer& keeper, ShotBodyHit& hit);
   /** Whether he reads and reaches a ball not meant for him. */
   bool reachesBallBinturong(const MatchPlayer& player, float ballSpeed, float stretch);
   /** His first-touch skill (hands: a keeper allowed to handle it). */

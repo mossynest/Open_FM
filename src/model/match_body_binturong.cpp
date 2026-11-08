@@ -5125,6 +5125,18 @@ std::optional<ShotBodyHit> MatchEngine::shotMeetsBodyBinturong(const MatchPlayer
       hit.surfaceVelocity.y += handVelocity[first.leg].y * share;
       hit.surfaceVelocity.z += handVelocity[first.leg].z * share;
     }
+    // A hand (goalkeeper plan step 4): his other hand on it too, and his
+    // stretch from his chest where he stands.
+    if (first.part == ShotBodyPart::HAND)
+    {
+      using H = MatchTuning::KeeperHands;
+      const Point3F other = hands.at[1 - first.leg];
+      hit.bothHands = std::hypot(at.x - other.x, at.y - other.y, at.z - other.z) <=
+                      H::HAND_RADIUS_METRES + ballRadius + H::BOTH_HANDS_SLACK_METRES;
+      const Point3F hand = hands.at[first.leg];
+      hit.stretch = keeperStretchBinturong(player, {base.x, base.y},
+                                           {base.x + hand.x, base.y + hand.y, hand.z});
+    }
     const float into = dot3(minus(ballVelocity, hit.surfaceVelocity), hit.normal);
     if (into >= 0.0f) continue;
     // Inside it already at the start (he moved into its path over his
@@ -5218,6 +5230,16 @@ std::optional<ShotBodyHit> MatchEngine::diveMeetsBallBinturong(const MatchPlayer
     const float into = dot3(minus(ballVelocity, hit.surfaceVelocity), hit.normal);
     if (into >= 0.0f) continue;
     if (hit.share <= 1e-6f && into > -MatchTuning::ShotBlock::INSIDE_MEETS_SPEED) continue;
+    // A hand (goalkeeper plan step 4): his other hand on it too, and his
+    // stretch from his chest where he pushed off.
+    if (rod.part == ShotBodyPart::HAND)
+    {
+      const std::size_t hand = met[index].second == 5 ? 0 : 1;
+      const Point3F other = pose.hands[1 - hand];
+      hit.bothHands = std::hypot(at.x - other.x, at.y - other.y, at.z - other.z) <=
+                      H::HAND_RADIUS_METRES + ballRadius + H::BOTH_HANDS_SLACK_METRES;
+      hit.stretch = keeperStretchBinturong(keeper, dive.origin, pose.hands[hand]);
+    }
     return hit;
   }
   return std::nullopt;
@@ -5389,6 +5411,60 @@ void MatchEngine::bounceShotOffBodyBinturong(const MatchPlayer& player, const Sh
       {
         best = score;
         outcome = candidate;
+      }
+    }
+  }
+  else if (hit.parryAim)
+  {
+    // A keeper's parry (goalkeeper plan step 4): the hand's face turned up
+    // to its most (Handling) any way round, to send it as far from the goal
+    // frame as it can: away from the middle of the goal mouth, over the bar
+    // or round a post as much as out.
+    using H = MatchTuning::KeeperHands;
+    const float handling =
+        std::clamp((player.derivedStat(DerivedStat::HANDLING) - STAT_1_RATING) /
+                       (STAT_99_RATING - STAT_1_RATING),
+                   0.0f, 1.0f);
+    const float most = (H::PARRY_AIM_DEGREES_POOR +
+                        (H::PARRY_AIM_DEGREES_BEST - H::PARRY_AIM_DEGREES_POOR) * handling) *
+                       std::numbers::pi_v<float> / 180.0f;
+    const Vector2F at = toMetres(ball.position);
+    const Vector2F goal = toMetres({player.isHomeTeam ? 0.0f : 1.0f, 0.5f});
+    const Point3F fromGoal{at.x - goal.x, at.y - goal.y,
+                           ball.z * MatchTuning::Units::BALL_Z_METRES -
+                               0.5f * MatchTuning::Units::CROSSBAR_HEIGHT_METRES};
+    const float fromGoalSize = std::sqrt(dot3(fromGoal, fromGoal));
+    const Point3F away = fromGoalSize > EPSILON ? times(fromGoal, 1.0f / fromGoalSize)
+                                                : Point3F{player.isHomeTeam ? 1.0f : -1.0f, 0.0f, 0.0f};
+    const auto awayness = [&](const Outcome& candidate)
+    {
+      const float size = std::sqrt(dot3(candidate.velocity, candidate.velocity));
+      return size > EPSILON ? dot3(candidate.velocity, away) / size : -1.0f;
+    };
+    // Two directions square to the face, to turn it about.
+    const Point3F n = hit.normal;
+    const Point3F seed = std::abs(n.z) < 0.9f ? Point3F{0.0f, 0.0f, 1.0f} : Point3F{1.0f, 0.0f, 0.0f};
+    Point3F u = cross(n, seed);
+    u = times(u, 1.0f / std::max(std::sqrt(dot3(u, u)), 1e-6f));
+    const Point3F v = cross(n, u);
+    float best = awayness(outcome);
+    constexpr int RINGS = 4;
+    constexpr int ROUND = 16;
+    for (int ring = 1; ring <= RINGS; ++ring)
+    {
+      const float angle = most * static_cast<float>(ring) / RINGS;
+      for (int step = 0; step < ROUND; ++step)
+      {
+        const float phi = 2.0f * std::numbers::pi_v<float> * static_cast<float>(step) / ROUND;
+        const Point3F turned = plus(times(n, std::cos(angle)),
+                                    times(plus(times(u, std::cos(phi)), times(v, std::sin(phi))),
+                                          std::sin(angle)));
+        const Outcome candidate = bounce(turned);
+        if (const float score = awayness(candidate); score > best)
+        {
+          best = score;
+          outcome = candidate;
+        }
       }
     }
   }
@@ -5569,6 +5645,72 @@ Point3F MatchEngine::keeperHandReachBinturong(const MatchPlayer& player, std::si
     wanted.y = shoulder.y + out.y * reach / size;
   }
   return wanted;
+}
+
+float MatchEngine::keeperStretchBinturong(const MatchPlayer& keeper, Vector2F stood,
+                                          Point3F hand) const
+{
+  // From his chest where he stood (his hands' ready height) to the hand,
+  // against the longest of his reaches from there: a full dive along the
+  // ground (his dive reach) or straight up at the top of his jump (Aerial
+  // Reach). Mine: his dive reach is measured from his feet, near enough.
+  using H = MatchTuning::KeeperHands;
+  using D = MatchTuning::KeeperDive;
+  const float height = keeper.heightMetres;
+  const float chest = H::READY_HEIGHT_SHARE * height;
+  const float agility =
+      std::clamp((keeper.derivedStat(DerivedStat::AGILITY) - STAT_1_RATING) /
+                     (STAT_99_RATING - STAT_1_RATING),
+                 0.0f, 1.0f);
+  const float longest = std::max(D::REACH_HEIGHT_SHARE * height + D::REACH_AGILITY_METRES * agility,
+                                 derivedPhysicalValue(DerivedStat::AERIAL_REACH,
+                                                      keeper.derivedStat(DerivedStat::AERIAL_REACH)) -
+                                     chest);
+  const float out = std::hypot(hand.x - stood.x, hand.y - stood.y, hand.z - chest);
+  return std::clamp(out / std::max(longest, EPSILON), 0.0f, 1.0f);
+}
+
+bool MatchEngine::keeperHandsHoldShotBinturong(MatchPlayer& keeper, ShotBodyHit& hit)
+{
+  // The brain's stand-in for catch or parry (goalkeeper plan §3): he goes
+  // to catch it if both hands are on it and it is within his Handling limit
+  // for its pace against his hands and his stretch; otherwise he parries,
+  // the face turned away from goal. A catch can be fumbled: a small chance
+  // on any, more near his limit (user 2026-11-07); it springs off his hands
+  // as it met them.
+  using H = MatchTuning::KeeperHands;
+  ++stats.keeperHandShots;
+  const auto parry = [&]
+  {
+    hit.parryAim = true;
+    ++stats.keeperParries;
+    return false;
+  };
+  if (!hit.bothHands) return parry();
+  ++stats.keeperBothHands;
+  const float handling =
+      std::clamp((keeper.derivedStat(DerivedStat::HANDLING) - STAT_1_RATING) /
+                     (STAT_99_RATING - STAT_1_RATING),
+                 0.0f, 1.0f);
+  const float limit = (H::HOLD_SPEED_POOR + (H::HOLD_SPEED_BEST - H::HOLD_SPEED_POOR) * handling) *
+                      (1.0f - (1.0f - H::HOLD_FULL_STRETCH_SHARE) * hit.stretch);
+  const Point3F relative{ball.velocity.x - hit.surfaceVelocity.x,
+                         ball.velocity.y - hit.surfaceVelocity.y,
+                         ball.velocityZ - hit.surfaceVelocity.z};
+  const float pace = std::sqrt(dot3(relative, relative));
+  if (pace > limit) return parry();
+  ++stats.keeperCatches;
+  const float nearLimit = std::clamp((pace / std::max(limit, EPSILON) - H::FUMBLE_RISES_FROM_SHARE) /
+                                         (1.0f - H::FUMBLE_RISES_FROM_SHARE),
+                                     0.0f, 1.0f);
+  const float fumble = H::FUMBLE_CHANCE + (H::FUMBLE_CHANCE_AT_LIMIT - H::FUMBLE_CHANCE) * nearLimit;
+  if (randomFloat(0.0f, 1.0f) < fumble)
+  {
+    ++stats.keeperFumbles;
+    return false;
+  }
+  ++stats.keeperHeld;
+  return true;
 }
 
 void MatchEngine::planKeeperHandsBinturong(const MatchPlayer& player, ShotHands& hands,

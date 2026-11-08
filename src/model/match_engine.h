@@ -1085,6 +1085,12 @@ struct ShotBodyHit
   Point3F normal{0.0f, 0.0f, 1.0f};
   Point3F surfaceVelocity{};
   bool blockFoot = false;
+  /** A keeper's hand (goalkeeper plan step 4): his other hand on it too,
+   * and how far he is stretched (0 at his chest, 1 at his longest reach). */
+  bool bothHands = false;
+  float stretch = 0.0f;
+  /** A parry: the hand's face turned away from goal (Handling). */
+  bool parryAim = false;
 };
 
 /** One contact the body is asked for (unified kick plan): a touch, with
@@ -1479,6 +1485,15 @@ struct MatchStats
    * there before his full stretch. */
   int keeperDives = 0;
   int keeperDivesLate = 0;
+  /** Shots off a keeper's hand (goalkeeper plan step 4): both hands on it,
+   * of those within his Handling limit (a catch), held, fumbled; the rest
+   * parried with the hand's face turned. */
+  int keeperHandShots = 0;
+  int keeperBothHands = 0;
+  int keeperCatches = 0;
+  int keeperHeld = 0;
+  int keeperFumbles = 0;
+  int keeperParries = 0;
   /** Of those off a leg, the ones off a leg he put there (shot block plan
    * §3d: a reaction block) rather than his stride. */
   int shotReactionBlocks = 0;
