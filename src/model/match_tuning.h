@@ -41,7 +41,7 @@ struct MatchTuning final
   };
 
   /**
-   * Where his legs naturally are (shot block plan §3c, agreed for a first
+   * Where his legs naturally are (shot block plan Â§3c, agreed for a first
    * try 2026-11-06): no legs exist until a ball needs them ("quantum
    * legs"); then a point of his stride is rolled by the time spent there.
    * Lengths are for a 1.80 m player and scale with his height.
@@ -92,8 +92,8 @@ struct MatchTuning final
     static constexpr float NOISE_SIDEWAYS = 0.05f;
     static constexpr float NOISE_DEGREES = 5.0f;
     /** What a leg is (agreed 2026-11-06): hip joints apart; thigh and shin
-     * as rods of their mean thickness (thigh 0.16 m → 0.11 m, shin
-     * 0.11 m → 0.07 m); the booted foot a box, heel behind the ankle. */
+     * as rods of their mean thickness (thigh 0.16 m â†’ 0.11 m, shin
+     * 0.11 m â†’ 0.07 m); the booted foot a box, heel behind the ankle. */
     static constexpr float HIPS_APART = 0.18f;
     static constexpr float THIGH_RADIUS = 0.068f;
     static constexpr float SHIN_RADIUS = 0.045f;
@@ -104,7 +104,7 @@ struct MatchTuning final
   };
 
   /**
-   * A leg put in a shot's way (shot block plan §3d, agreed 2026-11-06):
+   * A leg put in a shot's way (shot block plan Â§3d, agreed 2026-11-06):
    * reaction blocks only; his reaction from Defending, the leg's speed and
    * aim from Tackling (each poor at 1, best at 99), out from under his
    * centre, across the ball's path. Placement error to tune in the Shot
@@ -285,11 +285,15 @@ struct MatchTuning final
     static constexpr float OVERARM_HEIGHT_SHARE = 1.15f;
     static constexpr float OVERARM_BEHIND_METRES = 0.3f;
     static constexpr float PUNT_STRIKE_METRES = 0.5f;
-    /** His fastest overarm throw (m/s; Throwing): the speeds that carry
-     * 20 m (1) and 50 m (99) launched at 30 degrees from 2.1 m, without
-     * drag (mine, from the agreed distances). */
-    static constexpr float THROW_SPEED_POOR = 13.8f;
-    static constexpr float THROW_SPEED_BEST = 23.0f;
+    /** An overarm throw goes no higher than this (degrees; placeholder,
+     * user 2026-11-08: flatter than a lofted pass). */
+    static constexpr float THROW_MAX_ANGLE_DEGREES = 25.0f;
+    /** His fastest overarm throw (m/s; Throwing): set so his longest throw
+     * (at the angle above, from a 1.88 m keeper's release) first comes
+     * down 20 m (1) and 50 m (99) from where he let it go, measured in
+     * the Keeper throw drill. */
+    static constexpr float THROW_SPEED_POOR = 16.5f;
+    static constexpr float THROW_SPEED_BEST = 31.5f;
   };
 
   struct Pitch final
@@ -816,7 +820,7 @@ struct MatchTuning final
      * of his facing or its back) he lies along his slide; otherwise
      * across it, rolling along it. */
     static constexpr float LIE_ALONG_WITHIN_DEGREES = 45.0f;
-    /** Sliding or tumbling, grass slows him at this (m/s²; friction ~0.5-0.6). */
+    /** Sliding or tumbling, grass slows him at this (m/sÂ²; friction ~0.5-0.6). */
     static constexpr float FALL_DECELERATION = 5.5f;
     /** One turn of his body rolls him this far (m): its circumference. */
     static constexpr float ROLL_METRES_PER_TURN =
@@ -927,7 +931,7 @@ struct MatchTuning final
       float weight;
     };
     /** The jobs' sizes: the pace change (1 at the reference speed) counts
-     * for the weight, the turn (1 at 90°) for the angle, times the inward
+     * for the weight, the turn (1 at 90Â°) for the angle, times the inward
      * or outward multiplier (turnsOutward: the instep or the outside of his
      * foot). */
     static constexpr float PACE_CHANGE_WEIGHT = 0.6f;
@@ -1695,7 +1699,7 @@ struct MatchTuning final
    * defaults of the strike knobs (match_strike_knobs.h). The condition
    * levels are on the touch's scale; each condition adds its level to both
    * jobs. Not tuned: ground and lofted passes and crosses are first
-   * guesses; shots and headers start from the old spread's size (§13).
+   * guesses; shots and headers start from the old spread's size (Â§13).
    */
   struct Strike final
   {
@@ -2229,7 +2233,7 @@ struct MatchTuning final
     // THIGH_CUSHION_UP_DEGREES. Only when he is nearly stopped (no faster
     // than THIGH_MAX_SPEED, m/s); then he stays planted (no acceleration)
     // for THIGH_PLANTED_SECONDS. The share that comes back is the chest's
-    // for now (a flatter ball being harder is plan §5 question 1).
+    // for now (a flatter ball being harder is plan Â§5 question 1).
     static constexpr float THIGH_MAX_SIDE_DEGREES = 20.0f;
     static constexpr float THIGH_MIN_UP_DEGREES = 30.0f;
     static constexpr float THIGH_MAX_UP_DEGREES = 80.0f;
@@ -2740,7 +2744,7 @@ struct MatchTuning final
   {
     static constexpr float TOP_SPEED = 7.0f;
     /** Easing in to their spot: the speed they run at this far from it is
-     * what stops them on it braking at this (m/s²); within the dead band
+     * what stops them on it braking at this (m/sÂ²); within the dead band
      * they stay put (the spot moves with play all the time). */
     static constexpr float ARRIVE_BRAKING = 2.5f;
     static constexpr float DEAD_BAND_METRES = 0.5f;

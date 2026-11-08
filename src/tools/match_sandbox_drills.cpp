@@ -6067,13 +6067,7 @@ class PassTargetDrill : public Drill
     scenario.ballPosition = SPOT;
     engine.startDrill(scenario);
     engine.forcePassTo(passerId, target(), style(), spin(), arrivalSpeed());
-    before = engine.getStrikeContacts();
-    strike.reset();
-    outcome.clear();
-    endAt.reset();
-    ballPath.clear();
-    strikeFrom = SPOT;
-    reset();
+    beginRun(engine);
   }
 
   bool afterStep(MatchEngine& engine) override
@@ -6109,6 +6103,19 @@ class PassTargetDrill : public Drill
   }
 
  protected:
+  /** After the drill has started and the pass is asked for: the run's
+   * readings cleared. */
+  void beginRun(const MatchEngine& engine)
+  {
+    before = engine.getStrikeContacts();
+    strike.reset();
+    outcome.clear();
+    endAt.reset();
+    ballPath.clear();
+    strikeFrom = SPOT;
+    reset();
+  }
+
   /** How the strike came off (StrikeContactStats, before and after). */
   struct Strike
   {
@@ -6926,6 +6933,95 @@ class ChipTargetDrill final : public BullseyePassDrill
  protected:
   StrikeKind kind() const override { return StrikeKind::CHIP; }
   ForcedPassStyle style() const override { return ForcedPassStyle::CHIP; }
+};
+
+/**
+ * A keeper's ball from his hands at a bullseye (goalkeeper plan step 5):
+ * from the penalty spot, in his own area, a roll (up to 25 m) or overarm
+ * throw (beyond), or a punt. Measures where it first comes down and how far
+ * from him; set the range beyond his reach to see his longest.
+ */
+class KeeperThrowDrill final : public BullseyePassDrill
+{
+ public:
+  KeeperThrowDrill() { rangeMetres = 40.0f; }
+  const char* name() const override { return "Keeper throw"; }
+  const char* summary() const override
+  {
+    return "A keeper with the ball in his hands on the penalty spot (his own "
+           "area) lets it go at a bullseye towards the centre circle: rolled "
+           "(up to 25 m) or thrown overarm (beyond), or punted. Measures "
+           "where it first comes down, how far from where he let it go, and "
+           "how it came off, with his Goalkeeping (Throwing's stand-in). "
+           "Binturong body.";
+  }
+  std::vector<DrillPlayerSpec> players() const override
+  {
+    DrillPlayerSpec keeper{"Keeper", PlayerRole::GK, true, {{"Goalkeeping", goalkeeping}}, 188};
+    keeper.condition = condition;
+    return {keeper};
+  }
+  void begin(MatchEngine& engine, const std::vector<PlayerID>& ids) override
+  {
+    passerId = ids[0];
+    engine.setStrikeKnobs(knobs);
+    MatchScenario scenario;
+    scenario.players.push_back({passerId, SPOT, false});
+    scenario.carrierId = passerId;
+    scenario.ballPosition = SPOT;
+    scenario.carrierInHands = true;
+    engine.startDrill(scenario);
+    engine.forcePassTo(passerId, target(), style());
+    BullseyePassDrill::beginRun(engine);
+  }
+  std::vector<DrillParameter> parameters() override
+  {
+    std::vector<DrillParameter> list = BullseyePassDrill::parameters();
+    DrillParameter how = setting("Release", &releaseChoice, 0.0f, 1.0f, true,
+                                 "A ground ball (rolled up to 25 m, thrown "
+                                 "overarm beyond) or a punt.");
+    how.choices = {"Roll or throw", "Punt"};
+    how.section = "Keeper";
+    list.insert(list.begin(), how);
+    DrillParameter gk = setting("Goalkeeping", &goalkeeping, 1.0f, 100.0f, true,
+                                "Throwing's stand-in: his fastest throw (20 m "
+                                "at 1 to 50 m at 99) and its accuracy.");
+    gk.section = "Keeper";
+    list.insert(list.begin(), gk);
+    return list;
+  }
+  std::vector<DrillPreset> presets() const override
+  {
+    return {
+        {"Roll", "20 m along the ground.", {{"Range (m)", 20.0f}, {"Release", 0.0f}}},
+        {"Overarm throw", "40 m.", {{"Range (m)", 40.0f}, {"Release", 0.0f}}},
+        {"Longest throw", "70 m: beyond anyone, so it shows his longest.",
+         {{"Range (m)", 70.0f}, {"Release", 0.0f}}},
+        {"Punt", "55 m.", {{"Range (m)", 55.0f}, {"Release", 1.0f}}},
+    };
+  }
+  std::vector<DrillMetric> metrics() const override
+  {
+    std::vector<DrillMetric> out = BullseyePassDrill::metrics();
+    if (landing)
+      out.push_back({"Carry (m, from where he let it go)",
+                     lineMetres(landing->point).x - lineMetres(strikeFrom).x});
+    return out;
+  }
+
+ protected:
+  StrikeKind kind() const override
+  {
+    return releaseChoice < 0.5f ? StrikeKind::THROW : StrikeKind::LOFTED_PASS;
+  }
+  ForcedPassStyle style() const override
+  {
+    return releaseChoice < 0.5f ? ForcedPassStyle::GROUND : ForcedPassStyle::LOFTED;
+  }
+
+ private:
+  float goalkeeping = 70.0f;
+  float releaseChoice = 0.0f;
 };
 
 // --- Shot target ---------------------------------------------------------------
@@ -9084,6 +9180,7 @@ std::vector<std::unique_ptr<Drill>> makeDrills()
   drills.push_back(std::make_unique<BullseyePassDrill>());
   drills.push_back(std::make_unique<DrivenCorridorDrill>());
   drills.push_back(std::make_unique<ChipTargetDrill>());
+  drills.push_back(std::make_unique<KeeperThrowDrill>());
   drills.push_back(std::make_unique<HeaderTargetDrill>());
   drills.push_back(std::make_unique<BodyControlDrill>(false));
   drills.push_back(std::make_unique<BodyControlDrill>(true));

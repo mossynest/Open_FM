@@ -143,6 +143,10 @@ bool MatchEngine::startDrill(const MatchScenario& scenario)
   if (!placeScenario(scenario, MatchState::PLAYING, 0.0f, homeScore, awayScore,
                      false))
     return false;
+  if (scenario.carrierInHands)
+    if (MatchPlayer* carrier = drillPlayer(scenario.carrierId);
+        carrier && ball.possessedBy == carrier->player)
+      takeInHandsBinturong(*carrier, ball.position, ball.z * MatchTuning::Units::BALL_Z_METRES);
   captureInterpolationFrame();
   return true;
 }

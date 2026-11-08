@@ -3912,24 +3912,43 @@ MatchEngine::Kick MatchEngine::kickPassBinturong(const MatchPlayer& passer,
                                       : ball.z * MatchTuning::Units::BALL_Z_METRES;
   if (overarm)
   {
-    // Overarm (goalkeeper plan step 5): launched to drop at the target as a
-    // lofted pass is (chest height to a team-mate), at no more than his
-    // fastest throw (Throwing); beyond it, as flat as gets it there, or as
-    // far as he can, short. Mine: the lofted pass's speeds stand in for how
-    // a keeper picks his throw's pace.
+    // Overarm (goalkeeper plan step 5): to drop at the target (chest height
+    // to a team-mate) no higher than the throw's angle, with the pace that
+    // gets it there at that angle, at no more than his fastest throw
+    // (Throwing); beyond his reach, at his fastest at that angle, short.
+    using K = MatchTuning::KeeperHeld;
     const float throwing = std::clamp((passer.derivedStat(DerivedStat::THROWING) - STAT_1_RATING) /
                                           (STAT_99_RATING - STAT_1_RATING),
                                       0.0f, 1.0f);
-    const float most = MatchTuning::KeeperHeld::THROW_SPEED_POOR +
-                       (MatchTuning::KeeperHeld::THROW_SPEED_BEST -
-                        MatchTuning::KeeperHeld::THROW_SPEED_POOR) *
-                           throwing;
+    const float most = K::THROW_SPEED_POOR + (K::THROW_SPEED_BEST - K::THROW_SPEED_POOR) * throwing;
+    const float steepest = K::THROW_MAX_ANGLE_DEGREES * std::numbers::pi_v<float> / 180.0f;
     const float arrivalMetres = receiver ? P::LOFTED_ARRIVAL_HEIGHT_METRES : 0.0f;
-    float along = std::min(P::LOFTED_BASE_SPEED + passDistance * P::LOFTED_SPEED_PER_METRE, most);
-    float up = loftVerticalSpeed(passDistance, along, startMetres, arrivalMetres, meant);
-    if (std::hypot(along, up) > most)
-      std::tie(along, up) =
-          fullPowerLoftBinturong(passDistance, most, startMetres, arrivalMetres, meant);
+    const auto upFor = [&](float pace)
+    { return loftVerticalSpeed(passDistance, pace, startMetres, arrivalMetres, meant); };
+    // The faster along, the flatter: the slowest pace within the angle.
+    float low = 1.0f;
+    float high = most * std::cos(steepest);
+    float along = high;
+    float up = upFor(high);
+    if (std::atan2(up, high) <= steepest)
+    {
+      for (int step = 0; step < 24; ++step)
+      {
+        const float mid = 0.5f * (low + high);
+        if (std::atan2(upFor(mid), mid) > steepest)
+          low = mid;
+        else
+          high = mid;
+      }
+      along = high;
+      up = upFor(high);
+    }
+    else
+    {
+      // Out of his reach within the angle: his fastest, at the angle.
+      along = most * std::cos(steepest);
+      up = most * std::sin(steepest);
+    }
     return strikeContactBinturong(
         passer, kind, curlAimBinturong(target, curlAngle(passDistance, along, up, startMetres, meant)),
         along, up, 1.0f, meant, spinCapacity);

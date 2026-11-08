@@ -35,4 +35,7 @@ struct MatchScenario
   std::vector<MatchScenarioPlayer> players;
   std::uint32_t carrierId = 0;
   Vector2F ballPosition{MatchTuning::Pitch::CENTRE, MatchTuning::Pitch::CENTRE};
+  /** Drills: the carrier, a keeper in his area, starts with it in his
+   * hands (Binturong body; goalkeeper plan step 5). */
+  bool carrierInHands = false;
 };
