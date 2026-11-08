@@ -1518,6 +1518,11 @@ struct MatchStats
   int keeperRolls = 0;
   int keeperThrows = 0;
   int keeperPunts = 0;
+  /** Shootout kicks taken, scored and saved (goalkeeper plan step 9; not
+   * match play: counted after the match's record is put back). */
+  int shootoutKicks = 0;
+  int shootoutGoals = 0;
+  int shootoutSaves = 0;
   /** Of those off a leg, the ones off a leg he put there (shot block plan
    * §3d: a reaction block) rather than his stride. */
   int shotReactionBlocks = 0;
@@ -3076,6 +3081,20 @@ class MatchEngine
     std::array<int, 2> goals{0, 0};
     /** Kicking order of each side (player ids), cycled when exhausted. */
     std::array<std::vector<PlayerID>, 2> order;
+    /** A kick at a Binturong keeper (goalkeeper plan step 9): played as an
+     * in-match penalty, the open-play ball sweep running while it flies;
+     * its outcome once known; and the match's stats, tracker and log as
+     * they were before it, put back after (a shootout kick is not match
+     * play). */
+    bool live = false;
+    /** Its strike, at the end of the run-up, and whether it has come. */
+    double strikeAt = 0.0;
+    bool struck = false;
+    std::optional<MatchEventDetail> outcome;
+    std::size_t eventsBefore = 0;
+    MatchStats statsBefore;
+    std::vector<PlayerMatchStats> playerStatsBefore;
+    MatchTracker trackerBefore;
   };
   Shootout shootout;
   float elapsedMatchMinutes = 0.0f;
@@ -3131,6 +3150,8 @@ class MatchEngine
     float lateralVelocity = 0.0f;
     /** A Binturong keeper's dive (goalkeeper plan step 3). */
     KeeperDive dive;
+    /** His penalty guess is made (step 9: as the taker set off). */
+    bool penaltyGuessed = false;
   };
   /** Whether this keeper is diving or down from a dive (or set for a shot):
    * his body is the dive's, not the brain's. */
@@ -3947,6 +3968,9 @@ class MatchEngine
   void finishMatch();
   void startShootout();
   void updateShootout(float dt);
+  /** A live shootout kick off the pitch (goalkeeper plan step 9): in or
+   * out, and the kick stops there. */
+  void shootoutBallOut();
   void beginShootoutKick();
   void finishShootoutKick(MatchEventDetail outcome);
   /** Substitutions a side may make (one more in extra time). */
@@ -4093,6 +4117,12 @@ class MatchEngine
   Vector2F goalkeeperTarget(MatchPlayer& keeper, const MatchPlayer* carrier);
   void diveGoalkeeper(MatchPlayer& keeper, float dt);
   void planGoalkeeperDive(bool defendingHome, bool penalty);
+  /** A Binturong keeper's blind penalty guess (goalkeeper plan step 9),
+   * made as the taker sets off for a strike at `strikeAt` (simulated s):
+   * a side, low or high, pushed off around the strike; or he stays. */
+  void planPenaltyDiveBinturong(MatchPlayer& keeper, double strikeAt);
+  /** An in-match penalty's strike, once the taker has set off (step 9). */
+  std::optional<double> penaltyStrikeAt;
   void resolveShotAtGoalkeeper(MatchPlayer& goalkeeper);
   /** A keeper's claim, or a duel for a high ball (true when it was played).
    * A lone side under it on a Binturong body is left to headInSweep. */

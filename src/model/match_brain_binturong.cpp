@@ -4027,16 +4027,10 @@ MatchEngine::ShotAim MatchEngine::chooseShotAimBinturong(
 
 float MatchEngine::choosePenaltyGuessBinturong(const MatchPlayer& keeper)
 {
-  // He picks a side, and a good keeper reads the taker a little more often.
-  const float shotSide =
-      ball.shotTargetY < MatchTuning::Pitch::CENTRE ? -1.0f : 1.0f;
+  // A blind guess, before the kick (goalkeeper plan step 9): a side, or he
+  // stays. Reading the taker (Anticipation) is for later.
+  (void)keeper;
   float guess = randomFloat(0.0f, 1.0f) < 0.5f ? -1.0f : 1.0f;
-  if (randomFloat(0.0f, 1.0f) <
-      MatchTuning::Goalkeeper::PENALTY_READ_BASE +
-          keeper.goalkeeping * MatchTuning::Goalkeeper::PENALTY_READ_SKILL)
-  {
-    guess = shotSide;
-  }
   if (randomFloat(0.0f, 1.0f) < MatchTuning::Goalkeeper::PENALTY_STAY_CHANCE)
     guess = 0.0f;
   return guess;

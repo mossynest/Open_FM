@@ -1578,6 +1578,7 @@ void MatchEngine::setupPenaltyBinturong(bool homeTeam)
     ++stats.awayPenalties;
   ++stoppageLogs[static_cast<std::size_t>(period - 1)].penalties;
   state = MatchState::PENALTY;
+  penaltyStrikeAt.reset();
   // Taken once everyone is ready (restartReadyBinturong), not on a
   // countdown; a card, an injury or a substitution still adds its wait.
   setPieceTimer = 0.0f;
@@ -1686,6 +1687,23 @@ void MatchEngine::completeRestartBinturong()
     if (distance(throwInHold(taker->position, deadBall.spot), ball.position) >
         MatchTuning::DeadBall::THROW_IN_SET_METRES)
       return;
+  }
+  // A penalty against a Binturong keeper (goalkeeper plan step 9): the taker
+  // sets off, and the keeper makes his guess then, so he can push off before
+  // the strike; the strike comes at the end of the run-up.
+  if (restartState == MatchState::PENALTY && taker && active(*taker) &&
+      getBody(!taker->isHomeTeam) == BodyId::BINTURONG)
+  {
+    const double now = getSimulatedSeconds();
+    if (!penaltyStrikeAt)
+    {
+      penaltyStrikeAt = now + MatchTuning::KeeperDive::PENALTY_RUN_UP_SECONDS;
+      if (MatchPlayer* keeper = findGoalkeeper(!taker->isHomeTeam))
+        planPenaltyDiveBinturong(*keeper, *penaltyStrikeAt);
+      return;
+    }
+    if (now < *penaltyStrikeAt) return;
+    penaltyStrikeAt.reset();
   }
   const std::optional<RestartLineUp> linedUp = restartLineUp;
   restartTakerIndex.reset();

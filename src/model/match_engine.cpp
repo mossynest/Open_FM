@@ -1610,6 +1610,22 @@ void MatchEngine::beginShootoutKick()
                         MatchTuning::Pitch::CENTRE};
     keeper->velocity = {0.0f, 0.0f};
     keeper->movementTarget = keeper->position;
+    // On his line, on his feet, for each kick.
+    keepers[home ? 1 : 0].dive = {};
+    keepers[home ? 1 : 0].state = GoalkeeperState::SET_POSITION;
+    keeper->isDiving = false;
+    keeper->diveTimer = 0.0f;
+  }
+  // Against a Binturong keeper the kick is an in-match penalty (goalkeeper
+  // plan step 9): the match's record kept aside until it is over.
+  shootout.live = getBody(!home) == BodyId::BINTURONG;
+  shootout.outcome.reset();
+  if (shootout.live)
+  {
+    shootout.eventsBefore = events.size();
+    shootout.statsBefore = stats;
+    shootout.playerStatsBefore = playerStats;
+    shootout.trackerBefore = tracker;
   }
   const Vector2F spot{home ? MatchTuning::Pitch::RIGHT_PENALTY_SPOT_X
                            : MatchTuning::Pitch::LEFT_PENALTY_SPOT_X,
@@ -1621,9 +1637,19 @@ void MatchEngine::beginShootoutKick()
   ball.position = spot;
   handBallTo(taker->player);
   ball.lastPossessor = taker->player;
+  shootout.inFlight = true;
+  if (shootout.live)
+  {
+    // He sets off; the keeper guesses now and the strike comes at the end
+    // of the run-up (goalkeeper plan step 9).
+    shootout.struck = false;
+    shootout.strikeAt = getSimulatedSeconds() + MatchTuning::KeeperDive::PENALTY_RUN_UP_SECONDS;
+    if (MatchPlayer* keeper = findGoalkeeper(!home))
+      planPenaltyDiveBinturong(*keeper, shootout.strikeAt);
+    return;
+  }
   strikeShot(*taker, MatchTuning::Shooting::PENALTY_XG, false, true);
   planGoalkeeperDive(!home, true);
-  shootout.inFlight = true;
 }
 
 void MatchEngine::updateShootout(float dt)
@@ -1636,6 +1662,53 @@ void MatchEngine::updateShootout(float dt)
   }
   MatchPlayer* keeper = findGoalkeeper(!shootout.kickerHome);
   if (keeper) diveGoalkeeper(*keeper, dt);
+  if (shootout.live)
+  {
+    // As an in-match penalty (goalkeeper plan step 9): the open-play ball,
+    // his body, hands and dive. It ends when it is in or out (the lines,
+    // shootoutBallOut), held, no longer a shot (off him: saved; else
+    // missed), or spent. No rebounds. Struck at the end of the run-up.
+    if (!shootout.struck)
+    {
+      if (getSimulatedSeconds() < shootout.strikeAt) return;
+      shootout.struck = true;
+      MatchPlayer* taker = nullptr;
+      for (MatchPlayer& player : players)
+        if (active(player) && player.player->getId() == shootout.taker) taker = &player;
+      if (taker)
+      {
+        strikeShot(*taker, MatchTuning::Shooting::PENALTY_XG, false, true);
+        planGoalkeeperDive(!shootout.kickerHome, true);
+      }
+      return;
+    }
+    state = MatchState::PLAYING;
+    updateBall(dt);
+    if (!shootout.outcome && state == MatchState::PLAYING)
+    {
+      const bool offKeeper = keeper && ball.lastPossessor == keeper->player;
+      if (ball.possessedBy)
+        shootout.outcome = offKeeper ? MatchEventDetail::SAVED : MatchEventDetail::MISSED;
+      else if (!ball.isShot)
+        shootout.outcome = offKeeper ? MatchEventDetail::SAVED : MatchEventDetail::MISSED;
+      else if (ball.shotElapsedSeconds >= MatchTuning::Timing::SHOOTOUT_MAX_FLIGHT_SECONDS ||
+               (ball.shotElapsedSeconds > 0.3f &&
+                length(ball.velocity) < MatchTuning::Ball::DEAD_SHOT_SPEED))
+        shootout.outcome = offKeeper ? MatchEventDetail::SAVED : MatchEventDetail::MISSED;
+    }
+    state = MatchState::PENALTY_SHOOTOUT;
+    if (!shootout.outcome) return;
+    // The match's record as it was: a shootout kick is not match play.
+    stats = shootout.statsBefore;
+    playerStats = shootout.playerStatsBefore;
+    tracker = shootout.trackerBefore;
+    if (events.size() > shootout.eventsBefore) events.resize(shootout.eventsBefore);
+    undescribedEvents = std::min(undescribedEvents, events.size());
+    shootout.live = false;
+    finishShootoutKick(*shootout.outcome);
+    updateTeamPhases();
+    return;
+  }
   const float lineX = shootout.kickerHome ? 1.0f : 0.0f;
   const int substeps =
       MatchTuning::Timing::BALL_SUBSTEPS * static_cast<int>(stepTicks);
@@ -1698,11 +1771,43 @@ void MatchEngine::updateShootout(float dt)
   }
 }
 
+void MatchEngine::shootoutBallOut()
+{
+  // Off the pitch: in when it crossed the goal line inside the frame (the
+  // woodwork already played in the sweep), otherwise out. Play stops.
+  if (ballInPlayAt(ball.position)) return;
+  const float lineX = shootout.kickerHome ? 1.0f : 0.0f;
+  const bool crossed = shootout.kickerHome ? ball.position.x >= lineX : ball.position.x <= lineX;
+  bool inside = false;
+  if (crossed)
+  {
+    const float span = ball.position.x - substepBallPosition.x;
+    const float t = std::abs(span) > EPSILON
+                        ? std::clamp((lineX - substepBallPosition.x) / span, 0.0f, 1.0f)
+                        : 1.0f;
+    const float lateralMetres =
+        (substepBallPosition.y + (ball.position.y - substepBallPosition.y) * t -
+         MatchTuning::Pitch::CENTRE) *
+        MatchTuning::Pitch::WIDTH_METRES;
+    const float heightMetres =
+        (substepBallZ + (ball.z - substepBallZ) * t) * MatchTuning::Units::BALL_Z_METRES;
+    inside = std::abs(lateralMetres) < MatchTuning::Shooting::GOAL_HALF_WIDTH_METRES -
+                                           MatchTuning::Units::BALL_RADIUS_METRES &&
+             heightMetres < MatchTuning::Units::CROSSBAR_HEIGHT_METRES -
+                                MatchTuning::Units::BALL_RADIUS_METRES;
+  }
+  shootout.outcome = inside ? MatchEventDetail::SCORED : MatchEventDetail::MISSED;
+  state = MatchState::PENALTY_SHOOTOUT;
+}
+
 void MatchEngine::finishShootoutKick(MatchEventDetail outcome)
 {
   const std::size_t side = shootout.kickerHome ? 0 : 1;
   ++shootout.kicks[side];
   if (outcome == MatchEventDetail::SCORED) ++shootout.goals[side];
+  ++stats.shootoutKicks;
+  if (outcome == MatchEventDetail::SCORED) ++stats.shootoutGoals;
+  if (outcome == MatchEventDetail::SAVED) ++stats.shootoutSaves;
   shootout.inFlight = false;
   shootout.timer = MatchTuning::Timing::SHOOTOUT_KICK_INTERVAL_SECONDS;
   clearFlightState();
@@ -2037,6 +2142,13 @@ void MatchEngine::updateRestartMovement(float dt)
   {
     MatchPlayer& player = players[slot];
     if (!active(player)) continue;
+    // A keeper set to dive for a penalty (goalkeeper plan step 9): his body
+    // is the dive's.
+    if (player.isGoalkeeper && keepers[player.isHomeTeam ? 0 : 1].dive.active)
+    {
+      diveGoalkeeper(player, dt);
+      continue;
+    }
     // The player fetching the ball for a free kick or penalty goes to it.
     const bool fetching = deadBall.active && deadBall.fetcherIndex == slot;
     if (player.isGoalkeeper && &player != taker && !fetching)
@@ -3289,6 +3401,32 @@ void MatchEngine::reportKick(MatchActionRecord& action,
   recorder->onAction(*this, action);
 }
 
+void MatchEngine::planPenaltyDiveBinturong(MatchPlayer& keeper, double strikeAt)
+{
+  // From 11 m he guesses blind (goalkeeper plan step 9): a side, low or
+  // high, pushing off around the strike (a little before it at best;
+  // earlier or later the poorer he is); or he stays, and reacts as to any
+  // shot. Planned as the taker sets off, so he can go before the strike.
+  using D = MatchTuning::KeeperDive;
+  GoalkeeperControl& control = keepers[keeper.isHomeTeam ? 0 : 1];
+  control.penaltyGuessed = true;
+  if (keeper.fallen || control.dive.active) return;
+  control.state = GoalkeeperState::DIVE;
+  control.timer = 0.0f;
+  const float guess = choosePenaltyGuess(keeper);
+  if (guess == 0.0f) return;
+  const Vector2F side = normalized({0.0f, guess});
+  const float height = randomFloat(0.0f, 1.0f) < D::PENALTY_HIGH_CHANCE ? D::PENALTY_HIGH_METRES
+                                                                       : D::PENALTY_LOW_METRES;
+  const float spread =
+      alongStatScale(keeper.goalkeeping, D::PENALTY_LEAD_SPREAD_POOR, D::PENALTY_LEAD_SPREAD_BEST);
+  const float lead = D::PENALTY_LEAD_SECONDS + spread * randomFloat(-1.0f, 1.0f);
+  control.dive.decidedFor = ball.pathSince;
+  planKeeperDiveBinturong(keeper, control.dive, strikeAt - static_cast<double>(lead),
+                          Point3F{side.x * D::PENALTY_SIDE_METRES, side.y * D::PENALTY_SIDE_METRES,
+                                  height});
+}
+
 void MatchEngine::planGoalkeeperDive(bool defendingHome, bool penalty)
 {
   MatchPlayer* keeper = findGoalkeeper(defendingHome);
@@ -3298,25 +3436,15 @@ void MatchEngine::planGoalkeeperDive(bool defendingHome, bool penalty)
   if (getBody(defendingHome) == BodyId::BINTURONG)
   {
     // Goalkeeper plan step 3: set for it; he reacts and dives (or not) in
-    // diveGoalkeeper. Already in a dive, he is committed to it.
+    // diveGoalkeeper. Already in a dive, he is committed to it. A penalty's
+    // guess was made as the taker set off (step 9); with no run-up, now.
+    const bool guessed = control.penaltyGuessed;
+    control.penaltyGuessed = false;
     if (control.dive.active) return;
     control.state = GoalkeeperState::DIVE;
     control.timer = 0.0f;
-    if (penalty)
-    {
-      // From 11 m he guesses at the kick: a dive to that side at once; or
-      // he stays, and reacts as to any shot.
-      const float guess = choosePenaltyGuess(*keeper);
-      if (guess != 0.0f)
-      {
-        const Vector2F side = normalized({0.0f, guess});
-        control.dive.decidedFor = ball.pathSince;
-        planKeeperDiveBinturong(*keeper, control.dive, getSimulatedSeconds(),
-                                Point3F{side.x * MatchTuning::KeeperDive::PENALTY_SIDE_METRES,
-                                        side.y * MatchTuning::KeeperDive::PENALTY_SIDE_METRES,
-                                        MatchTuning::KeeperDive::PENALTY_HEIGHT_METRES});
-      }
-    }
+    if (penalty && !guessed) planPenaltyDiveBinturong(*keeper, getSimulatedSeconds());
+    control.penaltyGuessed = false;
     return;
   }
   control.state = GoalkeeperState::DIVE;

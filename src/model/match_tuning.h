@@ -257,10 +257,27 @@ struct MatchTuning final
     static constexpr float DOWN_SECONDS_BEST = 0.8f;
     /** His legs together as a rod (m radius; placeholder). */
     static constexpr float LEGS_RADIUS_METRES = 0.1f;
-    /** A penalty guess: he dives for a spot this far to the side and this
-     * high (m; placeholders). */
-    static constexpr float PENALTY_SIDE_METRES = 2.5f;
-    static constexpr float PENALTY_HEIGHT_METRES = 0.8f;
+    /** A penalty guess (step 9, a blind guess): he dives for a spot this
+     * far to the side (just inside the post; as far as his dive reaches),
+     * low or high with this chance, at these heights (m; placeholders). */
+    static constexpr float PENALTY_SIDE_METRES = 3.2f;
+    static constexpr float PENALTY_HIGH_CHANCE = 0.5f;
+    static constexpr float PENALTY_LOW_METRES = 0.4f;
+    static constexpr float PENALTY_HIGH_METRES = 1.8f;
+    /** When he pushes off for it: this long before the strike (s; the
+     * typical onset, Dicks et al. 2010 as cited), give or take up to this
+     * much either way, drawn per kick (s; Goalkeeping standing in until the
+     * brain has Anticipation: the best about on it, the worst anywhere
+     * across the reported 50-350 ms range and as late after the strike).
+     * Going early is no better: a taker could adjust (user 2026-11-08). The
+     * spreads are placeholders. */
+    /** The taker's run-up: from when he sets off to the strike (s;
+     * placeholder, long enough for the earliest push-off; his run itself
+     * not played out). */
+    static constexpr float PENALTY_RUN_UP_SECONDS = 0.4f;
+    static constexpr float PENALTY_LEAD_SECONDS = 0.05f;
+    static constexpr float PENALTY_LEAD_SPREAD_POOR = 0.3f;
+    static constexpr float PENALTY_LEAD_SPREAD_BEST = 0.02f;
   };
 
   /**

@@ -179,6 +179,10 @@ struct MatchSample
   int keeper_rolls = 0;
   int keeper_throws = 0;
   int keeper_punts = 0;
+  /** Shootout kicks taken, scored and saved (goalkeeper plan step 9). */
+  int shootout_kicks = 0;
+  int shootout_goals = 0;
+  int shootout_saves = 0;
   /** Shot block plan §3f check: shots through a torso without meeting it. */
   /** Pass block plan: other balls off a body (all, off a leg put out, an
    * opponent's pass blocked, a deflection off a team-mate or nobody's). */
@@ -342,6 +346,8 @@ struct MatchJob
   /** MatchContext::homeAdvantageScale: 0 a neutral venue, 1 the engine's
    * default (the game's full home edge), up to 2. */
   float homeAdvantage = 1.0f;
+  /** A knockout tie: level at full time, straight to a shootout. */
+  bool knockout = false;
   /** Tuning knobs for the match (defaults: the tuned constants). */
   FirstTouchKnobs touchKnobs;
   StrikeKnobs strikeKnobs;

@@ -60,6 +60,7 @@ Usage:
                  [--brains HOME,AWAY] [--bodies HOME,AWAY] [--threads T]
                  [--handshake H] [--referee R] [--managers HOME,AWAY]
                  [--ball B] [--out-of-play O] [--home-advantage X] [--uniform]
+                 [--knockout]
                  [--knobs "Name=value;Name=value"] [--out-dir DIR]
   fm_lab season  [--leagues all|top|ID,ID...] [--seasons N] [--seed S]
                  [--threads T] [--max-days D] [--reload] [--out-dir DIR]
@@ -182,8 +183,8 @@ class UsageError : public std::runtime_error
 
 Arguments parseArguments(int argc, char** argv)
 {
-  static constexpr std::array<std::string_view, 5> FLAGS = {
-      "--spread", "--uniform", "--reload", "--help", "-h"};
+  static constexpr std::array<std::string_view, 6> FLAGS = {
+      "--spread", "--uniform", "--knockout", "--reload", "--help", "-h"};
   static constexpr std::array<std::string_view, 22> OPTIONS = {
       "--n",       "--seed",       "--home-rating", "--away-rating",
       "--rating",  "--rating-min", "--rating-max",  "--threads",
@@ -535,6 +536,7 @@ Lab::LabReport runMatchesMode(const Arguments& arguments, unsigned threads)
   setBrainsAndBodies(jobs, brains, bodies);
   setSeamChoices(jobs, seams);
   const bool uniform = arguments.has("--uniform");
+  const bool knockout = arguments.has("--knockout");
   const KnobSettings knobs = knobsOption(arguments);
   for (Lab::MatchJob& job : jobs)
   {
@@ -542,6 +544,7 @@ Lab::LabReport runMatchesMode(const Arguments& arguments, unsigned threads)
     job.homeAdvantage = homeAdvantage;
     job.home.uniform = uniform;
     job.away.uniform = uniform;
+    job.knockout = knockout;
     job.touchKnobs = knobs.touch;
     job.strikeKnobs = knobs.strike;
   }

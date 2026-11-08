@@ -76,6 +76,8 @@ constexpr std::array TARGETS = {
   TargetSpec{"CT-M29", "set_piece_goal_share", "Non-penalty set-piece share of goals", "21%", Band{0.198, 0.31}, Gate, "PUB", Percent, Engine, "(set-piece goals - penalty goals) / goals; engine set-piece window definition"},
   TargetSpec{"CT-M30", "penalties_per_match", "Penalties per match", "0.27", Band{0.2, 0.36}, Gate, "PUB", Number, Engine, ""},
   TargetSpec{"CT-M30B", "penalty_conversion", "Penalty conversion", "80%", Band{0.75, 0.90}, Gate, "PUB", Percent, Engine, ""},
+  TargetSpec{"LAB-SOCONV", "shootout_conversion", "Shootout kicks scored", "", NO_BAND, Info, "orientation", Percent, Engine, "of shootout kicks (fm_lab matches --knockout: level at full time, straight to a shootout)"},
+  TargetSpec{"LAB-SOSAVE", "shootout_save_share", "  ...saved", "", NO_BAND, Info, "orientation", Percent, Engine, "of shootout kicks: off the keeper or held"},
   TargetSpec{"CT-M31", "fouls_per_team", "Fouls per team", "11.5", Band{10.5, 13.0}, Gate, "CC0", Number, Match, ""},
   TargetSpec{"CT-M32", "yellows_per_match", "Yellow cards per match", "4.1", Band{3.75, 5.0}, Gate, "CC0", Number, Match, "league band (referee band 2.9-5.1)"},
   TargetSpec{"CT-M32B", "reds_per_match", "Red cards per match", "0.18", Band{0.14, 0.36}, Gate, "CC0", Number, Match, ""},

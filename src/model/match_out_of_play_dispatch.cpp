@@ -16,6 +16,13 @@
 
 void MatchEngine::checkOutOfBounds()
 {
+  // A shootout kick (goalkeeper plan step 9): off the pitch it ends the
+  // kick, in or out, and nothing restarts.
+  if (shootout.live)
+  {
+    shootoutBallOut();
+    return;
+  }
   switch (outOfPlayId)
   {
     case OutOfPlayId::AARDVARK:

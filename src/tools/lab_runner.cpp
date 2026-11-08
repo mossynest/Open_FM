@@ -219,6 +219,9 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
   sample.keeper_rolls = stats.keeperRolls;
   sample.keeper_throws = stats.keeperThrows;
   sample.keeper_punts = stats.keeperPunts;
+  sample.shootout_kicks = stats.shootoutKicks;
+  sample.shootout_goals = stats.shootoutGoals;
+  sample.shootout_saves = stats.shootoutSaves;
   for (const int count : stats.ballBodyHitsByPart) sample.ball_body_hits += count;
   for (std::size_t part = 0; part < stats.ballBodyHitsByPart.size(); ++part)
     if (isLegPart(static_cast<ShotBodyPart>(part)))
@@ -533,6 +536,13 @@ MatchSample simulateMatch(const MatchJob& job, const StatsConfig& config)
   engine.setOutOfPlay(job.outOfPlay);
   engine.setFirstTouchKnobs(job.touchKnobs);
   engine.setStrikeKnobs(job.strikeKnobs);
+  if (job.knockout)
+  {
+    MatchRules::Knockout rules;
+    rules.required = true;
+    rules.extraTime = false;
+    engine.setKnockout(rules);
+  }
   MatchdaySquad::carryCondition(engine, home);
   MatchdaySquad::carryCondition(engine, away);
   runToFullTime(engine, job.seed, job.background);
@@ -764,6 +774,13 @@ std::map<std::string, Estimate> matchMetrics(
   metrics["keeper_roll_share"] = ratioEstimate(rolls, releases);
   metrics["keeper_throw_share"] = ratioEstimate(throws, releases);
   metrics["keeper_punt_share"] = ratioEstimate(punts, releases);
+  // Goalkeeper plan step 9: shootout kicks.
+  const std::vector<double> shootoutKicks =
+      column([](const MatchSample& s) { return s.shootout_kicks; });
+  metrics["shootout_conversion"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.shootout_goals; }), shootoutKicks);
+  metrics["shootout_save_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.shootout_saves; }), shootoutKicks);
   // Pass block plan: other balls off a body.
   const std::vector<double> ballBodyHits =
       column([](const MatchSample& s) { return s.ball_body_hits; });
