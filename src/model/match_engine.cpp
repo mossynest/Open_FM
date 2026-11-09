@@ -3876,7 +3876,7 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     // enough to play like any loose ball (as a shot does).
     // (A keeper in a dive: his body, whatever his hands may do.)
     if (!ball.isShot && binturong && active(player) && !player.fallen &&
-        (!handsAllowed(player) || diving) &&
+        (!handsAllowed(player) || diving || !keeperCanGatherBinturong(player)) &&
         comingAt > B::MAX_HEAVY_TOUCH_SPEED &&
         !(touchOwner && (ownerHasIt || &player == touchOwner)) &&
         !(ball.kickerLockout > 0.0f && ball.kicker == player.player) &&
@@ -3995,6 +3995,9 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     if (hands && binturong && !shotIntoBody &&
         height > MatchTuning::Goalkeeper::SHOULDER_HEIGHT_SHARE * player.heightMetres)
       continue;
+    // Moving faster than a walk, or not yet bent to it, his hands can't
+    // gather it (goalkeeper plan step 8): his body meets it.
+    if (hands && binturong && !shotIntoBody && !keeperCanGatherBinturong(player)) continue;
     if (shotIntoBody)
     {
       // His torso, or a leg where his stride has it (shot block plan §3c),

@@ -128,6 +128,8 @@ constexpr std::array TARGETS = {
   TargetSpec{"LAB-GKCLHELD", "keeper_claim_held_share", "  ...held", "", NO_BAND, Info, "orientation", Percent, Engine, "of claims: caught and held"},
   TargetSpec{"LAB-GKPUNCH", "keeper_claim_punch_share", "  ...punched", "", NO_BAND, Info, "orientation", Percent, Engine, "of claims: punched (an opponent within 2.0-0.5 m, by Command of Area)"},
   TargetSpec{"LAB-GKCLPARRY", "keeper_claim_parry_share", "  ...off his hands", "", NO_BAND, Info, "orientation", Percent, Engine, "of claims: meant to catch, sprang off (over his limit, one hand, or fumbled)"},
+  TargetSpec{"LAB-GKSMOTHER", "keeper_smothers_per_match", "Keeper smother dives per match", "", NO_BAND, Info, "orientation", Number, Engine, "both keepers: dived at a loose ball an attacker would reach first on foot (step 8)"},
+  TargetSpec{"LAB-GKSMHELD", "keeper_smother_held_share", "  ...held", "", NO_BAND, Info, "orientation", Percent, Engine, "loose balls held off his hand, per smother dive"},
   TargetSpec{"LAB-GKINHANDS", "keeper_balls_in_hands_per_match", "Balls in a keeper's hands", "", NO_BAND, Info, "orientation", Number, Engine, "per match: saves held, claims, balls gathered (step 5)"},
   TargetSpec{"LAB-GKROLL", "keeper_roll_share", "  ...rolled out", "", NO_BAND, Info, "orientation", Percent, Engine, "of releases from his hands: rolled (a ground pass up to 25 m)"},
   TargetSpec{"LAB-GKTHROW", "keeper_throw_share", "  ...thrown overarm", "", NO_BAND, Info, "orientation", Percent, Engine, "of releases from his hands: thrown overarm (a ground pass beyond 25 m)"},

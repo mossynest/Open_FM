@@ -315,9 +315,31 @@
                                 Point3F end, Vector2F centre);
   /** Once a keeper has reacted to a shot on target (goalkeeper plan step
    * 3): whether he dives (its line beyond his standing reach) and how;
-   * fills `dive`. A penalty guess gives `forced` (from his centre, m). */
+   * fills `dive`. A penalty guess gives `forced` (from his centre, m); a
+   * smother (step 8) too, with when the ball is there (he aims with his
+   * miss). */
   void planKeeperDiveBinturong(MatchPlayer& keeper, KeeperDive& dive, double from,
-                               std::optional<Point3F> forced = std::nullopt);
+                               std::optional<Point3F> forced = std::nullopt,
+                               std::optional<double> smotherBallThere = std::nullopt);
+  /** A loose ball in his area an attacker would reach before him on foot
+   * but his dive would not (goalkeeper plan step 8): he dives for it, as
+   * late as he still gets there first. Whether he went. */
+  bool considerSmotherBinturong(MatchPlayer& keeper);
+  /** How far from where he stands his midriff can land in a smother (m):
+   * his feet's dive reach plus his midriff's height. */
+  float smotherReachBinturong(const MatchPlayer& keeper) const;
+  /** A smother (step 8): down side-on across the ball's line (`ballWay`,
+   * metric unit), his midriff to `at` (from his centre, m) when the ball is
+   * there (`ballThere`, simulated s), with his Reflexes miss; his run
+   * carries him on. Fills `dive`. */
+  void planKeeperSmotherBinturong(MatchPlayer& keeper, KeeperDive& dive, double from, Point3F at,
+                                  Vector2F ballWay, double ballThere);
+  /** Whether his hands can gather a loose ball now: at walking pace or
+   * slower, bent to it long enough (goalkeeper plan step 8). Anyone but a
+   * Binturong keeper: yes. */
+  bool keeperCanGatherBinturong(const MatchPlayer& player) const;
+  /** His dive's shape moved on by his run (step 8), `since` push-off (s). */
+  void shiftDivePoseByRunBinturong(KeeperDivePose& pose, const KeeperDive& dive, float since) const;
   /** A diving keeper's shape at `when` (simulated s). */
   KeeperDivePose keeperDivePoseBinturong(const MatchPlayer& keeper, const KeeperDive& dive,
                                          double when) const;

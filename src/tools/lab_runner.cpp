@@ -223,6 +223,8 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
   sample.keeper_claims_held = stats.homeKeeperClaims + stats.awayKeeperClaims;
   sample.keeper_punches = stats.keeperPunches;
   sample.keeper_claim_parries = stats.keeperClaimParries;
+  sample.keeper_smother_dives = stats.keeperSmotherDives;
+  sample.keeper_smothers_held = stats.keeperSmothersHeld;
   sample.shootout_kicks = stats.shootoutKicks;
   sample.shootout_goals = stats.shootoutGoals;
   sample.shootout_saves = stats.shootoutSaves;
@@ -788,6 +790,12 @@ std::map<std::string, Estimate> matchMetrics(
       column([](const MatchSample& s) { return s.keeper_punches; }), claimsTried);
   metrics["keeper_claim_parry_share"] = ratioEstimate(
       column([](const MatchSample& s) { return s.keeper_claim_parries; }), claimsTried);
+  // Goalkeeper plan step 8: smothers.
+  const std::vector<double> smothers =
+      column([](const MatchSample& s) { return s.keeper_smother_dives; });
+  metrics["keeper_smothers_per_match"] = meanEstimate(smothers);
+  metrics["keeper_smother_held_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.keeper_smothers_held; }), smothers);
   // Goalkeeper plan step 9: shootout kicks.
   const std::vector<double> shootoutKicks =
       column([](const MatchSample& s) { return s.shootout_kicks; });

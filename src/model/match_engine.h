@@ -290,6 +290,9 @@ struct MatchPlayer
   float trapTimer = 0.0f;
   bool isDiving = false;
   float diveTimer = 0.0f;
+  /** A Binturong keeper: how long he has been at walking pace or slower
+   * (s): bent to gather a loose ball (goalkeeper plan step 8). */
+  float slowSeconds = 0.0f;
   /** A jump (Binturong body; aerial challenge plan step 1): his feet's
    * height (m) and vertical speed (m/s, + up) while he is in the air;
    * whether it was his running jump (else his standing one); the landing
@@ -967,6 +970,17 @@ struct KeeperDive
   Vector2F origin{};
   Vector2F along{1.0f, 0.0f};
   Vector2F across{0.0f, 1.0f};
+  /** His run at push-off (m/s over the ground): it carries him on through
+   * the air, and he slides on the floor until friction stops him
+   * (goalkeeper plan step 8). */
+  Vector2F carry{};
+  /** A smother (step 8): he goes down side-on across the ball's line, his
+   * midriff to `midriffAt` (pitch metres), lying along `lieAlong` (feet to
+   * head), his chest towards `faceTo`, his arms tucked in front of it. */
+  bool smother = false;
+  Vector2F midriffAt{};
+  Vector2F lieAlong{1.0f, 0.0f};
+  Vector2F faceTo{1.0f, 0.0f};
   /** At full stretch: his feet this far along and this high (m), his body
    * tilted this far from upright (rad), and his hands (pitch metres, z up). */
   float feetOut = 0.0f;
@@ -1535,6 +1549,10 @@ struct MatchStats
    * hands (parried or fumbled). Held claims are homeKeeperClaims. */
   int keeperPunches = 0;
   int keeperClaimParries = 0;
+  /** Smothers (goalkeeper plan step 8): dives at a loose ball, and loose
+   * balls held off his hands. */
+  int keeperSmotherDives = 0;
+  int keeperSmothersHeld = 0;
   int keeperBallsInHands = 0;
   int keeperRolls = 0;
   int keeperThrows = 0;

@@ -186,6 +186,9 @@ struct MatchSample
   int keeper_claims_held = 0;
   int keeper_punches = 0;
   int keeper_claim_parries = 0;
+  /** Goalkeeper plan step 8: smother dives, loose balls held off a hand. */
+  int keeper_smother_dives = 0;
+  int keeper_smothers_held = 0;
   int shootout_kicks = 0;
   int shootout_goals = 0;
   int shootout_saves = 0;

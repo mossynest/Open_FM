@@ -301,6 +301,29 @@ struct MatchTuning final
   };
 
   /**
+   * A keeper's smother (goalkeeper plan step 8, agreed 2026-11-09): with a
+   * loose ball in his area an attacker would reach first on foot, he dives
+   * for it (step 3's dive, aimed low at its line) if that gets him there
+   * first. Placeholders, mine.
+   */
+  struct KeeperSmother final
+  {
+    /** How far ahead he reads its roll (s), at what interval (s). */
+    static constexpr float LOOK_SECONDS = 1.5f;
+    static constexpr float LOOK_STEP_SECONDS = 0.04f;
+    /** He goes as late as he still beats the attacker by no more than this
+     * (s): any earlier and he keeps running. */
+    static constexpr float DECIDE_SLACK_SECONDS = 0.2f;
+    /** Only a ball below this share of his height (a low ball). */
+    static constexpr float HIGHEST_HEIGHT_SHARE = 0.5f;
+    /** His hands gather a loose ball only at walking pace or slower
+     * (Stride::WALK_TOP_SPEED; user 2026-11-09: he can't bend to it
+     * running), and only once he has been that slow this long, bending to
+     * it (s; user: a gather period; the figure a placeholder). */
+    static constexpr float GATHER_SECONDS = 0.3f;
+  };
+
+  /**
    * A ball in a keeper's hands (goalkeeper plan step 5, agreed 2026-11-08):
    * saves, claims and gathers; back-passes and goal kicks stay at his feet.
    * Marked placeholders are mine.
