@@ -180,6 +180,12 @@ struct MatchSample
   int keeper_throws = 0;
   int keeper_punts = 0;
   /** Shootout kicks taken, scored and saved (goalkeeper plan step 9). */
+  /** Goalkeeper plan step 7: claims tried (both keepers), punched, sprung
+   * off his hands. */
+  int keeper_claims_tried = 0;
+  int keeper_claims_held = 0;
+  int keeper_punches = 0;
+  int keeper_claim_parries = 0;
   int shootout_kicks = 0;
   int shootout_goals = 0;
   int shootout_saves = 0;

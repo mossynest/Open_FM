@@ -1093,6 +1093,23 @@ struct ShotBodyHit
   bool parryAim = false;
 };
 
+/** Where a ball's stretch first comes within a keeper's arms in the air
+ * (goalkeeper plan step 7): how far along (0-1), how far from his centre
+ * over the ground (m), whether both hands reach it, his stretch (0-1), the
+ * middle of his shoulders (metres, z up) and the highest his hands reach
+ * there (m). */
+struct KeeperReach
+{
+  float along = 0.0f;
+  /** Where on the stretch it is first within both arms, if it is. */
+  std::optional<float> bothAlong;
+  float gap = 0.0f;
+  bool bothHands = false;
+  float stretch = 0.0f;
+  Point3F shoulders{};
+  float handTop = 0.0f;
+};
+
 /** One contact the body is asked for (unified kick plan): a touch, with
  * the touch profile and his First Touch, or a strike of kind `strike`,
  * with its profile and his skill for it. What he means: the direction
@@ -1514,6 +1531,10 @@ struct MatchStats
   int keeperParries = 0;
   /** Balls a keeper took in his hands (goalkeeper plan step 5), and how he
    * let them go: rolled, thrown overarm, punted. */
+  /** High claims (goalkeeper plan step 7): punched, and sprung off his
+   * hands (parried or fumbled). Held claims are homeKeeperClaims. */
+  int keeperPunches = 0;
+  int keeperClaimParries = 0;
   int keeperBallsInHands = 0;
   int keeperRolls = 0;
   int keeperThrows = 0;
@@ -4123,6 +4144,9 @@ class MatchEngine
   void planPenaltyDiveBinturong(MatchPlayer& keeper, double strikeAt);
   /** An in-match penalty's strike, once the taker has set off (step 9). */
   std::optional<double> penaltyStrikeAt;
+  /** Where each keeper (index 0 home) goes to claim a high ball, when he
+   * meets it first (goalkeeper plan step 7; set at each plan). */
+  std::array<std::optional<Vector2F>, 2> keeperClaimMeet{};
   void resolveShotAtGoalkeeper(MatchPlayer& goalkeeper);
   /** A keeper's claim, or a duel for a high ball (true when it was played).
    * A lone side under it on a Binturong body is left to headInSweep. */

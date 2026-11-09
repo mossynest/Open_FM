@@ -219,6 +219,10 @@ void extractEngine(MatchSample& sample, const MatchEngine& engine)
   sample.keeper_rolls = stats.keeperRolls;
   sample.keeper_throws = stats.keeperThrows;
   sample.keeper_punts = stats.keeperPunts;
+  sample.keeper_claims_tried = stats.homeKeeperClaimAttempts + stats.awayKeeperClaimAttempts;
+  sample.keeper_claims_held = stats.homeKeeperClaims + stats.awayKeeperClaims;
+  sample.keeper_punches = stats.keeperPunches;
+  sample.keeper_claim_parries = stats.keeperClaimParries;
   sample.shootout_kicks = stats.shootoutKicks;
   sample.shootout_goals = stats.shootoutGoals;
   sample.shootout_saves = stats.shootoutSaves;
@@ -774,6 +778,16 @@ std::map<std::string, Estimate> matchMetrics(
   metrics["keeper_roll_share"] = ratioEstimate(rolls, releases);
   metrics["keeper_throw_share"] = ratioEstimate(throws, releases);
   metrics["keeper_punt_share"] = ratioEstimate(punts, releases);
+  // Goalkeeper plan step 7: high claims.
+  const std::vector<double> claimsTried =
+      column([](const MatchSample& s) { return s.keeper_claims_tried; });
+  metrics["keeper_claims_per_match"] = meanEstimate(claimsTried);
+  metrics["keeper_claim_held_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.keeper_claims_held; }), claimsTried);
+  metrics["keeper_claim_punch_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.keeper_punches; }), claimsTried);
+  metrics["keeper_claim_parry_share"] = ratioEstimate(
+      column([](const MatchSample& s) { return s.keeper_claim_parries; }), claimsTried);
   // Goalkeeper plan step 9: shootout kicks.
   const std::vector<double> shootoutKicks =
       column([](const MatchSample& s) { return s.shootout_kicks; });

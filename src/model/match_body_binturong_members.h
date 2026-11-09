@@ -337,7 +337,24 @@
    * it and within his Handling limit for its pace and his stretch, a catch
    * (true: he holds it, unless it is fumbled); otherwise `hit` is marked to
    * parry, the face turned away from goal. False: it bounces off. */
-  bool keeperHandsHoldShotBinturong(MatchPlayer& keeper, ShotBodyHit& hit);
+  bool keeperHandsHoldShotBinturong(MatchPlayer& keeper, ShotBodyHit& hit, bool shot = true);
+  /** From his shoulder to the middle of his hand at full stretch (m). */
+  float keeperArmBinturong(const MatchPlayer& keeper) const;
+  /** A Binturong keeper who may claim this ball with his hands now: in his
+   * area, on his feet or in a jump (not a dive), not his own side's pass. */
+  bool keeperMayClaimBinturong(const MatchPlayer& keeper) const;
+  /** Where the ball's stretch from `start` to `end` (metres, z up) first
+   * comes within his arms, his centre at `at` (metres) and his feet
+   * `feet` up (goalkeeper plan step 7). */
+  std::optional<KeeperReach> keeperReachBinturong(const MatchPlayer& keeper, Vector2F at,
+                                                  float feet, Point3F start, Point3F end) const;
+  /** His hands meet a high ball where `reach` says (the ball there now):
+   * punched if an opponent is close, held if within his Handling, else it
+   * springs off (goalkeeper plan step 7). */
+  void keeperClaimBinturong(MatchPlayer& keeper, const KeeperReach& reach);
+  /** A ball off a keeper's hand that was no shot: loose, him kept off it a
+   * moment, off his hand as `hit` says. */
+  void bounceOffKeeperHandBinturong(MatchPlayer& keeper, const ShotBodyHit& hit);
   /** A Binturong keeper in his area has just been given the ball with his
    * hands (goalkeeper plan step 5): it was at `wasAt` (pitch), `wasMetres`
    * up; from there it is brought to his chest and held. Others: nothing. */

@@ -66,6 +66,7 @@ enum class DerivedStat : std::uint8_t
   HANDLING,
   AERIAL_REACH,
   THROWING,
+  COMMAND_OF_AREA,
   // Match-engine-only stats.
   ENDURANCE,
   BURST_CAPACITY,
@@ -73,7 +74,7 @@ enum class DerivedStat : std::uint8_t
   RECOVERY_RATE,
   FAST_RECOVERY,
 };
-inline constexpr std::size_t DERIVED_STAT_COUNT = 18;
+inline constexpr std::size_t DERIVED_STAT_COUNT = 19;
 
 enum class DerivedLayer : std::uint8_t
 {
@@ -227,6 +228,11 @@ inline constexpr std::array<DerivedStatInfo, DERIVED_STAT_COUNT> DERIVED_STATS{{
      "A keeper's ball from his hands: how far he can throw it overarm (20 m "
      "at 1 to 50 m at 99) and how accurately he throws or rolls it.",
      "", 0.0f, 0.0f, 0.0f, 0.0f},
+    // The goalkeeper plan (step 7).
+    {DerivedLayer::FUTURE_GAME_STAT, "Command of area", "Cmd",
+     "A keeper coming for high balls: how close an attacker can be before "
+     "he punches rather than catches (2.0 m at 1 to 0.5 m at 99).",
+     "", 0.0f, 0.0f, 0.0f, 0.0f},
     // ---- Match-engine-only stats ------------------------------------------
     // The fatigue plan (4.1): from the research ranges, a little wider.
     {DerivedLayer::MATCH_ENGINE_ONLY, "Endurance", "End",
@@ -366,8 +372,8 @@ constexpr DerivedRecipe burstRecipe()
  * touch Dribbling and Passing, technique Passing, Dribbling and Shooting,
  * heading Shooting and Defending, jumping reach his height plus a jump from
  * Pace and Physicality, tackling Defending, strength Physicality, balance
- * half Physicality and half Agility's blend, reflexes, handling and
- * throwing Goalkeeping. Match-engine-only: the
+ * half Physicality and half Agility's blend, reflexes, handling,
+ * throwing and command of area Goalkeeping. Match-engine-only: the
  * endurance stats echo Stamina, except burst capacity (half Stamina, half
  * Acceleration). */
 inline constexpr DerivedRecipes DEFAULT_DERIVED_RECIPES{{
@@ -383,6 +389,7 @@ inline constexpr DerivedRecipes DEFAULT_DERIVED_RECIPES{{
     DerivedStats::only(BaseAttribute::GOALKEEPING),
     DerivedStats::only(BaseAttribute::GOALKEEPING),
     DerivedStats::aerialReachRecipe(),
+    DerivedStats::only(BaseAttribute::GOALKEEPING),
     DerivedStats::only(BaseAttribute::GOALKEEPING),
     DerivedStats::only(BaseAttribute::STAMINA),
     DerivedStats::burstRecipe(),

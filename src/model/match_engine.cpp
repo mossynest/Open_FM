@@ -3990,6 +3990,11 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
     const float gap = std::sqrt(gapSquared);
     const float height = startHeight + (endHeight - startHeight) * along;
     const bool hands = handsAllowed(player);
+    // Above his shoulders a Binturong keeper's hands are his arms' reach
+    // (headInSweep; goalkeeper plan step 7), not this reach circle.
+    if (hands && binturong && !shotIntoBody &&
+        height > MatchTuning::Goalkeeper::SHOULDER_HEIGHT_SHARE * player.heightMetres)
+      continue;
     if (shotIntoBody)
     {
       // His torso, or a leg where his stride has it (shot block plan §3c),
@@ -4555,10 +4560,13 @@ void MatchEngine::resolveLooseBall(bool beforeLine)
 bool MatchEngine::resolveAerialContest()
 {
   const float heightMetres = ball.z * MatchTuning::Units::BALL_Z_METRES;
-  // A goalkeeper in his own box claims first when he can reach the ball.
+  // A goalkeeper in his own box claims first when he can reach the ball (a
+  // Binturong keeper's hands meet it in the sweep instead: goalkeeper plan
+  // step 7).
   for (auto& player : players)
   {
     if (!active(player) || !player.isGoalkeeper || player.fallen || keeperDiving(player) ||
+        getBody(player.isHomeTeam) == BodyId::BINTURONG ||
         (ball.kickerLockout > 0.0f && ball.kicker == player.player) ||
         !inPenaltyArea(player.position, player.isHomeTeam) ||
         distance(player.position, ball.position) >
@@ -4867,11 +4875,177 @@ bool MatchEngine::headInSweep()
     }
     first = meet;
   }
+
+  // A keeper's hands in his area (goalkeeper plan step 7): where the
+  // stretch first comes within his arms, where he is now (part-way along his
+  // move, his feet back along a jump).
+  struct KeeperMeet
+  {
+    std::size_t slot = 0;
+    Vector2F position{};
+    float feet = 0.0f;
+    KeeperReach reach;
+  };
+  std::optional<KeeperMeet> keeperMeet;
+  for (std::size_t slot = 0; slot < players.size(); ++slot)
+  {
+    const MatchPlayer& keeper = players[slot];
+    if (!keeperMayClaimBinturong(keeper)) continue;
+    const Vector2F was =
+        slot < previousPlayerPositions.size() ? previousPlayerPositions[slot] : keeper.position;
+    const Vector2F at = toMetres({was.x + (keeper.position.x - was.x) * stepShare,
+                                  was.y + (keeper.position.y - was.y) * stepShare});
+    const float feet = feetAtBinturong(keeper, secondsBefore);
+    const Point3F from{start.x, start.y, startHeight};
+    const Point3F to{end.x, end.y, endHeight};
+    std::optional<KeeperReach> reach = keeperReachBinturong(keeper, at, feet, from, to);
+    if (!reach) continue;
+    // As a header lets it come closer: he lets it come into both hands if it
+    // is on its way there and no opponent's head gets to it first; else he
+    // takes it where it first reaches a hand.
+    constexpr float BOTH_LOOK_SECONDS = 0.3f;  // placeholder
+    if (reach->bothAlong && *reach->bothAlong > reach->along)
+    {
+      const bool opponentSooner = first &&
+                                  players[first->slot].isHomeTeam != keeper.isHomeTeam &&
+                                  first->along < *reach->bothAlong;
+      if (!opponentSooner)
+      {
+        reach->along = *reach->bothAlong;
+        reach->bothHands = true;
+        const Point3F ballAt{from.x + (to.x - from.x) * reach->along,
+                             from.y + (to.y - from.y) * reach->along,
+                             from.z + (to.z - from.z) * reach->along};
+        reach->gap = std::hypot(ballAt.x - at.x, ballAt.y - at.y);
+        reach->stretch =
+            keeperStretchBinturong(keeper, at, {ballAt.x, ballAt.y, ballAt.z - feet});
+      }
+    }
+    else if (!reach->bothAlong)
+    {
+      const Point3F later{end.x + substepEndMotion.velocity.x * BOTH_LOOK_SECONDS,
+                          end.y + substepEndMotion.velocity.y * BOTH_LOOK_SECONDS,
+                          endHeight + substepEndMotion.velocityZ * BOTH_LOOK_SECONDS -
+                              0.5f * MatchTuning::Ball::GRAVITY * BOTH_LOOK_SECONDS *
+                                  BOTH_LOOK_SECONDS};
+      if (const auto ahead = keeperReachBinturong(keeper, at, feet, to, later);
+          ahead && ahead->bothAlong && !opponentFirst(keeper, BOTH_LOOK_SECONDS))
+        continue;
+    }
+    if (!keeperMeet || reach->along < keeperMeet->reach.along)
+      keeperMeet = KeeperMeet{slot, at, feet, *reach};
+  }
+  if (!first && !keeperMeet) return false;
+
+  // The duel. Opponents whose heads (or a keeper's hands) it reaches within
+  // the close call of the first: by strength (with a keeper in it, his
+  // Handling against their Heading: user 2026-11-08), how far above the
+  // ball each reaches, and holding the spot against attacking it, with some
+  // chance.
+  const auto keeperStrength = [&](const KeeperMeet& meet, float height)
+  {
+    const MatchPlayer& keeper = players[meet.slot];
+    const float handling = std::clamp((keeper.derivedStat(DerivedStat::HANDLING) - STAT_1_RATING) /
+                                          (STAT_99_RATING - STAT_1_RATING),
+                                      0.0f, 1.0f);
+    const float above = meet.reach.handTop - height;
+    return (0.35f + handling) *
+           (1.0f + std::clamp(above / A::DUEL_HEIGHT_MARGIN_METRES, 0.0f, 1.0f));
+  };
+  const auto headingOf = [&](const MatchPlayer& player)
+  {
+    return std::clamp((player.derivedStat(DerivedStat::HEADING) - STAT_1_RATING) /
+                          (STAT_99_RATING - STAT_1_RATING),
+                      0.0f, 1.0f);
+  };
+  const auto keeperWins = [&](const KeeperMeet& meet)
+  {
+    MatchPlayer& keeper = players[meet.slot];
+    if (substepPathKnown)
+    {
+      setBallMotion(substepStartMotion);
+      integrateBall(substepStretchSeconds * meet.reach.along);
+      contactAlong = meet.reach.along;
+    }
+    else
+    {
+      setBallMotion(substepEndMotion);
+      contactAlong.reset();
+    }
+    keeperClaimBinturong(keeper, meet.reach);
+    return true;
+  };
+  if (keeperMeet && (!first || keeperMeet->reach.along < first->along))
+  {
+    // His hands first: an opponent's head reaching it within the close call
+    // contests it.
+    const MatchPlayer& keeper = players[keeperMeet->slot];
+    const float height = startHeight + (endHeight - startHeight) * keeperMeet->reach.along;
+    const float keeperSeconds = keeperMeet->reach.along * substepStretchSeconds;
+    const float after = keeperSeconds + A::DUEL_CLOSE_CALL_SECONDS - substepStretchSeconds;
+    float total = keeperStrength(*keeperMeet, height);
+    const float own = total;
+    std::array<std::pair<std::size_t, float>, 8> rivals{};
+    std::size_t rivalCount = 0;
+    for (std::size_t index = 0; index < headerCount && rivalCount < rivals.size(); ++index)
+    {
+      const Header& header = headers[index];
+      const MatchPlayer& rival = players[header.slot];
+      if (rival.isHomeTeam == keeper.isHomeTeam) continue;
+      const std::optional<Meet> meet = meetNow(header);
+      if ((meet && (meet->along - keeperMeet->reach.along) * substepStretchSeconds <=
+                       A::DUEL_CLOSE_CALL_SECONDS) ||
+          (!meet && after > 0.0f && meetsLater(header, after)))
+      {
+        const float above = rival.heightMetres + header.feet - height;
+        const float strength =
+            (0.35f + headingOf(rival)) *
+            (1.0f + std::clamp(above / A::DUEL_HEIGHT_MARGIN_METRES, 0.0f, 1.0f)) *
+            ((!rival.airborne() || !rival.runningJump) ? A::DUEL_HOLD_ADVANTAGE : 1.0f);
+        rivals[rivalCount++] = {index, strength};
+        total += strength;
+      }
+    }
+    float pick = randomFloat(0.0f, total) - own;
+    if (pick <= 0.0f) return keeperWins(*keeperMeet);
+    for (std::size_t index = 0; index < rivalCount; ++index)
+    {
+      pick -= rivals[index].second;
+      if (pick <= 0.0f || index + 1 == rivalCount)
+      {
+        const Header& rival = headers[rivals[index].first];
+        const float gap = length({start.x + segment.x * keeperMeet->reach.along - rival.position.x,
+                                  start.y + segment.y * keeperMeet->reach.along - rival.position.y});
+        first = Meet{rival.slot, keeperMeet->reach.along, std::min(gap, HEAD_REACH),
+                     meetNow(rival).value_or(Meet{}).part};
+        break;
+      }
+    }
+    // An opponent's head wins it: no further duel.
+    keeperMeet.reset();
+  }
+  else if (keeperMeet && first &&
+           players[keeperMeet->slot].isHomeTeam != players[first->slot].isHomeTeam &&
+           (keeperMeet->reach.along - first->along) * substepStretchSeconds <=
+               A::DUEL_CLOSE_CALL_SECONDS)
+  {
+    // A head first, the opposing keeper's hands within the close call: his
+    // Handling against that head's Heading.
+    const MatchPlayer& header = players[first->slot];
+    const float height = startHeight + (endHeight - startHeight) * first->along;
+    const float headerFeet = feetAtBinturong(header, secondsBefore);
+    const float above = header.heightMetres + headerFeet - height;
+    const float headerStrength =
+        (0.35f + headingOf(header)) *
+        (1.0f + std::clamp(above / A::DUEL_HEIGHT_MARGIN_METRES, 0.0f, 1.0f)) *
+        ((!header.airborne() || !header.runningJump) ? A::DUEL_HOLD_ADVANTAGE : 1.0f);
+    const float keeper = keeperStrength(*keeperMeet, height);
+    if (randomFloat(0.0f, headerStrength + keeper) >= headerStrength)
+      return keeperWins(*keeperMeet);
+    keeperMeet.reset();
+  }
   if (!first) return false;
 
-  // The duel. Opponents whose heads it reaches within the close call of
-  // his: by strength, how far above the ball each head is, and holding the
-  // spot against attacking it, with some chance.
   const MatchPlayer& leader = players[first->slot];
   const float meetHeight = startHeight + (endHeight - startHeight) * first->along;
   const float leaderSeconds = first->along * substepStretchSeconds;

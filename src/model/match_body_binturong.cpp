@@ -5757,8 +5757,16 @@ float MatchEngine::keeperStretchBinturong(const MatchPlayer& keeper, Vector2F st
   return std::clamp(out / std::max(longest, EPSILON), 0.0f, 1.0f);
 }
 
-bool MatchEngine::keeperHandsHoldShotBinturong(MatchPlayer& keeper, ShotBodyHit& hit)
+bool MatchEngine::keeperHandsHoldShotBinturong(MatchPlayer& keeper, ShotBodyHit& hit, bool shot)
 {
+  // (A high claim, not a shot: the same hands, counted as a claim.)
+  if (!shot)
+  {
+    const MatchStats saved = stats;
+    const bool held = keeperHandsHoldShotBinturong(keeper, hit, true);
+    stats = saved;
+    return held;
+  }
   // The brain's stand-in for catch or parry (goalkeeper plan §3): he goes
   // to catch it if both hands are on it and it is within his Handling limit
   // for its pace against his hands and his stretch; otherwise he parries,
@@ -5798,6 +5806,163 @@ bool MatchEngine::keeperHandsHoldShotBinturong(MatchPlayer& keeper, ShotBodyHit&
   }
   ++stats.keeperHeld;
   return true;
+}
+
+float MatchEngine::keeperArmBinturong(const MatchPlayer& keeper) const
+{
+  // Straight up, his hand's top at his standing fingertip reach.
+  using H = MatchTuning::KeeperHands;
+  return (H::STANDING_REACH_HEIGHT_SHARE - MatchTuning::Goalkeeper::SHOULDER_HEIGHT_SHARE) *
+             keeper.heightMetres -
+         H::HAND_RADIUS_METRES;
+}
+
+bool MatchEngine::keeperMayClaimBinturong(const MatchPlayer& keeper) const
+{
+  return keeper.isGoalkeeper && active(keeper) && !keeper.fallen &&
+         getBody(keeper.isHomeTeam) == BodyId::BINTURONG && !keeperDiving(keeper) &&
+         inPenaltyArea(keeper.position, keeper.isHomeTeam) && !ball.isShot &&
+         !(ball.isPass && ball.passByHome == keeper.isHomeTeam) &&
+         !(ball.kickerLockout > 0.0f && ball.kicker == keeper.player) &&
+         !(ball.possessedBy && !ball.inTouch);
+}
+
+std::optional<KeeperReach> MatchEngine::keeperReachBinturong(const MatchPlayer& keeper, Vector2F at,
+                                                             float feet, Point3F start,
+                                                             Point3F end) const
+{
+  // Each hand anywhere within an arm of its shoulder (goalkeeper plan step
+  // 7): up, forward, out to the side; where his body is then (in a jump,
+  // his feet that high).
+  using H = MatchTuning::KeeperHands;
+  const float height = keeper.heightMetres;
+  const Vector2F facing = normalized(
+      {std::cos(keeper.facingAngle) * MatchTuning::Pitch::LENGTH_METRES,
+       std::sin(keeper.facingAngle) * MatchTuning::Pitch::WIDTH_METRES});
+  const Vector2F left{-facing.y, facing.x};
+  const float off = H::SHOULDER_OFF_CENTRE_SHARE * height;
+  const float shoulderZ = feet + MatchTuning::Goalkeeper::SHOULDER_HEIGHT_SHARE * height;
+  const std::array<Point3F, 2> shoulders{
+      Point3F{at.x + left.x * off, at.y + left.y * off, shoulderZ},
+      Point3F{at.x - left.x * off, at.y - left.y * off, shoulderZ}};
+  const float arm = keeperArmBinturong(keeper);
+  const float reach = arm + H::HAND_RADIUS_METRES + MatchTuning::Units::BALL_RADIUS_METRES;
+  const Point3F path = minus(end, start);
+  const float pathSquared = dot3(path, path);
+  // When the stretch is within each shoulder's reach (from, to: 0-1).
+  std::array<std::optional<std::pair<float, float>>, 2> inside{};
+  for (std::size_t index = 0; index < 2; ++index)
+  {
+    const Point3F from = minus(start, shoulders[index]);
+    const float c = dot3(from, from) - reach * reach;
+    if (pathSquared <= EPSILON)
+    {
+      if (c <= 0.0f) inside[index] = std::pair{0.0f, 1.0f};
+      continue;
+    }
+    const float b = 2.0f * dot3(from, path);
+    const float disc = b * b - 4.0f * pathSquared * c;
+    if (disc < 0.0f) continue;
+    const float root = std::sqrt(disc);
+    const float in = std::max((-b - root) / (2.0f * pathSquared), 0.0f);
+    const float out = std::min((-b + root) / (2.0f * pathSquared), 1.0f);
+    if (in <= out && in <= 1.0f && out >= 0.0f) inside[index] = std::pair{in, out};
+  }
+  std::optional<float> first;
+  for (const auto& span : inside)
+    if (span && (!first || span->first < *first)) first = span->first;
+  if (!first) return std::nullopt;
+  KeeperReach result;
+  result.along = *first;
+  if (inside[0] && inside[1])
+  {
+    const float in = std::max(inside[0]->first, inside[1]->first);
+    if (in <= std::min(inside[0]->second, inside[1]->second)) result.bothAlong = in;
+  }
+  const Point3F ballAt = along3(start, end, *first);
+  // A hair of slack: the far shoulder's sphere touching it too.
+  constexpr float BOTH_SLACK = 1e-3f;
+  result.bothHands =
+      std::hypot(ballAt.x - shoulders[0].x, ballAt.y - shoulders[0].y, ballAt.z - shoulders[0].z) <=
+          reach + BOTH_SLACK &&
+      std::hypot(ballAt.x - shoulders[1].x, ballAt.y - shoulders[1].y, ballAt.z - shoulders[1].z) <=
+          reach + BOTH_SLACK;
+  result.gap = std::hypot(ballAt.x - at.x, ballAt.y - at.y);
+  result.stretch = keeperStretchBinturong(keeper, at, {ballAt.x, ballAt.y, ballAt.z - feet});
+  result.shoulders = {at.x, at.y, shoulderZ};
+  result.handTop = shoulderZ + arm + H::HAND_RADIUS_METRES;
+  return result;
+}
+
+void MatchEngine::bounceOffKeeperHandBinturong(MatchPlayer& keeper, const ShotBodyHit& hit)
+{
+  if (ball.inTouch) clearPossession();
+  clearFlightState();
+  ball.lastPossessor = keeper.player;
+  ball.kicker = keeper.player;
+  ball.kickerLockout = MatchTuning::ShotBlock::RECOVERY_BODY_SECONDS;
+  ball.touchAttempts = 0;
+  notePathChange();
+  bounceShotOffBodyBinturong(keeper, hit);
+}
+
+void MatchEngine::keeperClaimBinturong(MatchPlayer& keeper, const KeeperReach& reach)
+{
+  // Goalkeeper plan step 7. The brain's stand-in: with an opponent close he
+  // punches it, both fists driven through it (Handling), the face turned
+  // away from goal; otherwise he means to catch it, and his hands hold it as
+  // they hold a shot (both on it, within his Handling for its pace and his
+  // stretch, a small chance of a fumble), else it springs off them.
+  using K = MatchTuning::KeeperClaim;
+  ++(keeper.isHomeTeam ? stats.homeKeeperClaimAttempts : stats.awayKeeperClaimAttempts);
+  keepers[keeper.isHomeTeam ? 0 : 1].state = GoalkeeperState::CLAIM;
+  const Vector2F atMetres = toMetres(ball.position);
+  const Point3F ballAt{atMetres.x, atMetres.y, ball.z * MatchTuning::Units::BALL_Z_METRES};
+  const Point3F fromShoulders = minus(ballAt, reach.shoulders);
+  const float size = std::sqrt(dot3(fromShoulders, fromShoulders));
+  ShotBodyHit hit;
+  hit.part = ShotBodyPart::HAND;
+  hit.normal = size > 1e-5f ? Point3F{fromShoulders.x / size, fromShoulders.y / size,
+                                      fromShoulders.z / size}
+                            : Point3F{0.0f, 0.0f, 1.0f};
+  hit.surfaceVelocity = {keeper.velocity.x, keeper.velocity.y, keeper.jumpSpeed};
+  hit.bothHands = reach.bothHands;
+  hit.stretch = reach.stretch;
+  // How close an attacker can be before he punches: Command of Area.
+  const float near = alongStatScale(keeper.derivedStat(DerivedStat::COMMAND_OF_AREA),
+                                    K::PUNCH_NEAR_METRES_POOR, K::PUNCH_NEAR_METRES_BEST);
+  bool crowded = false;
+  for (const MatchPlayer& other : players)
+    if (active(other) && other.isHomeTeam != keeper.isHomeTeam &&
+        length(Vector2F{toMetres(other.position).x - atMetres.x,
+                        toMetres(other.position).y - atMetres.y}) <= near)
+      crowded = true;
+  if (crowded)
+  {
+    const float punch = alongStatScale(keeper.derivedStat(DerivedStat::HANDLING), K::PUNCH_SPEED_POOR,
+                                       K::PUNCH_SPEED_BEST);
+    hit.surfaceVelocity = {hit.surfaceVelocity.x + hit.normal.x * punch,
+                           hit.surfaceVelocity.y + hit.normal.y * punch,
+                           hit.surfaceVelocity.z + hit.normal.z * punch};
+    hit.parryAim = true;
+    ++stats.keeperPunches;
+    ++statsOf(keeper).clearances;
+    bounceOffKeeperHandBinturong(keeper, hit);
+    return;
+  }
+  if (keeperHandsHoldShotBinturong(keeper, hit, false))
+  {
+    ++(keeper.isHomeTeam ? stats.homeKeeperClaims : stats.awayKeeperClaims);
+    recordPassCompletion(keeper);
+    const Vector2F wasAt = ball.position;
+    const float wasMetres = ball.z * MatchTuning::Units::BALL_Z_METRES;
+    setPossession(keeper);
+    takeInHandsBinturong(keeper, wasAt, wasMetres);
+    keeper.actionCooldown = keeperHoldSecondsBinturong(keeper);
+    return;
+  }
+  ++stats.keeperClaimParries;
+  bounceOffKeeperHandBinturong(keeper, hit);
 }
 
 void MatchEngine::takeInHandsBinturong(const MatchPlayer& keeper, Vector2F wasAt, float wasMetres)
@@ -6472,7 +6637,64 @@ void MatchEngine::stepJumpBinturong(MatchPlayer& player, float dt,
     return;
   }
   player.landingSeconds = std::max(player.landingSeconds - dt, 0.0f);
-  if (path.empty() || player.landingSeconds > 0.0f || player.isGoalkeeper ||
+  // A keeper going to claim it (goalkeeper plan step 7): he jumps for a
+  // ball his hands can't reach standing, timed so the highest his hands
+  // reach where it passes him is at its height as it arrives (perfectly, as
+  // a header's jump is for now); as high as his Aerial Reach allows.
+  if (player.isGoalkeeper)
+  {
+    if (path.empty() || player.landingSeconds > 0.0f || !keeperMayClaimBinturong(player) ||
+        keepers[player.isHomeTeam ? 0 : 1].state != GoalkeeperState::CLAIM)
+      return;
+    const Vector2F at = toMetres(player.position);
+    std::optional<JumpPathPoint> closest;
+    float closestGap = std::numeric_limits<float>::max();
+    for (std::size_t index = 1; index < path.size(); ++index)
+    {
+      const auto rel = [&](const JumpPathPoint& point)
+      {
+        return Vector2F{point.at.x - (at.x + player.velocity.x * point.seconds),
+                        point.at.y - (at.y + player.velocity.y * point.seconds)};
+      };
+      const Vector2F from = rel(path[index - 1]);
+      const Vector2F to = rel(path[index]);
+      const Vector2F step{to.x - from.x, to.y - from.y};
+      const float stepSquared = step.x * step.x + step.y * step.y;
+      const float share = stepSquared > EPSILON
+                              ? std::clamp(-(from.x * step.x + from.y * step.y) / stepSquared, 0.0f, 1.0f)
+                              : 0.0f;
+      const float gap = length({from.x + step.x * share, from.y + step.y * share});
+      if (gap > closestGap) break;
+      closestGap = gap;
+      closest = JumpPathPoint{path[index - 1].seconds + (path[index].seconds - path[index - 1].seconds) * share,
+                              {}, path[index - 1].height + (path[index].height - path[index - 1].height) * share};
+    }
+    const float arm = keeperArmBinturong(player);
+    if (!closest || closestGap > arm || closest->seconds <= 0.0f) return;
+    const float up = std::sqrt(std::max(arm * arm - closestGap * closestGap, 0.0f));
+    const float standingTop =
+        MatchTuning::Goalkeeper::SHOULDER_HEIGHT_SHARE * player.heightMetres + up;
+    const bool running = length(player.velocity) >= A::RUNNING_JUMP_MIN_SPEED;
+    const float aerialReach = derivedPhysicalValue(DerivedStat::AERIAL_REACH,
+                                                   player.derivedStat(DerivedStat::AERIAL_REACH));
+    const float rise = jumpRiseOf(aerialReach,
+                                  MatchTuning::KeeperHands::STANDING_REACH_HEIGHT_SHARE * player.heightMetres,
+                                  running);
+    if (rise <= 0.0f || closest->height <= standingTop || closest->height > standingTop + rise) return;
+    const float needed = closest->height - standingTop;
+    const float launch = std::sqrt(2.0f * G * rise);
+    const float upSeconds = (launch - std::sqrt(std::max(launch * launch - 2.0f * G * needed, 0.0f))) / G;
+    const float wait = closest->seconds - upSeconds;
+    if (wait >= dt) return;
+    const float into = dt - std::max(wait, 0.0f);
+    player.feetHeight = std::max(launch * into - 0.5f * G * into * into, 0.0f);
+    player.jumpSpeed = launch - G * into;
+    player.runningJump = running;
+    player.jumpLandingSeconds = launch / G;
+    carry();
+    return;
+  }
+  if (path.empty() || player.landingSeconds > 0.0f ||
       player.trapTimer > 0.0f || !active(player) || player.fallen ||
       (ball.kickerLockout > 0.0f && ball.kicker == player.player) ||
       (ball.inTouch && ball.possessedBy == player.player))

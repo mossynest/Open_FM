@@ -475,6 +475,7 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
   };
   std::array<AerialRole, 2> aerialRoles{};
   challengePath.clear();
+  keeperClaimMeet = {};
   const float lowestHead = lowestHeadLine();
   if (!carrier && !ball.isShot &&
       (ball.z * MatchTuning::Units::BALL_Z_METRES > lowestHead ||
@@ -578,6 +579,46 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
           bestPlayer[side] = candidate;
         }
       }
+      // His keeper, for a ball coming down in his area (goalkeeper plan step
+      // 7): where it comes through his hands' reach, held (standing jump) or
+      // attacked (running jump), as for a header. Not his own side's pass.
+      MatchPlayer* keeper = findGoalkeeper(home);
+      if (keeper && getBody(home) == BodyId::BINTURONG && !keeperInDive(*keeper) &&
+          !keeper->fallen && !(ball.isPass && ball.passByHome == home))
+      {
+        const float height = keeper->heightMetres;
+        const float shoulder = MatchTuning::Goalkeeper::SHOULDER_HEIGHT_SHARE * height;
+        const float standingTop = shoulder + keeperArmBinturong(*keeper);
+        const float aerialReach = derivedPhysicalValue(
+            DerivedStat::AERIAL_REACH, keeper->derivedStat(DerivedStat::AERIAL_REACH));
+        const float rise = jumpRiseOf(
+            aerialReach, MatchTuning::KeeperHands::STANDING_REACH_HEIGHT_SHARE * height, true);
+        const bool moving = length(keeper->velocity) >= A::RUNNING_JUMP_MIN_SPEED;
+        std::optional<Meet> meet;
+        for (const JumpPathPoint& point : challengePath)
+        {
+          if (point.height < shoulder || point.height > standingTop + rise ||
+              !inPenaltyArea(toPitch(point.at), home))
+            continue;
+          const auto [seconds, metres] = runSeconds(*keeper, point.at);
+          if (point.height <= standingTop + rise * A::STANDING_JUMP_SHARE &&
+              seconds + A::CHALLENGE_SETTLE_SECONDS <= point.seconds)
+          {
+            meet = Meet{point.seconds, point.at, false};
+            break;
+          }
+          if (seconds <= point.seconds && (moving || metres >= A::CHALLENGE_RUN_UP_METRES))
+          {
+            meet = Meet{point.seconds, point.at, true};
+            break;
+          }
+        }
+        if (meet && (!best[side] || meet->seconds < best[side]->seconds))
+        {
+          best[side] = meet;
+          bestPlayer[side] = keeper;
+        }
+      }
     }
     // The side that meets it first sets the spot.
     const std::size_t first =
@@ -586,6 +627,8 @@ void MatchEngine::refreshTacticalTargetsBinturong(float dt, bool planHome)
     {
       const Meet& meet = *best[first];
       aerialRoles[first] = {bestPlayer[first], toPitch(meet.at), true, meet.running};
+      // His keeper meets it first: he comes for it (goalkeeperTarget).
+      if (bestPlayer[first]->isGoalkeeper) keeperClaimMeet[first] = toPitch(meet.at);
       // The other side's player who can get there soonest.
       const std::size_t other = 1 - first;
       MatchPlayer* challenger = nullptr;
@@ -4071,9 +4114,21 @@ Vector2F MatchEngine::goalkeeperTargetBinturong(MatchPlayer& keeper,
     return keeper.position;
   }
 
+  // A Binturong body's keeper goes for a high ball coming down in his area
+  // when he meets it first (goalkeeper plan step 7): to where it comes
+  // through his hands' reach. Otherwise he keeps his place.
+  if (getBody(keeper.isHomeTeam) == BodyId::BINTURONG)
+  {
+    if (const auto& meet = keeperClaimMeet[keeper.isHomeTeam ? 0 : 1];
+        meet && (!ball.possessedBy || ball.inTouch) && !ball.isShot)
+    {
+      setState(GoalkeeperState::CLAIM);
+      return clampToPitch(*meet);
+    }
+  }
   // Claim a high delivery dropping into the own box.
-  if (!ball.possessedBy && ball.isAerialDelivery &&
-      ball.passByHome != keeper.isHomeTeam)
+  else if (!ball.possessedBy && ball.isAerialDelivery &&
+           ball.passByHome != keeper.isHomeTeam)
   {
     // Anticipate high flight, then close on the ball itself once it drops
     // within handling height. Continuing to lead a low cross keeps the

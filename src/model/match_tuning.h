@@ -281,6 +281,26 @@ struct MatchTuning final
   };
 
   /**
+   * A keeper's high claim (goalkeeper plan step 7, agreed 2026-11-08): he
+   * goes to where the ball comes down through his hands' reach if he gets
+   * there first, jumps (his jump from Aerial Reach), and his hands reach
+   * for it anywhere within an arm of each shoulder (up, forward, a punch).
+   * Marked placeholders are mine.
+   */
+  struct KeeperClaim final
+  {
+    /** He punches if an opponent is this close to the ball (m; Command of
+     * Area: a better keeper still catches with an attacker closer; user
+     * 2026-11-09, placeholder range). */
+    static constexpr float PUNCH_NEAR_METRES_POOR = 2.0f;
+    static constexpr float PUNCH_NEAR_METRES_BEST = 0.5f;
+    /** Both fists driven through it this fast (m/s; Handling; user's
+     * choice of my placeholders). */
+    static constexpr float PUNCH_SPEED_POOR = 5.0f;
+    static constexpr float PUNCH_SPEED_BEST = 8.0f;
+  };
+
+  /**
    * A ball in a keeper's hands (goalkeeper plan step 5, agreed 2026-11-08):
    * saves, claims and gathers; back-passes and goal kicks stay at his feet.
    * Marked placeholders are mine.
