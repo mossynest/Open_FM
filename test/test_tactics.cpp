@@ -15,10 +15,10 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
-#include <functional>
 #include <map>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "database/database_connection.h"
@@ -140,8 +140,9 @@ Strategy withSlots(
 constexpr std::array<std::uint32_t, 4> SEEDS = {101, 202, 303, 404};
 
 /** Plays a whole match, calling @p sample every simulated second. */
+template <typename Sample>
 void playMatch(const Strategy& home, const Strategy& away, std::uint32_t seed,
-               const std::function<void(const MatchEngine&)>& sample)
+               Sample&& sample)
 {
   static const StatsConfig config = createStatsConfig();
   const auto homeSquad = makeSquad(1);
@@ -160,11 +161,6 @@ const PlayerMatchStats* statsOf(const MatchEngine& engine, PlayerID id)
   return engine.findPlayerStats(id);
 }
 
-bool homeHasBall(const MatchEngine& engine)
-{
-  const Player* carrier = engine.getBall().possessedBy;
-  return carrier && carrier->getTeamId() == 1;
-}
 }  // namespace
 
 TEST(TacticsTest, SlotsAreClassifiedByPosition)
@@ -178,7 +174,9 @@ TEST(TacticsTest, SlotsAreClassifiedByPosition)
   EXPECT_EQ(Tactics::familyForSlot({0.72f, 0.14f}), RoleFamily::Wide);
   EXPECT_EQ(Tactics::familyForSlot({0.78f, 0.38f}), RoleFamily::Striker);
   // Every family offers Standard first, and roles stay in their family.
-  for (int family = 0; family < static_cast<int>(RoleFamily::COUNT); ++family)
+  for (int family = 0;
+       family < static_cast<int>(std::to_underlying(RoleFamily::COUNT));
+       ++family)
   {
     const auto roles = Tactics::rolesFor(static_cast<RoleFamily>(family));
     ASSERT_FALSE(roles.empty());
@@ -204,7 +202,8 @@ TEST(TacticsTest, EveryRoleChangesTheEngineProfile)
            profile.cutInside != 0.0f || profile.keeperDepthMetres != 0.0f ||
            profile.keeperSweep != 0.0f;
   };
-  for (int role = 1; role < static_cast<int>(TacticalRole::COUNT); ++role)
+  for (int role = 1;
+       role < static_cast<int>(std::to_underlying(TacticalRole::COUNT)); ++role)
     EXPECT_TRUE(differs(
         Tactics::profile(static_cast<TacticalRole>(role), RoleDuty::Support)))
         << Tactics::roleKey(static_cast<TacticalRole>(role));
@@ -400,7 +399,7 @@ TEST(TacticsTest, PressingForwardsPressMore)
     {
       playMatch(
           home, Strategy{}, seed,
-          [&](const MatchEngine& engine)
+          [&pressures](const MatchEngine& engine)
           {
             if (engine.getState() != MatchState::FULL_TIME) return;
             for (const std::size_t index : {FIRST_STRIKER, FIRST_STRIKER + 1})
@@ -420,6 +419,7 @@ TEST(TacticsTest, PressingForwardsPressMore)
 
 TEST(TacticsTest, TightlyMarkedPlayerGetsFewerTouches)
 {
+  constexpr std::uint32_t MATCH_SAMPLE_SIZE = 64;
   const PlayerID target = playerId(2, LEFT_CENTRAL_MIDFIELDER);
   const auto touches = [&](bool marked)
   {
@@ -427,10 +427,14 @@ TEST(TacticsTest, TightlyMarkedPlayerGetsFewerTouches)
     if (marked)
       home.setOppositionOrders({{target, OppositionInstruction::TightMark}});
     int total = 0;
-    for (const std::uint32_t seed : SEEDS)
+    // Marking changes subsequent passes, shots and possession, so paired
+    // full matches diverge even with the same seed. Use a representative
+    // sample, including the original four seeds, to measure touch reduction
+    // rather than the score and possession noise of a handful of games.
+    for (std::uint32_t sample = 1; sample <= MATCH_SAMPLE_SIZE; ++sample)
     {
-      playMatch(home, Strategy{}, seed,
-                [&](const MatchEngine& engine)
+      playMatch(home, Strategy{}, sample * SEEDS.front(),
+                [&total, target](const MatchEngine& engine)
                 {
                   if (engine.getState() != MatchState::FULL_TIME) return;
                   if (const PlayerMatchStats* stats = statsOf(engine, target))
@@ -455,14 +459,14 @@ TEST(TacticsTest, OppositionOrdersOnlyFindTheirMan)
   int withOrders = 0;
   int without = 0;
   playMatch(home, Strategy{}, SEEDS[1],
-            [&](const MatchEngine& engine)
+            [&withOrders](const MatchEngine& engine)
             {
               if (engine.getState() == MatchState::FULL_TIME)
                 withOrders =
                     engine.getHomeScore() * 100 + engine.getAwayScore();
             });
   playMatch(Strategy{}, Strategy{}, SEEDS[1],
-            [&](const MatchEngine& engine)
+            [&without](const MatchEngine& engine)
             {
               if (engine.getState() == MatchState::FULL_TIME)
                 without = engine.getHomeScore() * 100 + engine.getAwayScore();
